@@ -160,30 +160,62 @@ local function handle_requests()
   if first then show(first) end
 end
 
+-- status.txt: what the bridge did at startup, shown on LightPhotoLibrary's Working set page
+local STATUS = BRIDGE .. sep .. "status.txt"
+local status_lines = {}
+local function status(msg)
+  table.insert(status_lines, os.date("%H:%M:%S") .. " " .. tostring(msg))
+  write_file(STATUS, table.concat(status_lines, "\n") .. "\n")
+  log(msg)
+end
+
+local function tick()
+  write_file(ALIVE, tostring(os.time()))
+  local ok, err = pcall(handle_requests)
+  if not ok then status("request failed: " .. tostring(err)) end
+end
+
+status("loaded in darktable " .. tostring(dt.configuration.version) .. ", Lua API " .. tostring(dt.configuration.api_version_string))
+write_file(ALIVE, tostring(os.time()))
+
 -- leaving an image in darkroom (switching image or view) = finished editing it for now
 local current = nil
-dt.register_event(MODULE .. "_loaded", "darkroom-image-loaded", function(event, ...)
-  local args = { ... }
-  local img = args[#args]
-  if current and img and current ~= img then export_done(current) end
-  current = img
+local ok_ev, err_ev = pcall(function()
+  dt.register_event(MODULE .. "_loaded", "darkroom-image-loaded", function(event, ...)
+    local args = { ... }
+    local img = args[#args]
+    if current and img and current ~= img then export_done(current) end
+    current = img
+    tick()
+  end)
+  dt.register_event(MODULE .. "_view", "view-changed", function(event, old_view, new_view)
+    if old_view == dt.gui.views.darkroom and current then
+      export_done(current)
+      current = nil
+    end
+    tick()
+  end)
 end)
+if not ok_ev then status("could not register darkroom events: " .. tostring(err_ev)) end
 
-dt.register_event(MODULE .. "_view", "view-changed", function(event, old_view, new_view)
-  if old_view == dt.gui.views.darkroom and current then
-    export_done(current)
-    current = nil
+-- main loop: check for requests every second in the background
+local ok_bg, err_bg = pcall(function()
+  dt.control.dispatch(function()
+    local ok_loop, err_loop = pcall(function()
+      while not dt.control.ending do
+        tick()
+        dt.control.sleep(1000)
+      end
+    end)
+    if not ok_loop then status("background loop stopped: " .. tostring(err_loop)) end
+  end)
+end)
+if ok_bg then
+  status("background loop started")
+else
+  -- older darktable without dispatch: react to activity instead of a timer
+  status("no background loop (" .. tostring(err_bg) .. "), falling back to checking on mouse/selection activity")
+  for _, ev in ipairs({ "mouse-over-image-changed", "selection-changed", "collection-changed" }) do
+    pcall(dt.register_event, MODULE .. "_" .. ev, ev, function() tick() end)
   end
-end)
-
--- the agent creates the bridge folders; without them the bridge just stays idle
-log("bridge active, folder " .. BRIDGE)
-
-dt.control.dispatch(function()
-  while not dt.control.ending do
-    write_file(ALIVE, tostring(os.time()))
-    local ok, err = pcall(handle_requests)
-    if not ok then log("request failed: " .. tostring(err)) end
-    dt.control.sleep(1000)
-  end
-end)
+end

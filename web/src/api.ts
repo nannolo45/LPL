@@ -57,7 +57,7 @@ export interface Tag { path: string; synonyms: string; category: number; private
 export interface SeriesInfo { id: number; name: string; count: number; covers: { id: number; v: number }[] }
 export interface Frame { id?: number; label: string; x: number; y: number; w: number; h: number; maybe: number }
 export interface WorkItem { id: number; filename: string; status: string; local_path?: string; error?: string; checkout_ts?: number; synced_ts?: number }
-export interface Agent { id: string; name: string; os: string; last_seen: number; online: boolean; state: { working_set?: WorkItem[]; darktable_running?: boolean; bridge_alive?: boolean; version?: string; message?: string } }
+export interface Agent { id: string; name: string; os: string; last_seen: number; online: boolean; state: { working_set?: WorkItem[]; darktable_running?: boolean; bridge_alive?: boolean; bridge_status?: string; version?: string; message?: string } }
 
 export class AuthError extends Error {}
 

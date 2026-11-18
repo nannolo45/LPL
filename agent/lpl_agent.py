@@ -176,6 +176,19 @@ def bridge_alive() -> bool:
         return False
 
 
+def bridge_status(running: bool) -> str:
+    """What lpl_bridge.lua wrote at darktable's startup (shown on the Working set page)."""
+    p = BRIDGE / "status.txt"
+    try:
+        lines = p.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+        return "\n".join(lines[-6:])
+    except OSError:
+        if running:
+            return ("No status from the bridge script: darktable did not run it. Check that luarc contains "
+                    "require \"lpl_bridge\" and that lpl_bridge.lua is in darktable's lua folder, then restart darktable.")
+        return ""
+
+
 def launch_darktable(cfg: dict, image: Path) -> None:
     lib = ":memory:" if cfg.get("library") == "memory" else str(data_dir() / "darktable-working-set.db")
     cmd = darktable_cmd(cfg) + ["--library", lib, str(image)]
@@ -254,8 +267,9 @@ class Agent:
         with self.lock:
             ws = [{k: v for k, v in it.items() if k in ("id", "filename", "status", "checkout_ts", "synced_ts", "error")}
                   for it in sorted(self.items.values(), key=lambda x: x.get("checkout_ts", 0))]
-        return {"working_set": ws, "darktable_running": darktable_running(), "bridge_alive": bridge_alive(),
-                "version": VERSION, "message": self.message}
+        running = darktable_running()
+        return {"working_set": ws, "darktable_running": running, "bridge_alive": bridge_alive(),
+                "bridge_status": bridge_status(running), "version": VERSION, "message": self.message}
 
     # --- jobs
     def handle(self, job):
