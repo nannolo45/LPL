@@ -11,8 +11,10 @@ Files it uses:
 |---|---|---|
 | settings | `%APPDATA%\LightPhotoLibrary\agent.json` | `~/.config/lightphotolibrary/agent.json` |
 | working set, log, bridge folder | `%LOCALAPPDATA%\LightPhotoLibrary\` | `~/.local/share/lightphotolibrary/` |
-| darktable bridge script | `%LOCALAPPDATA%\darktable\lua\lpl_bridge.lua` + `require "lpl_bridge"` in `luarc` | `~/.config/darktable/lua/…` (Flatpak: `~/.var/app/org.darktable.Darktable/config/darktable/…`) |
+| darktable bridge script | `%LOCALAPPDATA%\darktable\lua\lightphotolibrary\lpl_bridge.lua` + `require "lightphotolibrary/lpl_bridge"` in `luarc` | `~/.config/darktable/lua/lightphotolibrary/…` (Flatpak: `~/.var/app/org.darktable.Darktable/config/darktable/…`) |
 
 Settings in `agent.json`: `server`, `password`, `name`, `darktable` (path, or `flatpak`), `library` (`dedicated` = small separate darktable library for the working set, or `memory`), `auto_sync_seconds` (0 = only sync when you leave the image or press Sync).
 
 Commands: `--setup`, `--status`, `--install-bridge`.
+
+If darktable's script manager is active: lighttable → scripts → folder `lightphotolibrary` → start `lpl_bridge` (once).

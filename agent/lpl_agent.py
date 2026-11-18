@@ -184,8 +184,8 @@ def bridge_status(running: bool) -> str:
         return "\n".join(lines[-6:])
     except OSError:
         if running:
-            return ("No status from the bridge script: darktable did not run it. Check that luarc contains "
-                    "require \"lpl_bridge\" and that lpl_bridge.lua is in darktable's lua folder, then restart darktable.")
+            return ("No status from the bridge script: darktable did not start it. In darktable: lighttable > "
+                    "'scripts' module > folder 'lightphotolibrary' > start 'lpl_bridge', then wait a few seconds.")
         return ""
 
 
@@ -224,19 +224,25 @@ class BridgeQueue:
 
 
 def install_bridge(cfg: dict) -> Path:
+    """Copy lpl_bridge.lua into <darktable config>/lua/lightphotolibrary/ and load it from luarc.
+    (Own folder, so darktable's script manager lists it as 'lightphotolibrary'.)"""
     src = Path(__file__).resolve().parent / "darktable" / "lpl_bridge.lua"
     if not src.is_file():  # frozen exe: lua file shipped next to it
         src = Path(sys.executable).resolve().parent / "darktable" / "lpl_bridge.lua"
     conf = darktable_config_dir(cfg)
-    (conf / "lua").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, conf / "lua" / "lpl_bridge.lua")
+    folder = conf / "lua" / "lightphotolibrary"
+    folder.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, folder / "lpl_bridge.lua")
+    old_copy = conf / "lua" / "lpl_bridge.lua"
+    if old_copy.is_file():
+        old_copy.unlink()
     luarc = conf / "luarc"
-    text = luarc.read_text(encoding="utf-8") if luarc.is_file() else ""
-    if 'require "lpl_bridge"' not in text and "require 'lpl_bridge'" not in text and 'require("lpl_bridge")' not in text:
-        with open(luarc, "a", encoding="utf-8") as f:
-            f.write(('\n' if text and not text.endswith('\n') else '') + 'require "lpl_bridge"\n')
+    lines = luarc.read_text(encoding="utf-8").splitlines() if luarc.is_file() else []
+    lines = [l for l in lines if "lpl_bridge" not in l]
+    lines.append('require "lightphotolibrary/lpl_bridge"')
+    luarc.write_text("\n".join(lines) + "\n", encoding="utf-8")
     (BRIDGE / "outbox").mkdir(parents=True, exist_ok=True)
-    return conf
+    return folder
 
 
 # ------------------------------------------------------------------ working set
@@ -536,7 +542,8 @@ def setup(cfg: dict) -> None:
     try:
         conf = install_bridge(cfg)
         print("darktable bridge script installed in %s" % conf)
-        print("Restart darktable if it is open.")
+        print("Restart darktable. If you use darktable's script manager: lighttable > scripts > folder")
+        print("'lightphotolibrary' > start 'lpl_bridge' (only once, it is remembered).")
     except Exception as e:
         print("Could not install the bridge script: %s" % e)
     print("\nSaved to %s" % config_path())

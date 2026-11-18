@@ -65,7 +65,7 @@ LPL writes **only** `.xmp` sidecar files next to your photos, never the photos t
    (Alternative: install Python 3 and use the `agent` folder of the repo directly.)
 2. Unzip it, right-click `install-windows.ps1` → **Run with PowerShell**.
    It asks for the NAS address (e.g. `http://192.168.1.20:8080`), finds darktable, installs the darktable bridge script and starts the agent now and at every login.
-3. Restart darktable once.
+3. Restart darktable once. If darktable's **script manager** is active (it is in recent versions): lighttable → **scripts** module → folder **lightphotolibrary** → start **lpl_bridge**. Only needed once.
 
 ### Linux
 ```

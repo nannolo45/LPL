@@ -1,9 +1,9 @@
 --[[
   lpl_bridge.lua — connects darktable to the LightPhotoLibrary PC agent.
 
-  Install: copy this file to <darktable config dir>/lua/ and add the line
-      require "lpl_bridge"
-  to <darktable config dir>/luarc   (the agent's --install-bridge does both).
+  Install: the agent's --install-bridge copies this file to <darktable config dir>/lua/lightphotolibrary/
+  and adds  require "lightphotolibrary/lpl_bridge"  to <darktable config dir>/luarc.
+  With darktable's script manager: lighttable > "scripts" module > folder "lightphotolibrary" > start lpl_bridge.
     Windows config dir: %LOCALAPPDATA%\darktable
     Linux config dir:   ~/.config/darktable   (flatpak: ~/.var/app/org.darktable.Darktable/config/darktable)
 
@@ -24,6 +24,7 @@
 local dt = require "darktable"
 
 local MODULE = "lpl_bridge"
+local stopping = false
 local sep = package.config:sub(1, 1)
 
 local function bridge_dir()
@@ -202,7 +203,7 @@ if not ok_ev then status("could not register darkroom events: " .. tostring(err_
 local ok_bg, err_bg = pcall(function()
   dt.control.dispatch(function()
     local ok_loop, err_loop = pcall(function()
-      while not dt.control.ending do
+      while not dt.control.ending and not stopping do
         tick()
         dt.control.sleep(1000)
       end
@@ -219,3 +220,24 @@ else
     pcall(dt.register_event, MODULE .. "_" .. ev, ev, function() tick() end)
   end
 end
+
+-- what darktable's script manager needs to list, start and stop this script
+local script_data = {}
+script_data.metadata = {
+  name = "lpl_bridge",
+  purpose = "connects darktable to LightPhotoLibrary: opens photos sent from the library and reports when you are done",
+  author = "LightPhotoLibrary",
+  help = "https://github.com/nannolo45/LPL",
+}
+script_data.destroy = function()
+  stopping = true
+  for _, ev in ipairs({ "darkroom-image-loaded", "view-changed", "mouse-over-image-changed", "selection-changed", "collection-changed" }) do
+    local name = (ev == "darkroom-image-loaded") and (MODULE .. "_loaded") or (ev == "view-changed") and (MODULE .. "_view") or (MODULE .. "_" .. ev)
+    pcall(dt.destroy_event, name, ev)
+  end
+  status("stopped by the script manager")
+end
+script_data.destroy_method = "clean"
+script_data.restart = nil
+script_data.show = nil
+return script_data
