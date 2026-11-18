@@ -2,6 +2,7 @@
 import hashlib
 import json
 import logging
+import os
 import secrets
 import time
 from pathlib import Path
@@ -111,7 +112,8 @@ def status():
     n = c.execute("SELECT COUNT(*) n FROM photos WHERE missing=0").fetchone()["n"]
     agents = list_agents()
     return {"photos": n, "scan": scanner.status, "agents": agents, "server_time": time.time(),
-            "photo_root": str(config.photo_root), "version": app.version}
+            "photo_root": str(config.photo_root), "version": app.version, "mode": config.mode,
+            "nas_url": config.nas_url if config.local else None}
 
 
 @app.post("/api/scan")
@@ -591,6 +593,14 @@ def job_create(body: Dict[str, Any] = Body(...)):
     kind = body.get("kind")
     if kind not in ("edit", "sync", "release", "open"):
         raise HTTPException(400, "unknown job")
+    if config.local:
+        if kind not in ("edit", "open"):
+            return {"id": 0, "agent_id": "local", "message": "Nothing to sync: local photos are edited in place."}
+        from . import localedit
+        try:
+            return {"id": 0, "agent_id": "local", "message": localedit.open_photos((body.get("payload") or {}).get("ids") or [])}
+        except Exception as e:
+            raise HTTPException(500, str(e))
     agent_id = body.get("agent_id")
     if not agent_id:
         online = [a for a in list_agents() if a["online"]]
@@ -690,6 +700,278 @@ async def put_preview(pid: int, request: Request):
         db.conn().execute("UPDATE photos SET preview_ver=preview_ver+1, preview_state=1 WHERE id=?", (pid,))
         db.conn().commit()
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- import (photos sent from a PC's local library)
+def _dest(dest: str) -> Path:
+    """A relative destination inside the photo folder, e.g. '2026/2026-12-03_Lisbon/DSCF0001.RAF'."""
+    d = (dest or "").replace("\\", "/").strip("/")
+    parts = d.split("/")
+    if not d or any(p in ("", ".", "..") for p in parts):
+        raise HTTPException(400, "bad destination")
+    ext = parts[-1].rsplit(".", 1)[-1].lower() if "." in parts[-1] else ""
+    from .config import SUPPORTED_EXTS
+    if ext not in SUPPORTED_EXTS:
+        raise HTTPException(400, "not a photo file: %s" % parts[-1])
+    try:
+        return scanner.abs_of(d)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+def _sha256(p: Path) -> str:
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+@app.post("/api/import/plan")
+def import_plan(body: Dict[str, Any] = Body(...)):
+    """For each {dest, size}: 'new', 'same' (already there, same size; sha256 included) or 'conflict'."""
+    if config.local:
+        raise HTTPException(400, "this is a local library, not the NAS")
+    out = []
+    for it in body.get("items") or []:
+        p = _dest(it.get("dest"))
+        if not p.exists():
+            out.append({"dest": it["dest"], "status": "new"})
+        elif p.stat().st_size == int(it.get("size") or -1):
+            out.append({"dest": it["dest"], "status": "same", "sha256": _sha256(p)})
+        else:
+            out.append({"dest": it["dest"], "status": "conflict"})
+    return {"items": out}
+
+
+@app.put("/api/import/file")
+async def import_file(request: Request, dest: str, size: int):
+    if config.local:
+        raise HTTPException(400, "this is a local library, not the NAS")
+    p = _dest(dest)
+    if p.exists():
+        if p.stat().st_size == size:
+            return {"status": "same", "sha256": _sha256(p)}
+        raise HTTPException(409, "a different file with this name already exists: %s" % dest)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(".lpl-upload-" + p.name)
+    h = hashlib.sha256()
+    n = 0
+    try:
+        with open(tmp, "wb") as f:
+            async for chunk in request.stream():
+                f.write(chunk)
+                h.update(chunk)
+                n += len(chunk)
+        if n != size:
+            raise HTTPException(400, "upload incomplete (%d of %d bytes)" % (n, size))
+        os.replace(tmp, p)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    return {"status": "stored", "sha256": h.hexdigest()}
+
+
+@app.put("/api/import/xmp")
+async def import_xmp(request: Request, dest: str):
+    """The sidecar for an image sent earlier (or right before). darktable's latest edit wins."""
+    if config.local:
+        raise HTTPException(400, "this is a local library, not the NAS")
+    img = _dest(dest)
+    data = await request.body()
+    try:
+        data = xmp.set_derived_from(data, img.name)
+        x = xmp.parse(data)
+    except Exception:
+        raise HTTPException(400, "not a valid XMP file")
+    sc = xmp.sidecar_path(img)
+    sc.parent.mkdir(parents=True, exist_ok=True)
+    with db.write_lock:
+        xmp.atomic_write(sc, data, config.backup_dir, scanner.rel_of(img))
+        row = db.conn().execute("SELECT id FROM photos WHERE relpath=?", (scanner.rel_of(img),)).fetchone()
+        if row:
+            x["mtime"] = sc.stat().st_mtime
+            scanner.apply_xmp_to_db(row["id"], x, touch=False)
+            db.conn().commit()
+    return {"ok": True}
+
+
+@app.post("/api/import/index")
+def import_index(body: Dict[str, Any] = Body(...)):
+    """Index the received files now, and merge the series that came with them (with their board layout)."""
+    if config.local:
+        raise HTTPException(400, "this is a local library, not the NAS")
+    paths = [_dest(d) for d in body.get("dests") or []]
+    ids = scanner.index_paths(paths)
+    by_dest = {d: ids.get(scanner.rel_of(_dest(d))) for d in body.get("dests") or []}
+    merged = []
+    for se in body.get("series") or []:
+        name = (se.get("name") or "").strip().replace("|", "/")
+        if not name:
+            continue
+        with db.write_lock:
+            c = db.conn()
+            r = c.execute("SELECT id FROM series WHERE name=?", (name,)).fetchone()
+            created = r is None
+            if created:
+                sid = c.execute("INSERT INTO series(name, created) VALUES(?,?)", (name, time.time())).lastrowid
+                for f in se.get("frames") or []:
+                    c.execute("INSERT INTO series_frames(series_id,label,x,y,w,h,maybe) VALUES(?,?,?,?,?,?,?)",
+                              (sid, f.get("label") or "", float(f["x"]), float(f["y"]), float(f["w"]), float(f["h"]), int(bool(f.get("maybe")))))
+            else:
+                sid = r["id"]
+            new_ids = []
+            for it in se.get("items") or []:
+                pid = by_dest.get(it.get("dest")) or ids.get(scanner.rel_of(_dest(it.get("dest"))))
+                if not pid:
+                    continue
+                cur = c.execute("INSERT OR IGNORE INTO series_items(series_id,photo_id,x,y,ord) VALUES(?,?,?,?,?)",
+                                (sid, pid, float(it.get("x") or 0), float(it.get("y") or 0), it.get("ord")))
+                if cur.rowcount:
+                    new_ids.append(pid)
+            c.commit()
+        if new_ids and config.write_series_tags:
+            set_meta({"ids": new_ids, "attach": [SERIES_TAG + name]})
+        merged.append({"name": name, "created": created, "added": len(new_ids)})
+    return {"indexed": len(ids), "ids": by_dest, "series": merged}
+
+
+# ---------------------------------------------------------------- local library (LPL running on a PC)
+def _local_only():
+    if not config.local:
+        raise HTTPException(400, "only in a PC's local library")
+
+
+@app.get("/api/library/folders")
+def library_folders():
+    _local_only()
+    c = db.conn()
+    out = []
+    for name, root in scanner.roots():
+        n = c.execute("SELECT COUNT(*) n FROM photos WHERE missing=0 AND (relpath LIKE ? ESCAPE '\\')",
+                      (name.replace("%", "\\%").replace("_", "\\_") + "/%",)).fetchone()["n"]
+        out.append({"name": name, "path": str(root), "online": root.is_dir(), "count": n})
+    return {"folders": out}
+
+
+@app.post("/api/library/folders")
+def library_add(body: Dict[str, Any] = Body(...)):
+    _local_only()
+    p = Path((body.get("path") or "").strip().strip('"')).expanduser()
+    if not p.is_dir():
+        raise HTTPException(400, "folder not found: %s" % p)
+    p = p.resolve()
+    items = json.loads(db.get_setting("roots", "[]"))
+    for r in items:
+        rp = Path(r["path"]).resolve()
+        if rp == p or rp in p.parents or p in rp.parents:
+            raise HTTPException(409, "already in the library (overlaps %s)" % r["path"])
+    base = p.name or str(p).strip(":\\/") or "Photos"
+    name, k = base, 2
+    names = {r["name"] for r in items}
+    while name in names:
+        name, k = "%s (%d)" % (base, k), k + 1
+    items.append({"name": name, "path": str(p)})
+    db.set_setting("roots", json.dumps(items))
+    import threading
+    threading.Thread(target=scanner.scan, daemon=True).start()
+    return {"name": name}
+
+
+@app.post("/api/library/folders/remove")
+def library_remove(body: Dict[str, Any] = Body(...)):
+    """Forget a folder (the photos on disk are not touched)."""
+    _local_only()
+    name = body.get("name")
+    items = [r for r in json.loads(db.get_setting("roots", "[]")) if r["name"] != name]
+    db.set_setting("roots", json.dumps(items))
+    with db.write_lock:
+        c = db.conn()
+        ids = [r["id"] for r in c.execute("SELECT id FROM photos WHERE relpath LIKE ? ESCAPE '\\'",
+                                          (name.replace("%", "\\%").replace("_", "\\_") + "/%",)).fetchall()]
+        for pid in ids:
+            for t in ("photo_labels", "photo_tags", "series_items", "sent"):
+                c.execute("DELETE FROM %s WHERE photo_id=?" % t, (pid,))
+            c.execute("DELETE FROM photos WHERE id=?", (pid,))
+        c.commit()
+    return {"removed": len(ids)}
+
+
+@app.get("/api/fs/list")
+def fs_list(path: str = ""):
+    """Folder picker for 'add folder' (local library only)."""
+    _local_only()
+    if not path:
+        if os.name == "nt":
+            import string
+            drives = ["%s:\\" % d for d in string.ascii_uppercase if os.path.exists("%s:\\" % d)]
+            return {"path": "", "parent": None, "dirs": drives}
+        path = str(Path.home())
+    p = Path(path)
+    try:
+        dirs = sorted((d.name for d in p.iterdir() if d.is_dir() and not d.name.startswith((".", "$"))), key=str.lower)
+    except OSError as e:
+        raise HTTPException(400, str(e))
+    parent = str(p.parent) if p.parent != p else ""
+    return {"path": str(p), "parent": parent, "dirs": [str(p / d) for d in dirs]}
+
+
+@app.get("/api/send/overview")
+def send_overview():
+    _local_only()
+    from . import transfer
+    return dict(transfer.overview(), nas=transfer.nas_status(), delete_after=db.get_setting("send_delete_after", "0") == "1")
+
+
+@app.get("/api/send/nas-folders")
+def send_nas_folders(year: str = ""):
+    _local_only()
+    from . import transfer
+    try:
+        paths = transfer.nas_folders()
+    except Exception as e:
+        raise HTTPException(502, "NAS not reachable: %s" % e)
+    return {"folders": paths, "suggested_parent": transfer.suggest_parent(paths, year or time.strftime("%Y"))}
+
+
+def _send_ids(body) -> List[int]:
+    if body.get("ids"):
+        return [int(i) for i in body["ids"]]
+    where, args, join = query.build_where({"folder": body.get("folder") or "", "subfolders": True})
+    return [r["id"] for r in db.conn().execute("SELECT p.id FROM photos p%s WHERE %s" % (join, where), args).fetchall()]
+
+
+@app.post("/api/send/plan")
+def send_plan(body: Dict[str, Any] = Body(...)):
+    _local_only()
+    from . import transfer
+    items = transfer.plan(_send_ids(body), body.get("parent") or "", body.get("descriptor") or "", bool(body.get("split_by_day", True)))
+    folders = {}
+    for it in items:
+        f = it["dest"].rsplit("/", 1)[0]
+        folders[f] = folders.get(f, 0) + 1
+    return {"count": len(items), "bytes": sum(i["size"] or 0 for i in items if not i["already_sent"]),
+            "already_sent": sum(1 for i in items if i["already_sent"]),
+            "folders": [{"path": k, "count": v} for k, v in sorted(folders.items())]}
+
+
+@app.post("/api/send/start")
+def send_start(body: Dict[str, Any] = Body(...)):
+    _local_only()
+    from . import transfer
+    db.set_setting("send_delete_after", "1" if body.get("delete_after") else "0")
+    try:
+        return transfer.start(_send_ids(body), body.get("parent") or "", body.get("descriptor") or "",
+                              bool(body.get("split_by_day", True)), bool(body.get("delete_after")))
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/send/status")
+def send_status():
+    _local_only()
+    from . import transfer
+    return transfer.state
 
 
 # ---------------------------------------------------------------- web UI

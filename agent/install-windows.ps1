@@ -47,6 +47,12 @@ if (-not $usePython) {
     Copy-Item $exe (Join-Path $dest "lpl-agent.exe") -Force
     Copy-Item $exew (Join-Path $dest "lpl-agentw.exe") -Force
 }
+# exiftool (reads camera metadata for the local library)
+if (Test-Path (Join-Path $here "exiftool\exiftool.exe")) {
+    $et = Join-Path $dest "exiftool"
+    if (Test-Path $et) { Remove-Item $et -Recurse -Force }
+    Copy-Item (Join-Path $here "exiftool") $et -Recurse -Force
+}
 
 # --- interactive setup (server address, darktable, bridge script)
 if ($usePython) {
@@ -80,8 +86,26 @@ if ($sc.Arguments) {
 } else {
     Start-Process -FilePath $sc.TargetPath -WorkingDirectory $dest -WindowStyle Hidden
 }
+# Start menu + desktop shortcut to this PC's local library (if the exe build includes it)
+if (-not $usePython) {
+    $cfgFile = Join-Path $env:APPDATA "LightPhotoLibrary\agent.json"
+    $port = 8090; $local = $true
+    if (Test-Path $cfgFile) {
+        $c = Get-Content $cfgFile -Raw | ConvertFrom-Json
+        if ($c.local_port) { $port = $c.local_port }
+        if ($c.PSObject.Properties.Name -contains "local_library") { $local = [bool]$c.local_library }
+    }
+    $urlText = "[InternetShortcut]`r`nURL=http://localhost:$port/`r`nIconFile=$(Join-Path $dest 'lpl-agent.exe')`r`nIconIndex=0`r`n"
+    $places = @([Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Desktop"))
+    foreach ($pl in $places) {
+        $u = Join-Path $pl "LightPhotoLibrary (this PC).url"
+        if ($local) { Set-Content -Path $u -Value $urlText -Encoding ASCII } elseif (Test-Path $u) { Remove-Item $u }
+    }
+}
+
 Write-Host ""
 Write-Host "Done. The agent runs now and at every login." -ForegroundColor Green
+if (-not $usePython -and $local) { Write-Host "Local library on this PC: http://localhost:$port  (shortcut on the desktop)" }
 Write-Host "Log file: $env:LOCALAPPDATA\LightPhotoLibrary\agent.log"
 Write-Host "Restart darktable once so it loads the bridge script."
 Read-Host "Press Enter to close"

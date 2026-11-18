@@ -55,6 +55,8 @@ export function WorkView() {
                 <button className="btn" disabled={!ws.some(w => w.status === 'synced')} onClick={() => job('release', a.id, ws.filter(w => w.status === 'synced').map(w => w.id))}>Free synced copies</button>
               </div>
               {a.state?.message && <div className="small soft">{a.state.message}</div>}
+              {a.online && a.state?.local_url && <span className="small soft">This PC also has a local library: on that PC, open <a href={a.state.local_url} target="_blank" rel="noreferrer">{a.state.local_url}</a></span>}
+              {a.online && a.state?.local_error && <span className="small muted">{a.state.local_error}</span>}
               {a.online && a.state?.bridge_status && <pre className="tiny muted" style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, Consolas, monospace' }}>{'darktable bridge:\n' + a.state.bridge_status}</pre>}
               {ws.length > 0 ? (
                 <div style={{ overflowX: 'auto' }}>

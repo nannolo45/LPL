@@ -112,6 +112,15 @@ CREATE TABLE IF NOT EXISTS jobs (
     status TEXT DEFAULT 'queued'
 );
 
+CREATE TABLE IF NOT EXISTS sent (
+    photo_id INTEGER PRIMARY KEY,
+    dest TEXT NOT NULL,
+    size INTEGER,
+    sha256 TEXT,
+    xmp_mtime REAL,
+    ts REAL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT

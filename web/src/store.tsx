@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { Agent, api, Filters, Photo, SeriesInfo, SortLevel, Tag } from './api'
 
-export type View = 'grid' | 'list' | 'folders' | 'timeline' | 'board' | 'work'
+export type View = 'grid' | 'list' | 'folders' | 'timeline' | 'board' | 'work' | 'send'
 export type Gran = 'day' | 'month' | 'year'
 
 interface Saved { view: View; sort: SortLevel[]; group: boolean; gran: Gran; filters: Filters; thumb: number }
@@ -38,7 +38,8 @@ export interface Store {
   tags: Tag[]; reloadTags: () => void
   facets: { lenses: { v: string; n: number }[]; cameras: { v: string; n: number }[] }
   series: SeriesInfo[]; reloadSeries: () => void
-  agents: Agent[]; status: any
+  agents: Agent[]; status: any; isLocal: boolean
+  sendIds: number[] | null; setSendIds: (ids: number[] | null) => void
   editInDarktable: (ids: number[]) => Promise<void>
   toast: (m: string) => void; toastMsg: string
   viewer: number | null; setViewer: (id: number | null) => void
@@ -84,6 +85,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [toastMsg, setToastMsg] = useState('')
   const [viewer, setViewer] = useState<number | null>(null)
   const [boardSeries, setBoardSeries] = useState<number | null>(null)
+  const [sendIds, setSendIds] = useState<number[] | null>(null)
   const reqId = useRef(0)
   const anchor = useRef<number | null>(null)
   const toastTimer = useRef<number>()
@@ -187,13 +189,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const editInDarktable = useCallback(async (ids: number[]) => {
     if (!ids.length) return
     try {
+      if (status?.mode === 'local') {
+        const r = await api.job('edit', { ids })
+        toast(r.message || 'Opening in darktable…')
+        return
+      }
       const online = agents.filter(a => a.online)
       const r = await api.job('edit', { ids }, online.length === 1 ? online[0].id : undefined)
       const ag = agents.find(a => a.id === r.agent_id)
       toast(ag && ag.online ? `Sending ${ids.length} photo${ids.length > 1 ? 's' : ''} to darktable on ${ag.name}…`
         : 'Queued. It opens in darktable as soon as your PC agent is online.')
     } catch (e: any) { toast(e.message || String(e)) }
-  }, [agents, toast])
+  }, [agents, toast, status])
 
   const patchFilters = useCallback((p: Partial<Filters>) => setFilters(f => ({ ...f, ...p })), [])
   const clearFilters = useCallback(() => setFilters(DEFAULTS.filters), [])
@@ -202,7 +209,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     isMobile, view, setView, sort, setSort, group, setGroup, gran, setGran, filters, patchFilters, clearFilters,
     thumb, setThumb, seed, reshuffle: () => setSeed(s => s + 1), items, total, loading, loadMore, reload,
     sel, setSel, clickSelect, selPhotos, selectAll, mergePhotos, meta, tags, reloadTags, facets, series, reloadSeries,
-    agents, status, editInDarktable, toast, toastMsg, viewer, setViewer, boardSeries, setBoardSeries,
+    agents, status, isLocal: status?.mode === 'local', sendIds, setSendIds, editInDarktable, toast, toastMsg, viewer, setViewer, boardSeries, setBoardSeries,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

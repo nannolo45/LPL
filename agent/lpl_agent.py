@@ -109,6 +109,8 @@ def load_config() -> dict:
     cfg.setdefault("library", "dedicated")   # dedicated | memory
     cfg.setdefault("auto_sync_seconds", 8)
     cfg.setdefault("poll_seconds", 2)
+    cfg.setdefault("local_library", True)   # this PC's own library (works without the NAS), at http://localhost:<local_port>
+    cfg.setdefault("local_port", 8090)
     return cfg
 
 
@@ -245,6 +247,69 @@ def install_bridge(cfg: dict) -> Path:
     return folder
 
 
+# ------------------------------------------------------------------ local library (LightPhotoLibrary server on this PC)
+LOCAL = {"url": "", "error": ""}
+
+
+def _bundle_dir() -> Path:
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+
+
+def _local_env(cfg: dict, port: int) -> dict:
+    exe_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else None
+    exiftool = ""
+    if exe_dir:
+        for cand in (exe_dir / "exiftool" / "exiftool.exe", exe_dir.parent / "exiftool" / "exiftool.exe"):
+            if cand.is_file():
+                exiftool = str(cand)
+                break
+    web = _bundle_dir() / "web_dist"
+    if not web.is_dir():
+        for cand in (Path(__file__).resolve().parent.parent / "server" / "web_dist",
+                     Path(__file__).resolve().parent.parent / "web" / "dist"):
+            if cand.is_dir():
+                web = cand
+                break
+    env = {
+        "LPL_MODE": "local", "DATA_DIR": str(data_dir() / "local-library"), "HOST": "127.0.0.1", "PORT": str(port),
+        "LPL_NAS_URL": cfg.get("server", ""), "LPL_NAS_PASSWORD": cfg.get("password", ""),
+        "LPL_DARKTABLE": cfg.get("darktable") or find_darktable(), "LPL_DT_LIBRARY": str(data_dir() / "darktable-working-set.db"),
+        "LPL_BRIDGE_DIR": str(BRIDGE), "SCAN_INTERVAL": "120", "WEB_DIR": str(web), "LPL_PASSWORD": "",
+    }
+    if exiftool:
+        env["EXIFTOOL"] = exiftool
+    return env
+
+
+def start_local_library(cfg: dict) -> None:
+    """Run the local library in this process (a background thread)."""
+    if not cfg.get("local_library", True):
+        return
+    port = int(cfg.get("local_port", 8090))
+    os.environ.update(_local_env(cfg, port))
+    if not getattr(sys, "frozen", False):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "server"))
+    try:
+        import uvicorn
+        from lpl import main as lpl_main
+        app = lpl_main.create_app()
+    except Exception as e:
+        LOCAL["error"] = "local library not available: %s" % e
+        log.warning(LOCAL["error"])
+        return
+
+    def serve():
+        try:
+            server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", log_config=None))
+            server.run()
+        except BaseException as e:  # e.g. port in use
+            LOCAL.update(url="", error="local library stopped: %s" % e)
+            log.warning(LOCAL["error"])
+    threading.Thread(target=serve, name="local-library", daemon=True).start()
+    LOCAL["url"] = "http://localhost:%d" % port
+    log.info("local library at %s", LOCAL["url"])
+
+
 # ------------------------------------------------------------------ working set
 class Agent:
     def __init__(self, cfg: dict):
@@ -275,7 +340,8 @@ class Agent:
                   for it in sorted(self.items.values(), key=lambda x: x.get("checkout_ts", 0))]
         running = darktable_running()
         return {"working_set": ws, "darktable_running": running, "bridge_alive": bridge_alive(),
-                "bridge_status": bridge_status(running), "version": VERSION, "message": self.message}
+                "bridge_status": bridge_status(running), "version": VERSION, "message": self.message,
+                "local_url": LOCAL["url"], "local_error": LOCAL["error"]}
 
     # --- jobs
     def handle(self, job):
@@ -435,6 +501,10 @@ class Agent:
             except OSError:
                 continue
             name = marker.name[:-5]
+            try:
+                Path(target).resolve().relative_to(WORK.resolve())
+            except ValueError:
+                continue  # belongs to the local library, which handles it itself
             pid = next((k for k, it in self.items.items() if Path(it["local_path"]).name == name or it["local_path"] == target), None)
             jpg = outbox / (name + ".jpg")
             if pid:
@@ -466,6 +536,8 @@ class Agent:
 
     def run(self, once=False):
         threading.Thread(target=self.worker, daemon=True).start()
+        if not once:
+            start_local_library(self.cfg)
         log.info("agent %s (%s) talking to %s", self.cfg["name"], self.cfg["id"], self.srv.base)
         backoff = self.cfg.get("poll_seconds", 2)
         while True:
@@ -524,6 +596,10 @@ def setup(cfg: dict) -> None:
     v = input("Name of this PC [%s]: " % cfg["name"]).strip()
     if v:
         cfg["name"] = v
+    v = input("Also run a local library on this PC, for photos you keep or edit here (works without the NAS)? [%s]: "
+              % ("Y/n" if cfg.get("local_library", True) else "y/N")).strip().lower()
+    if v:
+        cfg["local_library"] = v.startswith("y")
     found = cfg.get("darktable") or find_darktable()
     v = input("darktable program [%s]: " % (found or "not found")).strip().strip('"')
     cfg["darktable"] = v or found
@@ -546,7 +622,58 @@ def setup(cfg: dict) -> None:
         print("'lightphotolibrary' > start 'lpl_bridge' (only once, it is remembered).")
     except Exception as e:
         print("Could not install the bridge script: %s" % e)
+    if cfg.get("local_library", True):
+        print("\nLocal library: open http://localhost:%s on this PC once the agent runs." % cfg.get("local_port", 8090))
     print("\nSaved to %s" % config_path())
+
+
+def selftest(cfg: dict) -> int:
+    """Used by the build: can the bundled local library start, read metadata and answer?"""
+    out = data_dir() / "selftest.txt"
+    lines = []
+    try:
+        cfg = dict(cfg, local_library=True, local_port=18090, server="http://127.0.0.1:9")
+        start_local_library(cfg)
+        if LOCAL["error"]:
+            raise RuntimeError(LOCAL["error"])
+        for _ in range(60):
+            try:
+                st = json.loads(urllib.request.urlopen("http://127.0.0.1:18090/api/status", timeout=2).read())
+                break
+            except Exception:
+                time.sleep(0.5)
+        else:
+            raise RuntimeError("local library did not answer")
+        lines.append("status: mode=%s version=%s" % (st.get("mode"), st.get("version")))
+        html = urllib.request.urlopen("http://127.0.0.1:18090/", timeout=5).read()
+        lines.append("web app: %s" % ("ok" if b"LightPhotoLibrary" in html else "MISSING"))
+        exe = os.environ.get("EXIFTOOL", "exiftool")
+        ver = subprocess.run([exe, "-ver"], capture_output=True, text=True, creationflags=NO_WINDOW).stdout.strip()
+        lines.append("exiftool: %s (%s)" % (ver or "MISSING", exe))
+        try:
+            from PIL import Image
+            from lpl import media
+            sample = data_dir() / "selftest.jpg"
+            Image.new("RGB", (64, 48), (200, 120, 40)).save(sample, quality=80)
+            md = media.read_metadata([sample]).get(str(sample)) or next(iter(media.read_metadata([sample]).values()), {})
+            lines.append("metadata: %s" % ("ok" if md else "EMPTY"))
+            ok_md = bool(md)
+        except Exception as e:
+            lines.append("metadata: FAILED %s" % e)
+            ok_md = False
+        try:
+            import rawpy  # noqa
+            lines.append("rawpy: ok")
+        except Exception as e:
+            lines.append("rawpy: %s" % e)
+        ok = bool(ver) and b"LightPhotoLibrary" in html and ok_md
+    except Exception as e:
+        lines.append("FAILED: %s" % e)
+        ok = False
+    lines.append("RESULT: %s" % ("OK" if ok else "FAILED"))
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("\n".join(lines))
+    return 0 if ok else 1
 
 
 def main():
@@ -556,6 +683,7 @@ def main():
     ap.add_argument("--install-bridge", action="store_true")
     ap.add_argument("--once", action="store_true", help="one heartbeat + jobs, then exit (testing)")
     ap.add_argument("--server")
+    ap.add_argument("--selftest", action="store_true", help="start the local library briefly and check it answers (build check)")
     a = ap.parse_args()
     data_dir().mkdir(parents=True, exist_ok=True)
     handlers = [RotatingFileHandler(LOG_FILE, maxBytes=1_000_000, backupCount=2, encoding="utf-8")]
@@ -573,6 +701,8 @@ def main():
     if a.install_bridge:
         print("installed in", install_bridge(cfg))
         return
+    if a.selftest:
+        sys.exit(selftest(cfg))
     if a.status:
         print(json.dumps({"config": {k: v for k, v in cfg.items() if k != "password"}, "config_file": str(config_path()),
                           "data": str(data_dir()), "darktable": cfg.get("darktable") or find_darktable(),

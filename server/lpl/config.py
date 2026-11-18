@@ -6,6 +6,13 @@ SCAN_INTERVAL  seconds between automatic rescans (0 = only on startup / on deman
 LPL_PASSWORD   optional shared password for the web UI and the PC agent
 PREVIEW_WORKERS number of threads used to extract previews
 WEB_DIR        folder with the built web UI (served at /)
+LPL_MODE       "nas" (default: one photo folder, PHOTO_ROOT) or "local" (a PC's own library: several folders
+               added in the web app, darktable opened directly, "Send to NAS")
+EXIFTOOL       path of the exiftool program (default: "exiftool" on the PATH)
+
+Local mode only (set by the PC agent, which hosts the local library):
+LPL_DARKTABLE  darktable program, LPL_DT_LIBRARY its library file, LPL_BRIDGE_DIR the bridge folder
+LPL_NAS_URL / LPL_NAS_PASSWORD  where "Send to NAS" uploads to
 """
 import os
 from pathlib import Path
@@ -22,6 +29,17 @@ class Config:
         self.thumb_size = int(os.environ.get("THUMB_SIZE", "480"))
         self.large_size = int(os.environ.get("LARGE_SIZE", "1920"))
         self.write_series_tags = os.environ.get("WRITE_SERIES_TAGS", "1") != "0"
+        self.mode = os.environ.get("LPL_MODE", "nas")
+        self.exiftool = os.environ.get("EXIFTOOL", "exiftool")
+        self.darktable = os.environ.get("LPL_DARKTABLE", "")
+        self.dt_library = os.environ.get("LPL_DT_LIBRARY", "")
+        self.bridge_dir = Path(os.environ.get("LPL_BRIDGE_DIR", str(self.data_dir / "bridge")))
+        self.nas_url = os.environ.get("LPL_NAS_URL", "").rstrip("/")
+        self.nas_password = os.environ.get("LPL_NAS_PASSWORD", "")
+
+    @property
+    def local(self) -> bool:
+        return self.mode == "local"
 
     @property
     def db_path(self) -> Path:

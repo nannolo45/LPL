@@ -60,7 +60,11 @@ export interface Tag { path: string; synonyms: string; category: number; private
 export interface SeriesInfo { id: number; name: string; count: number; covers: { id: number; v: number }[] }
 export interface Frame { id?: number; label: string; x: number; y: number; w: number; h: number; maybe: number }
 export interface WorkItem { id: number; filename: string; status: string; local_path?: string; error?: string; checkout_ts?: number; synced_ts?: number }
-export interface Agent { id: string; name: string; os: string; last_seen: number; online: boolean; state: { working_set?: WorkItem[]; darktable_running?: boolean; bridge_alive?: boolean; bridge_status?: string; version?: string; message?: string } }
+export interface Agent { id: string; name: string; os: string; last_seen: number; online: boolean; state: { working_set?: WorkItem[]; darktable_running?: boolean; bridge_alive?: boolean; bridge_status?: string; version?: string; message?: string; local_url?: string; local_error?: string } }
+
+export interface SendFolder { folder: string; n: number; sent: number; changed: number; first: string | null; last: string | null; descriptor: string }
+export interface SendRequest { ids?: number[]; folder?: string; parent: string; descriptor: string; split_by_day: boolean; delete_after?: boolean }
+export interface SendState { running: boolean; phase: string; done: number; total: number; bytes_done: number; bytes_total: number; sent_files: number; sent_xmps: number; skipped: number; deleted: number; errors: string[]; finished: number | null; dest_folders: string[]; series?: { name: string; created: boolean; added: number }[] }
 
 export class AuthError extends Error {}
 
@@ -83,7 +87,16 @@ async function call<T>(method: string, url: string, body?: unknown): Promise<T> 
 export const api = {
   auth: () => call<{ required: boolean; ok: boolean }>('GET', '/api/auth'),
   login: (password: string) => call<{ ok: boolean }>('POST', '/api/login', { password }),
-  status: () => call<{ photos: number; scan: any; agents: Agent[]; server_time: number; version: string }>('GET', '/api/status'),
+  status: () => call<{ photos: number; scan: any; agents: Agent[]; server_time: number; version: string; mode: 'nas' | 'local'; nas_url: string | null }>('GET', '/api/status'),
+  libraryFolders: () => call<{ folders: { name: string; path: string; online: boolean; count: number }[] }>('GET', '/api/library/folders'),
+  libraryAdd: (path: string) => call<{ name: string }>('POST', '/api/library/folders', { path }),
+  libraryRemove: (name: string) => call<{ removed: number }>('POST', '/api/library/folders/remove', { name }),
+  fsList: (path: string) => call<{ path: string; parent: string | null; dirs: string[] }>('GET', '/api/fs/list?path=' + encodeURIComponent(path)),
+  sendOverview: () => call<{ folders: SendFolder[]; nas: { ok: boolean; url: string; photos?: number; error?: string }; delete_after: boolean }>('GET', '/api/send/overview'),
+  sendNasFolders: (year: string) => call<{ folders: string[]; suggested_parent: string }>('GET', '/api/send/nas-folders?year=' + year),
+  sendPlan: (body: SendRequest) => call<{ count: number; bytes: number; already_sent: number; folders: { path: string; count: number }[] }>('POST', '/api/send/plan', body),
+  sendStart: (body: SendRequest) => call<{ total: number; folders: string[] }>('POST', '/api/send/start', body),
+  sendStatus: () => call<SendState>('GET', '/api/send/status'),
   scan: (full = false) => call('POST', '/api/scan', { full }),
   query: (sort: SortLevel[], filters: Filters, offset: number, limit: number, seed: number) =>
     call<{ total: number; offset: number; items: Photo[] }>('POST', '/api/photos/query', { sort, filters, offset, limit, seed }),
@@ -111,7 +124,7 @@ export const api = {
   seriesAdd: (id: number, ids: number[]) => call<{ added: number }>('POST', `/api/series/${id}/items`, { ids }),
   seriesRemove: (id: number, ids: number[]) => call('POST', `/api/series/${id}/remove`, { ids }),
   agents: () => call<{ agents: Agent[]; server_time: number }>('GET', '/api/agents'),
-  job: (kind: string, payload: Record<string, unknown>, agent_id?: string) => call<{ id: number; agent_id: string | null }>('POST', '/api/jobs', { kind, payload, agent_id }),
+  job: (kind: string, payload: Record<string, unknown>, agent_id?: string) => call<{ id: number; agent_id: string | null; message?: string }>('POST', '/api/jobs', { kind, payload, agent_id }),
   jobs: () => call<{ jobs: { id: number; agent_id: string | null; kind: string; payload: any; created: number; status: string }[] }>('GET', '/api/jobs'),
 }
 

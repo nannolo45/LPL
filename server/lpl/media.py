@@ -13,6 +13,7 @@ from PIL import Image, ImageOps
 from .config import RAW_EXTS, config
 
 log = logging.getLogger("lpl.media")
+NO_WINDOW = {"creationflags": 0x08000000} if os.name == "nt" else {}  # no console flashes on Windows
 
 try:
     import rawpy  # type: ignore
@@ -36,7 +37,7 @@ def read_metadata(paths: List[Path]) -> Dict[str, dict]:
             f.write(str(p) + "\n")
         argfile = f.name
     try:
-        out = subprocess.run(["exiftool", *EXIF_ARGS, "-@", argfile], capture_output=True, timeout=600)
+        out = subprocess.run([config.exiftool, *EXIF_ARGS, "-@", argfile], capture_output=True, timeout=600, **NO_WINDOW)
         data = json.loads(out.stdout.decode("utf-8", "replace") or "[]")
     except Exception as e:
         log.warning("exiftool failed: %s", e)
@@ -117,7 +118,7 @@ def _rotate(img: Image.Image, orientation: int) -> Image.Image:
 def _embedded_jpeg_exiftool(path: Path) -> Optional[bytes]:
     for tag in ("-JpgFromRaw", "-PreviewImage", "-OtherImage", "-ThumbnailImage"):
         try:
-            out = subprocess.run(["exiftool", "-b", tag, str(path)], capture_output=True, timeout=60)
+            out = subprocess.run([config.exiftool, "-b", tag, str(path)], capture_output=True, timeout=60, **NO_WINDOW)
             if out.stdout and len(out.stdout) > 2000:
                 return out.stdout
         except Exception:

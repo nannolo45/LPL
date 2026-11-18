@@ -88,10 +88,26 @@ It installs a systemd user service. darktable from your distribution and the Fla
 ### When the same photo is changed in two places
 If rating, labels or tags are changed in LPL (e.g. on the phone) while the photo is open in darktable, the LPL values win and darktable is told to reload them. Otherwise darktable's values are kept. darktable's edit history always comes from darktable.
 
+## 4. Local library on the laptop (travel, PC-only photos)
+
+The Windows agent also runs a library on the PC itself, at **http://localhost:8090** (shortcut "LightPhotoLibrary (this PC)" on the desktop). It works with no NAS connection: same grid, list, folders, timeline, board, tags and filters.
+
+1. Open it and go to **Send to NAS** → **Library folders**: add the folders you dump the card into (e.g. `D:\Trips\Lisbon`). New photos are picked up every couple of minutes, or press **Rescan**.
+2. **Edit in darktable** opens the photo **in place** (no copy). Your edits go to the XMP next to the photo, as usual.
+3. Back home (or on a fast connection): **Send to NAS** → **Send…** on a folder, or select photos → **Send to the NAS…** in the right panel.
+   - Choose the NAS folder to put them in (it suggests where your `YYYY-MM-DD_*` folders usually live, e.g. `2026`) and the descriptor.
+   - **One folder per capture day** makes `2026-02-12_Lisbon`, `2026-02-13_Lisbon`, …
+   - **Delete the copies on this PC after the NAS confirmed them**: on = the PC is cleared after each file was checked (checksum) on the NAS; off = keep them. The choice is remembered.
+   - Ratings, labels, tags, darktable edits (XMP) and series board positions go along.
+4. Send again any time: files already on the NAS are skipped and only changed edits (XMP) are uploaded. The table shows "Edits not sent".
+
+Folders you never send simply stay PC-only. Removing a folder from the library doesn't touch the files.
+
 ## Troubleshooting
 - Agent log: `%LOCALAPPDATA%\LightPhotoLibrary\agent.log` (Windows), `~/.local/share/lightphotolibrary/agent.log` (Linux). `python lpl_agent.py --status` shows the setup.
 - "bridge script not seen": the agent can still start darktable, but can't send photos to an already-open darktable on Windows. Run `lpl_agent.py --install-bridge` and restart darktable. darktable's own log shows lines starting with `[lpl]`.
 - Server log: `docker logs lightphotolibrary`.
+- Local library not opening: `lpl-agent.exe --status`; the Working set tab on the NAS shows "local library not available" with the reason. `lpl-agent.exe --selftest` checks the bundled parts.
 
 ## Development
 ```

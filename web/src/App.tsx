@@ -7,18 +7,21 @@ import { FoldersView, TimelineView } from './components/Folders'
 import { Inspector } from './components/Inspector'
 import { BoardView } from './components/Board'
 import { WorkView } from './components/Work'
+import { SendView } from './components/Send'
 import { Viewer } from './components/Viewer'
 import { MobileApp } from './components/Mobile'
 
-const VIEWS: [View, string][] = [['grid', 'Grid'], ['list', 'List'], ['folders', 'Folders'], ['timeline', 'Timeline'], ['board', 'Board'], ['work', 'Working set']]
+const BASE: [View, string][] = [['grid', 'Grid'], ['list', 'List'], ['folders', 'Folders'], ['timeline', 'Timeline'], ['board', 'Board']]
 
 function TopBar() {
   const s = useStore()
   const online = s.agents.filter(a => a.online)
   const ws = s.agents.reduce((n, a) => n + (a.state?.working_set?.length || 0), 0)
+  const VIEWS: [View, string][] = [...BASE, s.isLocal ? ['send', 'Send to NAS'] : ['work', 'Working set']]
   return (
     <div className="topbar">
       <span className="brand">LightPhotoLibrary</span>
+      {s.isLocal && <span className="pill-ok" title="The library on this PC — works without the NAS" style={{ background: 'rgba(140,184,230,.14)', color: '#8cb8e6' }}><i style={{ background: '#8cb8e6' }} />this PC</span>}
       <nav className="tabs" aria-label="Views">
         {VIEWS.map(([v, l]) => (
           <button key={v} className={s.view === v ? 'on' : ''} onClick={() => s.setView(v)}>
@@ -31,7 +34,7 @@ function TopBar() {
         <input aria-label="Search" placeholder="Search filename, folder, tag, lens, camera…" value={s.filters.q || ''} onChange={e => s.patchFilters({ q: e.target.value })} />
       </label>
       <div className="grow" />
-      {online.length ? <span className="pill-ok" title={online.map(a => a.name).join(', ')}><i />{online.length === 1 ? online[0].name : `${online.length} PCs`} ready</span>
+      {s.isLocal ? null : online.length ? <span className="pill-ok" title={online.map(a => a.name).join(', ')}><i />{online.length === 1 ? online[0].name : `${online.length} PCs`} ready</span>
         : <span className="pill-off" title="Start the LightPhotoLibrary agent on your PC"><i />no PC agent</span>}
     </div>
   )
@@ -77,6 +80,7 @@ function Desktop() {
             {s.view === 'folders' && <FoldersView />}
             {s.view === 'timeline' && <TimelineView />}
             {s.view === 'work' && <WorkView />}
+            {s.view === 'send' && <SendView />}
           </div>
         )}
         {(libView || s.view === 'board') && <Inspector />}

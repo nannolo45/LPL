@@ -261,6 +261,9 @@ export function Inspector() {
           <button className="btn primary" onClick={() => s.editInDarktable(photos.map(p => p.id))}>
             {photos.length > 1 ? `Edit ${photos.length} in darktable` : 'Edit in darktable'}
           </button>
+          {s.isLocal && <button className="btn" onClick={() => { s.setSendIds(photos.map(p => p.id)); s.setView('send') }}>
+            Send {photos.length > 1 ? `${photos.length} photos` : 'this photo'} to the NAS…
+          </button>}
           <SeriesPicker ids={photos.map(p => p.id)} />
         </>
       )}

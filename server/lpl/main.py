@@ -20,6 +20,8 @@ def check_writable() -> None:
                   "create it yourself before starting the container, or change its owner to this user.",
                   config.data_dir, e, os.getuid() if hasattr(os, "getuid") else "?")
         raise SystemExit(1)
+    if config.local:
+        return
     if not config.photo_root.is_dir():
         log.error("Photo folder %s not found: check the volume line in docker-compose.yml.", config.photo_root)
     elif not os.access(config.photo_root, os.W_OK):
@@ -34,6 +36,9 @@ def create_app():
     api.mount_web()
     if os.environ.get("LPL_NO_SCAN") != "1":
         scanner.start_background()
+    if config.local:
+        from . import localedit
+        localedit.start_background()
     return api.app
 
 

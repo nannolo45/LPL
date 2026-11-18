@@ -8,7 +8,8 @@
     Linux config dir:   ~/.config/darktable   (flatpak: ~/.var/app/org.darktable.Darktable/config/darktable)
 
   How it talks to the agent (plain files, no network):
-    <bridge>/request.txt   written by the agent, one command per line, tab separated:
+    <bridge>/request.txt   written by the agent (and request-local.txt by the PC's local library),
+                           one command per line, tab separated:
                              open    <image path>    (import if needed and show it in darkroom; first one is shown)
                              import  <image path>    (import only, so it is in the filmstrip)
                              reload  <image path>    (re-read its XMP, after LPL changed rating/labels/tags)
@@ -70,10 +71,28 @@ local function image_path(img)
   return img.path .. sep .. img.filename
 end
 
+-- images LightPhotoLibrary cares about: the agent's working set, plus the PC's local library folders
+-- (listed by the local library in roots-local.txt)
+local function watched_roots()
+  local roots = { (norm(BRIDGE):gsub("/bridge$", "/work")) }
+  local f = io.open(BRIDGE .. sep .. "roots-local.txt", "rb")
+  if f then
+    for line in f:lines() do
+      line = line:gsub("[\r\n]", "")
+      if line ~= "" then table.insert(roots, (norm(line):gsub("/$", ""))) end
+    end
+    f:close()
+  end
+  return roots
+end
+
 local function in_working_set(img)
   if not img then return false end
-  local wd = norm(BRIDGE):gsub("/bridge$", "/work")
-  return norm(img.path):sub(1, #wd) == wd
+  local p = norm(img.path)
+  for _, root in ipairs(watched_roots()) do
+    if p == root or p:sub(1, #root + 1) == root .. "/" then return true end
+  end
+  return false
 end
 
 local function find_image(path)
@@ -135,13 +154,13 @@ local function export_done(img)
   write_file(OUTBOX .. sep .. name .. ".done", image_path(img))
 end
 
-local function handle_requests()
-  if not file_exists(REQUEST) then return end
-  local f = io.open(REQUEST, "rb")
+local function handle_file(request_file)
+  if not file_exists(request_file) then return end
+  local f = io.open(request_file, "rb")
   if not f then return end
   local text = f:read("*a") or ""
   f:close()
-  os.remove(REQUEST)
+  os.remove(request_file)
   local first = nil
   for line in text:gmatch("[^\r\n]+") do
     local cmd, path = line:match("^(%w+)\t(.+)$")
@@ -159,6 +178,12 @@ local function handle_requests()
     end
   end
   if first then show(first) end
+end
+
+-- request.txt comes from the agent (NAS working set), request-local.txt from the PC's local library
+local function handle_requests()
+  handle_file(REQUEST)
+  handle_file(BRIDGE .. sep .. "request-local.txt")
 end
 
 -- status.txt: what the bridge did at startup, shown on LightPhotoLibrary's Working set page
