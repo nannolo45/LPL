@@ -55,7 +55,15 @@ export interface Filters {
   month?: string | null
   tag?: string | null
   series?: number | null
+  tags?: string[]
+  tag_mode?: 'or' | 'and'
+  date_from?: string | null
+  date_to?: string | null
 }
+
+export interface AddTarget { frame?: number; new?: boolean; per_folder?: boolean; label?: string }
+export interface LastAdd { filters: Filters; target: AddTarget }
+export interface MatchResult { total: number; new: number; limit: number; folders: number; sample: { id: number; v: number }[] }
 
 export interface Folder { path: string; count: number; edited: number; first: string | null; last: string | null; covers: { id: number; v: number; pending?: boolean }[]; direct: number; pos: number | null; hidden?: boolean }
 export interface FoldersResult { folders: Folder[]; excluded: string[]; previews_pending: number }
@@ -123,7 +131,10 @@ export const api = {
   seriesCreate: (name: string, ids: number[] = []) => call<{ id: number }>('POST', '/api/series', { name, ids }),
   seriesRename: (id: number, name: string) => call('PATCH', `/api/series/${id}`, { name }),
   seriesDelete: (id: number) => call('DELETE', `/api/series/${id}`),
-  board: (id: number) => call<{ series: { id: number; name: string }; frames: Frame[]; items: Photo[] }>('GET', `/api/series/${id}/board`),
+  board: (id: number) => call<{ series: { id: number; name: string }; frames: Frame[]; items: Photo[]; last_add?: LastAdd | null }>('GET', `/api/series/${id}/board`),
+  seriesMatch: (id: number, filters: Filters, sort?: SortLevel[]) => call<MatchResult>('POST', `/api/series/${id}/match`, { filters, sort }),
+  seriesAddMatching: (id: number, filters: Filters, target: AddTarget, sort?: SortLevel[]) =>
+    call<{ added: number }>('POST', `/api/series/${id}/add-matching`, { filters, target, sort }),
   boardSave: (id: number, items: { id: number; x: number; y: number; ord: number | null }[], frames?: Frame[]) =>
     call<{ series: { id: number; name: string }; frames: Frame[]; items: Photo[] }>('PUT', `/api/series/${id}/board`, frames ? { items, frames } : { items }),
   seriesAdd: (id: number, ids: number[]) => call<{ added: number }>('POST', `/api/series/${id}/items`, { ids }),

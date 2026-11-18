@@ -120,6 +120,23 @@ def build_where(f: Dict[str, Any]) -> Tuple[str, List[Any], str]:
     if tag:
         where.append("EXISTS (SELECT 1 FROM photo_tags pt JOIN tags t ON t.id=pt.tag_id WHERE pt.photo_id=p.id AND (t.path=? OR t.path LIKE ? ESCAPE '\\'))")
         args += [tag, tag.replace("%", "\\%").replace("_", "\\_") + "|%"]
+    tags = [t for t in (f.get("tags") or []) if t]
+    if tags:  # several tags (a tag also matches everything below it); any of them, or all with tag_mode "and"
+        parts = []
+        for t in tags:
+            parts.append("EXISTS (SELECT 1 FROM photo_tags pt JOIN tags t ON t.id=pt.tag_id WHERE pt.photo_id=p.id AND (t.path=? OR t.path LIKE ? ESCAPE '\\'))")
+            args += [t, t.replace("%", "\\%").replace("_", "\\_") + "|%"]
+        where.append("(" + (" AND " if f.get("tag_mode") == "and" else " OR ").join(parts) + ")")
+    d1, d2 = f.get("date_from"), f.get("date_to")
+    if d1:
+        where.append("p.taken >= ?")
+        args.append(str(d1)[:10])
+    if d2:
+        where.append("p.taken < ?")
+        args.append(str(d2)[:10] + "~")  # '~' sorts after any time part, so the whole end day counts
+    not_in = f.get("not_in_series")
+    if not_in:
+        where.append("p.id NOT IN (SELECT photo_id FROM series_items WHERE series_id=%d)" % int(not_in))
     series = f.get("series")
     if series:
         join = " JOIN series_items si ON si.photo_id=p.id AND si.series_id=%d" % int(series)

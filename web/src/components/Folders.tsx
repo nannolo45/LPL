@@ -6,11 +6,11 @@ import { RetryImg } from './RetryImg'
 
 // The last folder list is kept (in memory and in the browser) so the page shows at once; it's refreshed in the background.
 let lastFolders: FoldersResult | null = null
-const readCached = (): FoldersResult | null => {
+export const readCached = (): FoldersResult | null => {
   if (lastFolders) return lastFolders
   try { const t = localStorage.getItem('lpl.foldersCache'); return t ? JSON.parse(t) : null } catch { return null }
 }
-const writeCached = (r: FoldersResult) => {
+export const writeCached = (r: FoldersResult) => {
   lastFolders = r
   try { localStorage.setItem('lpl.foldersCache', JSON.stringify(r)) } catch { /* full or blocked: memory copy is enough */ }
 }

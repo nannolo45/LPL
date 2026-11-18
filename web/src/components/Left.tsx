@@ -54,9 +54,9 @@ export function SortPanel() {
   )
 }
 
-const RATINGS: [number, string][] = [[-1, 'rejected'], [0, 'unrated'], [1, '★1'], [2, '★2'], [3, '★3'], [4, '★4'], [5, '★5']]
+export const RATINGS: [number, string][] = [[-1, 'rejected'], [0, 'unrated'], [1, '★1'], [2, '★2'], [3, '★3'], [4, '★4'], [5, '★5']]
 
-function toggle<T>(list: T[] | undefined, v: T): T[] {
+export function toggle<T>(list: T[] | undefined, v: T): T[] {
   const l = list || []
   return l.includes(v) ? l.filter(x => x !== v) : [...l, v]
 }

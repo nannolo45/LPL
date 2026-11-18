@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, Frame, Photo, thumbUrl } from '../api'
+import { api, Frame, LastAdd, Photo, thumbUrl } from '../api'
 import { useStore } from '../store'
+import { AddPhotosDialog } from './AddPhotos'
 
 type Item = Photo & { x: number; y: number }
 
@@ -36,16 +37,21 @@ export function BoardView() {
   const [items, setItems] = useState<Item[]>([])
   const [name, setName] = useState('')
   const [zoom, setZoom] = useState(1)
+  const [lastAdd, setLastAdd] = useState<LastAdd | null>(null)
+  const [adding, setAdding] = useState(false)
   const drag = useRef<null | { kind: 'items' | 'frame' | 'resize'; ids: number[]; fi: number; sx: number; sy: number; orig: Map<number, { x: number; y: number }>; of: Frame; inside: number[] }>(null)
   const saveTimer = useRef<number>()
   const framesDirty = useRef(false)
 
   const load = useCallback(() => {
-    if (sid == null) return
-    api.board(sid).then(r => { setFrames(r.frames); setItems(r.items.map(p => ({ ...p, x: p.x || 0, y: p.y || 0 }))); setName(r.series.name) })
-      .catch(e => s.toast(e.message))
+    if (sid == null) return Promise.resolve(null)
+    return api.board(sid).then(r => {
+      const its = r.items.map(p => ({ ...p, x: p.x || 0, y: p.y || 0 }))
+      setFrames(r.frames); setItems(its); setName(r.series.name); setLastAdd(r.last_add || null)
+      return { items: its, frames: r.frames }
+    }).catch(e => { s.toast(e.message); return null })
   }, [sid])
-  useEffect(() => { load() }, [load])
+  useEffect(() => { setAdding(false); load() }, [load])
 
   const order = useMemo(() => readingOrder(items, frames), [items, frames])
   const pos = useMemo(() => new Map(order.map((it, i) => [it.id, i + 1])), [order])
@@ -136,6 +142,13 @@ export function BoardView() {
     if (sid == null || !window.confirm(`Delete the series “${name}”? Photos are not deleted; their series tag is removed.`)) return
     await api.seriesDelete(sid); s.setBoardSeries(null); s.reloadSeries(); s.reloadTags()
   }
+  const onAdded = async (n: number) => {
+    setAdding(false)
+    s.toast(`${n} photo${n === 1 ? '' : 's'} added to “${name}”`)
+    const r = await load()
+    if (r) save(r.items, r.frames, false)  // stores the new reading order
+    s.reloadSeries(); s.reloadTags()
+  }
   const showInLibrary = () => { if (sid == null) return; s.patchFilters({ series: sid, folder: null, month: null, tag: null }); s.setSort([{ f: 'custom', d: 'asc' }]); s.setView('grid') }
 
   const W = Math.max(1400, ...frames.map(f => f.x + f.w + 200), ...items.map(i => i.x + 400))
@@ -153,7 +166,7 @@ export function BoardView() {
           ))}
           <button className="btn dashed" style={{ margin: '6px 4px' }} onClick={newSeries}>+ New series{s.sel.length ? ` from ${s.sel.length} selected` : ''}</button>
           <div className="small muted" style={{ padding: 8, lineHeight: 1.5 }}>
-            Add photos from the Library: select them, then “Add to series…”. Frames are chapters; photos in a Maybe pile are not part of the series.
+            “+ Add photos” brings in whole folders or everything matching a rating, label, tag or date. You can also select photos in the Library and use “Add to series…”. Frames are chapters; photos in a Maybe pile are not part of the series.
           </div>
         </div>
       )}
@@ -170,6 +183,7 @@ export function BoardView() {
               <span className="display" style={{ fontSize: 17 }}>{name}</span>
               <span className="muted">{order.length} in series · {items.length - order.length} in maybe piles</span>
               <div className="grow" />
+              <button className="btn primary" onClick={() => setAdding(true)} title="Add photos from folders, or by rating, label, tag and date">+ Add photos</button>
               <button className="btn" onClick={() => addFrame(false)}>+ Frame</button>
               <button className="btn" onClick={() => addFrame(true)}>+ Maybe pile</button>
               <button className="btn" onClick={() => setZoom(z => Math.max(.3, +(z - .1).toFixed(2)))} aria-label="Zoom out">−</button>
@@ -227,6 +241,9 @@ export function BoardView() {
           </>
         )}
       </div>
+      {adding && sid != null && (
+        <AddPhotosDialog sid={sid} name={name} frames={frames} lastAdd={lastAdd} onClose={() => setAdding(false)} onAdded={onAdded} />
+      )}
     </div>
   )
 }

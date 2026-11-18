@@ -538,6 +538,7 @@ def series_delete(sid: int):
         c.execute("DELETE FROM series_items WHERE series_id=?", (sid,))
         c.execute("DELETE FROM series_frames WHERE series_id=?", (sid,))
         c.execute("DELETE FROM series WHERE id=?", (sid,))
+        c.execute("DELETE FROM settings WHERE key=?", (_add_criteria_key(sid),))
         c.execute("DELETE FROM tags WHERE path=? AND id NOT IN (SELECT tag_id FROM photo_tags)", (SERIES_TAG + s["name"],))
         c.commit()
     return {"ok": True}
@@ -553,7 +554,11 @@ def series_board(sid: int):
     for it in items:
         r = pos[it["id"]]
         it["x"], it["y"], it["ord"] = r["x"], r["y"], r["ord"]
-    return {"series": {"id": s["id"], "name": s["name"]}, "frames": frames, "items": items}
+    try:
+        last_add = json.loads(db.get_setting(_add_criteria_key(sid)) or "null")
+    except ValueError:
+        last_add = None
+    return {"series": {"id": s["id"], "name": s["name"]}, "frames": frames, "items": items, "last_add": last_add}
 
 
 @app.post("/api/series/{sid}/items")
@@ -614,6 +619,146 @@ def series_save(sid: int, body: Dict[str, Any] = Body(...)):
                 c.execute("DELETE FROM series_frames WHERE series_id=?", (sid,))
         c.commit()
     return series_board(sid)
+
+
+# ------------------------------------------------ add to a board by folders / criteria
+ADD_LIMIT = 3000
+CELL_W, CELL_H = 160, 115  # board grid cell; tiles are at most 150 x 105 (same sizes as the web board)
+
+
+def _tile(w, h, o):
+    w, h = (w or 3), (h or 2)
+    if o in (5, 6, 7, 8):
+        w, h = h, w
+    r = w / h
+    return (150, round(150 / r)) if r >= 1 else (round(105 * r), 105)
+
+
+def _add_criteria_key(sid: int) -> str:
+    return "series_add.%d" % sid
+
+
+def _match(sid: int, filters: Dict[str, Any], sort: List[Dict[str, str]]):
+    f = dict(filters or {})
+    for k in ("series", "ids", "not_in_series"):
+        f.pop(k, None)
+    if not any(f.get(k) for k in ("folders", "folder", "ratings", "labels", "tags", "tag", "lenses", "cameras", "date_from", "date_to", "q", "edited", "month")):
+        raise HTTPException(400, "pick at least one folder or criterion")
+    c = db.conn()
+    where, args, join = query.build_where(f)
+    total = c.execute("SELECT COUNT(*) n FROM photos p%s WHERE %s" % (join, where), args).fetchone()["n"]
+    f["not_in_series"] = sid
+    where, args, join = query.build_where(f)
+    order = query.build_order(sort or [{"f": "taken", "d": "asc"}, {"f": "name", "d": "asc"}], 1, False)
+    rows = c.execute("SELECT p.id, p.folder, p.width, p.height, p.orientation, p.preview_ver FROM photos p%s WHERE %s ORDER BY %s"
+                     % (join, where, order), args).fetchall()
+    return total, rows
+
+
+@app.post("/api/series/{sid}/match")
+def series_match(sid: int, body: Dict[str, Any] = Body(...)):
+    """Dry run for the board's Add photos panel: how many match, how many are new, a few to preview."""
+    _series(sid)
+    total, rows = _match(sid, body.get("filters") or {}, body.get("sort") or [])
+    folders: Dict[str, int] = {}
+    for r in rows:
+        folders[r["folder"]] = folders.get(r["folder"], 0) + 1
+    return {"total": total, "new": len(rows), "limit": ADD_LIMIT, "folders": len(folders),
+            "sample": [{"id": r["id"], "v": r["preview_ver"]} for r in rows[:14]]}
+
+
+@app.post("/api/series/{sid}/add-matching")
+def series_add_matching(sid: int, body: Dict[str, Any] = Body(...)):
+    """Add every photo matching folders/criteria that isn't on the board yet, laid out in a grid.
+
+    target: {"frame": <frame id>} (an existing frame or maybe pile), {"new": true} (one new frame),
+    or {"per_folder": true} (one new frame per folder, named after it). Frames grow to fit; whatever
+    sits below a grown frame moves down with it."""
+    s = _series(sid)
+    filters = body.get("filters") or {}
+    sort = body.get("sort") or []
+    target = body.get("target") or {"new": True}
+    _, rows = _match(sid, filters, sort)
+    rows = rows[:ADD_LIMIT]
+    if not rows:
+        return {"added": 0}
+    with db.write_lock:
+        c = db.conn()
+        frames = [dict(r) for r in c.execute("SELECT id,label,x,y,w,h,maybe FROM series_frames WHERE series_id=? ORDER BY id", (sid,)).fetchall()]
+        items = [dict(r) for r in c.execute(
+            "SELECT si.photo_id id, si.x, si.y, p.width, p.height, p.orientation FROM series_items si JOIN photos p ON p.id=si.photo_id "
+            "WHERE si.series_id=?", (sid,)).fetchall()]
+        for it in items:
+            it["tw"], it["th"] = _tile(it["width"], it["height"], it["orientation"])
+            it["x"], it["y"] = it["x"] or 0, it["y"] or 0
+
+        def inside(it, f):
+            cx, cy = it["x"] + it["tw"] / 2, it["y"] + it["th"] / 2
+            return f["x"] <= cx <= f["x"] + f["w"] and f["y"] <= cy <= f["y"] + f["h"]
+
+        def bottom_of_all():
+            return max([f["y"] + f["h"] for f in frames] + [it["y"] + it["th"] for it in items] + [0])
+
+        def place(f, group, start_y):
+            cols = max(1, int((f["w"] - 32) // CELL_W))
+            for k, r in enumerate(group):
+                tw, th = _tile(r["width"], r["height"], r["orientation"])
+                x = f["x"] + 16 + (k % cols) * CELL_W + (150 - tw) // 2
+                y = start_y + (k // cols) * CELL_H + (105 - th) // 2
+                c.execute("INSERT OR IGNORE INTO series_items(series_id,photo_id,x,y,ord) VALUES(?,?,?,?,NULL)", (sid, r["id"], x, y))
+                items.append({"id": r["id"], "x": x, "y": y, "tw": tw, "th": th})
+            rows_n = (len(group) + cols - 1) // cols
+            return start_y + rows_n * CELL_H
+
+        def new_frame(label, n):
+            cols = min(8, max(5, int((n * 1.5) ** 0.5) + 1))
+            rows_n = (n + cols - 1) // cols
+            f = {"label": label, "x": 40, "y": bottom_of_all() + 40 if (frames or items) else 40,
+                 "w": 32 + cols * CELL_W, "h": 50 + rows_n * CELL_H, "maybe": 0}
+            f["id"] = c.execute("INSERT INTO series_frames(series_id,label,x,y,w,h,maybe) VALUES(?,?,?,?,?,?,0)",
+                                (sid, f["label"], f["x"], f["y"], f["w"], f["h"])).lastrowid
+            frames.append(f)
+            return f
+
+        def next_label():
+            nums = [int(f["label"]) for f in frames if not f["maybe"] and str(f["label"]).isdigit()]
+            return str((max(nums) if nums else 0) + 1).zfill(2)
+
+        if target.get("frame"):
+            f = next((x for x in frames if x["id"] == int(target["frame"])), None)
+            if not f:
+                raise HTTPException(400, "that frame no longer exists")
+            old_bottom = f["y"] + f["h"]
+            mine = [it for it in items if inside(it, f)]
+            start = max([f["y"] + 40] + [it["y"] + it["th"] + 14 for it in mine])
+            others_below = [it for it in items if not inside(it, f) and it["y"] >= old_bottom - 1]
+            frames_below = [x for x in frames if x is not f and x["y"] >= old_bottom - 1]
+            end = place(f, rows, start)
+            grow = end + 10 - old_bottom
+            if grow > 0:
+                f["h"] += grow
+                c.execute("UPDATE series_frames SET h=? WHERE id=?", (f["h"], f["id"]))
+                for x in frames_below:
+                    x["y"] += grow
+                    c.execute("UPDATE series_frames SET y=? WHERE id=?", (x["y"], x["id"]))
+                for it in others_below:
+                    c.execute("UPDATE series_items SET y=? WHERE series_id=? AND photo_id=?", (it["y"] + grow, sid, it["id"]))
+        elif target.get("per_folder"):
+            groups: Dict[str, list] = {}
+            for r in rows:
+                groups.setdefault(r["folder"], []).append(r)
+            for folder, group in groups.items():
+                f = new_frame(folder.rsplit("/", 1)[-1] or folder or "Root", len(group))
+                place(f, group, f["y"] + 40)
+        else:
+            f = new_frame(str(target.get("label") or "").strip() or next_label(), len(rows))
+            place(f, rows, f["y"] + 40)
+        c.commit()
+    db.set_setting(_add_criteria_key(sid), json.dumps({"filters": filters, "target": target}))
+    ids = [r["id"] for r in rows]
+    if config.write_series_tags:
+        set_meta({"ids": ids, "attach": [SERIES_TAG + s["name"]]})
+    return {"added": len(ids)}
 
 
 # ---------------------------------------------------------------- agents + jobs (hand-off to darktable)
