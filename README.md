@@ -42,7 +42,7 @@ LPL writes **only** `.xmp` sidecar files next to your photos, never the photos t
 ## 2. Install the agent on your PC
 
 ### Windows
-1. Download **lpl-agent-windows.zip**: on GitHub → Actions → "Windows agent (.exe)" → latest run → Artifacts (or from a Release). No Python needed.
+1. Download **lpl-agent-windows.zip** from the repo's **Releases** page ("Windows agent (latest build)"). No Python needed.
    (Alternative: install Python 3 and use the `agent` folder of the repo directly.)
 2. Unzip it, right-click `install-windows.ps1` → **Run with PowerShell**.
    It asks for the NAS address (e.g. `http://192.168.1.20:8080`), finds darktable, installs the darktable bridge script and starts the agent now and at every login.
