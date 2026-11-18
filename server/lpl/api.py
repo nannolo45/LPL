@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -172,6 +173,7 @@ def preview(pid: int, s: str = "t"):
         if s == "l" and t.is_file():
             p = t
         else:
+            scanner.prioritize([pid])  # someone wants to see it: make it next
             raise HTTPException(404, "preview not ready")
     return FileResponse(p, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
@@ -225,14 +227,16 @@ def facets():
 def folders():
     c = db.conn()
     rows = c.execute(
-        "SELECT folder, COUNT(*) n, SUM(edited) ed, MIN(taken) first, MAX(taken) last FROM photos WHERE missing=0 GROUP BY folder").fetchall()
+        "SELECT folder, COUNT(*) n, SUM(edited) ed, MIN(taken) first, MAX(taken) last "
+        "FROM photos WHERE missing=0 GROUP BY folder ORDER BY MAX(taken) DESC").fetchall()
+    # covers: photos whose preview is ready first, then the best rated, then the newest
     covers = {}
     for r in c.execute(
-            "SELECT folder, id, preview_ver FROM (SELECT folder, id, preview_ver, ROW_NUMBER() OVER (PARTITION BY folder ORDER BY rating DESC, taken) rn "
-            "FROM photos WHERE missing=0) WHERE rn<=4").fetchall():
-        covers.setdefault(r["folder"], []).append({"id": r["id"], "v": r["preview_ver"]})
+            "SELECT folder, id, preview_ver, preview_state FROM (SELECT folder, id, preview_ver, preview_state, ROW_NUMBER() OVER "
+            "(PARTITION BY folder ORDER BY preview_state=1 DESC, rating DESC, taken DESC) rn FROM photos WHERE missing=0) WHERE rn<=4").fetchall():
+        covers.setdefault(r["folder"], []).append({"id": r["id"], "v": r["preview_ver"], "ready": r["preview_state"] == 1})
     agg: Dict[str, dict] = {}
-    for r in rows:
+    for r in rows:  # newest subfolders first, so a year folder shows recent photos
         f = r["folder"]
         parts = f.split("/") if f else []
         for k in range(0, len(parts) + 1):
@@ -244,14 +248,82 @@ def folders():
                 a["first"] = r["first"]
             if r["last"] and (a["last"] is None or r["last"] > a["last"]):
                 a["last"] = r["last"]
-            if len(a["covers"]) < 4:
-                a["covers"].extend(covers.get(f, [])[: 4 - len(a["covers"])])
             if k == len(parts):
                 a["direct"] = r["n"]
+            a.setdefault("_cand", []).extend(covers.get(f, []))
+    pending = []
+    for a in agg.values():
+        cand = a.pop("_cand")
+        ready = [x for x in cand if x["ready"]]
+        pick = (ready + [x for x in cand if not x["ready"]])[:4]
+        a["covers"] = [{"id": x["id"], "v": x["v"]} if x["ready"] else {"id": x["id"], "v": x["v"], "pending": True} for x in pick]
+        pending += [x["id"] for x in pick if not x["ready"]]
+    scanner.prioritize(pending)
     pos = {r["path"]: r["pos"] for r in c.execute("SELECT path, pos FROM folder_order").fetchall()}
+    hidden = set(scanner.hidden_folders())
     for p, a in agg.items():
         a["pos"] = pos.get(p)
-    return {"folders": sorted(agg.values(), key=lambda a: a["path"])}
+        a["hidden"] = p in hidden
+    return {"folders": sorted(agg.values(), key=lambda a: a["path"]), "excluded": scanner.excluded_folders(),
+            "previews_pending": scanner.status.get("previews_pending", 0)}
+
+
+@app.post("/api/folders/hide")
+def folders_hide(body: Dict[str, Any] = Body(...)):
+    """Hide a folder (and everything in it) from the views, or show it again. Files and data are untouched."""
+    path = (body.get("path") or "").strip("/")
+    if not path:
+        raise HTTPException(400, "choose a folder")
+    with db.write_lock:
+        cur = [h for h in scanner.hidden_folders() if h != path]
+        if body.get("hidden", True):
+            cur.append(path)
+        db.set_setting("hidden_folders", json.dumps(sorted(set(cur))))
+        db.conn().commit()
+    return {"hidden": scanner.hidden_folders()}
+
+
+@app.post("/api/folders/exclude")
+def folders_exclude(body: Dict[str, Any] = Body(...)):
+    """Leave a folder out of the library (not scanned, no previews, gone from LPL), or take it back in.
+    The files and their XMPs on disk are never touched."""
+    path = (body.get("path") or "").strip("/")
+    if not path:
+        raise HTTPException(400, "choose a folder")
+    exclude = bool(body.get("excluded", True))
+    removed = 0
+    with db.write_lock:
+        c = db.conn()
+        cur = [e for e in scanner.excluded_folders() if e != path]
+        if exclude:
+            cur.append(path)
+        db.set_setting("excluded_folders", json.dumps(sorted(set(cur))))
+        if exclude:
+            like = path.replace("%", "\\%").replace("_", "\\_") + "/%"
+            ids = [r["id"] for r in c.execute("SELECT id FROM photos WHERE folder=? OR folder LIKE ? ESCAPE '\\'", (path, like)).fetchall()]
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                qs = ",".join("?" * len(chunk))
+                for t in ("photo_labels", "photo_tags", "series_items", "sent"):
+                    c.execute("DELETE FROM %s WHERE photo_id IN (%s)" % (t, qs), chunk)
+                c.execute("DELETE FROM photos WHERE id IN (%s)" % qs, chunk)
+            removed = len(ids)
+            c.execute("DELETE FROM folder_order WHERE path=? OR path LIKE ? ESCAPE '\\'", (path, like))
+        c.commit()
+    if exclude:
+        threading.Thread(target=_drop_previews, args=(ids,), daemon=True).start()
+    else:
+        threading.Thread(target=scanner.scan, daemon=True).start()
+    return {"excluded": scanner.excluded_folders(), "removed": removed}
+
+
+def _drop_previews(ids) -> None:
+    for pid in ids:
+        for p in media.preview_paths(pid):
+            try:
+                p.unlink()
+            except OSError:
+                pass
 
 
 @app.post("/api/folders/order")

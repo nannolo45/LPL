@@ -43,6 +43,8 @@ export interface Filters {
   ratings?: number[]
   lenses?: string[]
   cameras?: string[]
+  show_hidden?: boolean
+  folders?: string[]
   labels?: number[]
   label_mode?: 'or' | 'and'
   lens?: string
@@ -55,7 +57,8 @@ export interface Filters {
   series?: number | null
 }
 
-export interface Folder { path: string; count: number; edited: number; first: string | null; last: string | null; covers: { id: number; v: number }[]; direct: number; pos: number | null }
+export interface Folder { path: string; count: number; edited: number; first: string | null; last: string | null; covers: { id: number; v: number; pending?: boolean }[]; direct: number; pos: number | null; hidden?: boolean }
+export interface FoldersResult { folders: Folder[]; excluded: string[]; previews_pending: number }
 export interface Tag { path: string; synonyms: string; category: number; private: number; n: number }
 export interface SeriesInfo { id: number; name: string; count: number; covers: { id: number; v: number }[] }
 export interface Frame { id?: number; label: string; x: number; y: number; w: number; h: number; maybe: number }
@@ -105,7 +108,9 @@ export const api = {
   photo: (id: number) => call<Photo>('GET', `/api/photos/${id}`),
   meta: (body: Record<string, unknown>) => call<{ items: Photo[]; errors: string[] }>('POST', '/api/meta', body),
   facets: () => call<{ lenses: { v: string; n: number }[]; cameras: { v: string; n: number }[] }>('GET', '/api/facets'),
-  folders: () => call<{ folders: Folder[] }>('GET', '/api/folders'),
+  folders: () => call<FoldersResult>('GET', '/api/folders'),
+  folderHide: (path: string, hidden: boolean) => call<{ hidden: string[] }>('POST', '/api/folders/hide', { path, hidden }),
+  folderExclude: (path: string, excluded: boolean) => call<{ excluded: string[]; removed: number }>('POST', '/api/folders/exclude', { path, excluded }),
   folderOrder: (order: string[]) => call('POST', '/api/folders/order', { order }),
   timeline: (filters: Filters) => call<{ months: { month: string; count: number; folders: string[]; covers: { id: number; v: number }[] }[] }>('POST', '/api/timeline', { filters }),
   tags: () => call<{ tags: Tag[] }>('GET', '/api/tags'),

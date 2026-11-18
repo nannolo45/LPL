@@ -1,10 +1,11 @@
 """Indexes the photo folder: new / changed / removed files, XMP changes, previews."""
+import itertools
 import json
 import logging
 import os
+import queue
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import db, media, xmp
@@ -14,14 +15,44 @@ log = logging.getLogger("lpl.scan")
 
 status = {"state": "idle", "phase": "", "done": 0, "total": 0, "last_scan": None, "previews_pending": 0, "error": ""}
 _scan_lock = threading.Lock()
-_preview_pool = None
 _preview_inflight = set()
 _inflight_lock = threading.Lock()
+# previews are made in priority order: 0 = someone is looking at it right now, 1 = normal (newest photos first)
+_pq: "queue.PriorityQueue" = queue.PriorityQueue()
+_seq = itertools.count()
+_workers_started = False
 
 
-def _walk(root: Path):
+def excluded_folders() -> list:
+    """Folders (relpaths) left out of the library: not scanned, not shown."""
+    try:
+        return [f for f in json.loads(db.get_setting("excluded_folders", "[]")) if f]
+    except ValueError:
+        return []
+
+
+def hidden_folders() -> list:
+    """Folders still indexed but hidden from the views unless 'show hidden' is on."""
+    try:
+        return [f for f in json.loads(db.get_setting("hidden_folders", "[]")) if f]
+    except ValueError:
+        return []
+
+
+def _excluded_abs() -> set:
+    out = set()
+    for f in excluded_folders():
+        try:
+            out.add(str(abs_of(f)))
+        except ValueError:
+            pass
+    return out
+
+
+def _walk(root: Path, skip: set = frozenset()):
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS]
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS
+                       and str(Path(dirpath) / d) not in skip]
         for fn in filenames:
             if fn.startswith("."):
                 continue
@@ -149,10 +180,11 @@ def scan(full: bool = False) -> None:
         seen = set()
         changed = []      # (path, ext, rel, stat)
         xmp_changed = []  # (id, xmp dict)
+        skip = _excluded_abs()
         def walk_all():
             for _, r in rts:
                 if r.is_dir():
-                    yield from _walk(r)
+                    yield from _walk(r, skip)
         offline = tuple("%s/" % n for n, r in rts if n and not r.is_dir())
         for path, ext in walk_all():
             rel = rel_of(path)
@@ -213,24 +245,58 @@ def _do_preview(pid: int, rel: str, ext: str, orient: int) -> None:
         c = db.conn()
         c.execute("UPDATE photos SET preview_state=?, preview_ver=preview_ver+1 WHERE id=?", (state, pid))
         c.commit()
+
+
+def _worker() -> None:
+    while True:
+        _prio, _n, pid, rel, ext, orient = _pq.get()
+        try:
+            with _inflight_lock:
+                if pid not in _preview_inflight:
+                    continue  # already done (it was queued twice: normal + priority)
+            _do_preview(pid, rel, ext, orient)
+        except Exception:  # pragma: no cover
+            log.exception("preview worker")
+        finally:
+            with _inflight_lock:
+                _preview_inflight.discard(pid)
+                status["previews_pending"] = len(_preview_inflight)
+
+
+def _ensure_workers() -> None:
+    global _workers_started
+    if _workers_started:
+        return
+    _workers_started = True
+    for i in range(max(1, config.preview_workers)):
+        threading.Thread(target=_worker, name="preview-%d" % i, daemon=True).start()
+
+
+def _enqueue(rows, prio: int) -> None:
+    _ensure_workers()
     with _inflight_lock:
-        _preview_inflight.discard(pid)
+        for r in rows:
+            if prio > 0 and r["id"] in _preview_inflight:
+                continue
+            _preview_inflight.add(r["id"])
+            _pq.put((prio, next(_seq), r["id"], r["relpath"], r["ext"], r["orientation"] or 1))
         status["previews_pending"] = len(_preview_inflight)
 
 
 def queue_previews() -> None:
-    global _preview_pool
-    if _preview_pool is None:
-        _preview_pool = ThreadPoolExecutor(max_workers=max(1, config.preview_workers), thread_name_prefix="preview")
     rows = db.conn().execute(
         "SELECT id, relpath, ext, orientation FROM photos WHERE preview_state=0 AND missing=0 ORDER BY taken DESC").fetchall()
-    with _inflight_lock:
-        for r in rows:
-            if r["id"] in _preview_inflight:
-                continue
-            _preview_inflight.add(r["id"])
-            _preview_pool.submit(_do_preview, r["id"], r["relpath"], r["ext"], r["orientation"] or 1)
-        status["previews_pending"] = len(_preview_inflight)
+    _enqueue(rows, 1)
+
+
+def prioritize(ids) -> None:
+    """Make these previews next (folder covers, photos on screen)."""
+    ids = [int(i) for i in ids][:500]
+    if not ids:
+        return
+    rows = db.conn().execute("SELECT id, relpath, ext, orientation FROM photos WHERE preview_state=0 AND missing=0 AND id IN (%s)"
+                             % ",".join(map(str, ids))).fetchall()
+    _enqueue(rows, 0)
 
 
 def start_background() -> None:

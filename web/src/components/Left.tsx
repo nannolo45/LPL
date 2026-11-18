@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useStore } from '../store'
 import { dirText, field, FIELDS, LABELS, PRESETS } from '../fields'
 
@@ -60,6 +61,32 @@ function toggle<T>(list: T[] | undefined, v: T): T[] {
   return l.includes(v) ? l.filter(x => x !== v) : [...l, v]
 }
 
+// A filter section that folds away; its open/closed state is remembered. When closed, the heading says what's selected.
+function Section({ id, title, summary, right, defaultOpen = true, children }: {
+  id: string; title: string; summary?: string; right?: React.ReactNode; defaultOpen?: boolean; children: React.ReactNode
+}) {
+  const [open, setOpen] = useState<boolean>(() => {
+    const v = localStorage.getItem('lpl.sec.' + id)
+    return v == null ? defaultOpen : v === '1'
+  })
+  const flip = () => { setOpen(!open); localStorage.setItem('lpl.sec.' + id, open ? '0' : '1') }
+  return (
+    <div className="col" style={{ gap: 6 }}>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <button className="sechead" aria-expanded={open} onClick={flip}>
+          <span className="chev" style={{ transform: open ? 'rotate(90deg)' : 'none' }}>›</span>
+          <span className="small soft">{title}</span>
+          {!open && summary ? <span className="tiny" style={{ color: '#E8A33D' }}>{summary}</span> : null}
+        </button>
+        {right}
+      </div>
+      {open && children}
+    </div>
+  )
+}
+
+const picked = (n: number) => (n ? `${n} selected` : '')
+
 export function FilterPanel() {
   const s = useStore()
   const f = s.filters
@@ -73,46 +100,42 @@ export function FilterPanel() {
         <span className="caps">Filters</span>
         <button className="btn ghost tiny" onClick={s.clearFilters}>reset</button>
       </div>
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span className="small soft">Rating</span>
-        <span className="tiny muted">{ratings.length ? 'any of the selected' : 'all'}</span>
-      </div>
-      <div className="row wrap" style={{ gap: 4 }}>
-        {RATINGS.map(([v, l]) => <button key={v} className={'chip' + (ratings.includes(v) ? ' on' : '')} onClick={() => s.patchFilters({ ratings: toggle(ratings, v) })}>{l}</button>)}
-        <button className="chip" title="everything except rejected" onClick={() => s.patchFilters({ ratings: [0, 1, 2, 3, 4, 5] })}>not rejected</button>
-      </div>
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span className="small soft">Color labels</span>
-        <button className="chip" onClick={() => s.patchFilters({ label_mode: f.label_mode === 'and' ? 'or' : 'and' })}>photo has {f.label_mode === 'and' ? 'all of them' : 'any of them'}</button>
-      </div>
-      <div className="row" style={{ gap: 8 }}>
-        {LABELS.map(l => {
-          const on = labels.includes(l.i)
-          return <button key={l.i} aria-label={`Filter ${l.name}`} className={'dot' + (on ? ' on' : labels.length ? ' dim' : '')} style={{ background: l.c }}
-            onClick={() => s.patchFilters({ labels: toggle(labels, l.i) })} />
-        })}
-      </div>
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span className="small soft">Lens</span>
-        {lenses.length > 0 && <button className="btn ghost tiny" onClick={() => s.patchFilters({ lenses: [] })}>clear</button>}
-      </div>
-      <div className="row wrap" style={{ gap: 4 }}>
-        {s.facets.lenses.map(l => <button key={l.v} className={'chip' + (lenses.includes(l.v) ? ' on' : '')} title={`${l.n} photos`} onClick={() => s.patchFilters({ lenses: toggle(lenses, l.v) })}>{l.v}</button>)}
-        {!s.facets.lenses.length && <span className="tiny muted">no lens data yet</span>}
-      </div>
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span className="small soft">Camera</span>
-        {cameras.length > 0 && <button className="btn ghost tiny" onClick={() => s.patchFilters({ cameras: [] })}>clear</button>}
-      </div>
-      <div className="row wrap" style={{ gap: 4 }}>
-        {s.facets.cameras.map(l => <button key={l.v} className={'chip' + (cameras.includes(l.v) ? ' on' : '')} title={`${l.n} photos`} onClick={() => s.patchFilters({ cameras: toggle(cameras, l.v) })}>{l.v}</button>)}
-      </div>
-      <span className="small soft">darktable</span>
-      <div className="row" style={{ gap: 4 }}>
-        {[['', 'all'], ['yes', 'edited'], ['no', 'not edited']].map(([v, l]) => (
-          <button key={v} className={'chip' + ((f.edited || '') === v ? ' on' : '')} onClick={() => s.patchFilters({ edited: v as any })}>{l}</button>
-        ))}
-      </div>
+      <Section id="rating" title="Rating" summary={picked(ratings.length)} right={<span className="tiny muted">{ratings.length ? 'any of the selected' : 'all'}</span>}>
+        <div className="row wrap" style={{ gap: 4 }}>
+          {RATINGS.map(([v, l]) => <button key={v} className={'chip' + (ratings.includes(v) ? ' on' : '')} onClick={() => s.patchFilters({ ratings: toggle(ratings, v) })}>{l}</button>)}
+          <button className="chip" title="everything except rejected" onClick={() => s.patchFilters({ ratings: [0, 1, 2, 3, 4, 5] })}>not rejected</button>
+        </div>
+      </Section>
+      <Section id="labels" title="Color labels" summary={picked(labels.length)}
+        right={<button className="chip" onClick={() => s.patchFilters({ label_mode: f.label_mode === 'and' ? 'or' : 'and' })}>photo has {f.label_mode === 'and' ? 'all of them' : 'any of them'}</button>}>
+        <div className="row" style={{ gap: 8 }}>
+          {LABELS.map(l => {
+            const on = labels.includes(l.i)
+            return <button key={l.i} aria-label={`Filter ${l.name}`} className={'dot' + (on ? ' on' : labels.length ? ' dim' : '')} style={{ background: l.c }}
+              onClick={() => s.patchFilters({ labels: toggle(labels, l.i) })} />
+          })}
+        </div>
+      </Section>
+      <Section id="lens" title="Lens" defaultOpen={false} summary={picked(lenses.length)}
+        right={lenses.length > 0 && <button className="btn ghost tiny" onClick={() => s.patchFilters({ lenses: [] })}>clear</button>}>
+        <div className="row wrap" style={{ gap: 4 }}>
+          {s.facets.lenses.map(l => <button key={l.v} className={'chip' + (lenses.includes(l.v) ? ' on' : '')} title={`${l.n} photos`} onClick={() => s.patchFilters({ lenses: toggle(lenses, l.v) })}>{l.v}</button>)}
+          {!s.facets.lenses.length && <span className="tiny muted">no lens data yet</span>}
+        </div>
+      </Section>
+      <Section id="camera" title="Camera" defaultOpen={false} summary={picked(cameras.length)}
+        right={cameras.length > 0 && <button className="btn ghost tiny" onClick={() => s.patchFilters({ cameras: [] })}>clear</button>}>
+        <div className="row wrap" style={{ gap: 4 }}>
+          {s.facets.cameras.map(l => <button key={l.v} className={'chip' + (cameras.includes(l.v) ? ' on' : '')} title={`${l.n} photos`} onClick={() => s.patchFilters({ cameras: toggle(cameras, l.v) })}>{l.v}</button>)}
+        </div>
+      </Section>
+      <Section id="darktable" title="darktable" summary={f.edited === 'yes' ? 'edited' : f.edited === 'no' ? 'not edited' : ''}>
+        <div className="row" style={{ gap: 4 }}>
+          {[['', 'all'], ['yes', 'edited'], ['no', 'not edited']].map(([v, l]) => (
+            <button key={v} className={'chip' + ((f.edited || '') === v ? ' on' : '')} onClick={() => s.patchFilters({ edited: v as any })}>{l}</button>
+          ))}
+        </div>
+      </Section>
       <span className="tiny muted">Within one filter, any selected value matches; different filters must all match.</span>
       <label className="row" style={{ cursor: 'pointer' }}>
         <input type="checkbox" checked={f.subfolders !== false} onChange={() => s.patchFilters({ subfolders: f.subfolders === false })} style={{ accentColor: '#E8A33D' }} />

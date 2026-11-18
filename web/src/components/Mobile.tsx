@@ -120,7 +120,7 @@ export function MobileApp() {
   const openPhoto = (p: Photo) => { s.setSel([p.id]); setPhoto(p.id) }
   const goTab = (t: Tab) => { setTab(t); setPhoto(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders') }
   const title = photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : tab === 'series' ? 'Series' : 'PC'
-  const fcount = [s.filters.folder, s.filters.month, s.filters.tag, s.filters.series, s.filters.edited, (s.filters.lenses || []).length, (s.filters.cameras || []).length, (s.filters.labels || []).length, (s.filters.ratings || []).length].filter(Boolean).length
+  const fcount = [s.filters.folder, (s.filters.folders || []).length, s.filters.month, s.filters.tag, s.filters.series, s.filters.edited, (s.filters.lenses || []).length, (s.filters.cameras || []).length, (s.filters.labels || []).length, (s.filters.ratings || []).length].filter(Boolean).length
   return (
     <div className="app">
       <div className="mhead">
@@ -139,6 +139,7 @@ export function MobileApp() {
           <div className="row wrap" style={{ gap: 6 }}>
             <span className="small muted">{s.total} photos</span>
             {s.filters.folder && <button className="chip on" onClick={() => s.patchFilters({ folder: null })}>{s.filters.folder.split('/').pop()} ×</button>}
+            {(s.filters.folders || []).length > 0 && <button className="chip on" onClick={() => s.patchFilters({ folders: [] })}>{(s.filters.folders || []).length} folders ×</button>}
             {s.filters.series && <button className="chip on" onClick={() => s.patchFilters({ series: null })}>{s.series.find(x => x.id === s.filters.series)?.name} ×</button>}
             {s.filters.tag && <button className="chip on" onClick={() => s.patchFilters({ tag: null })}>{s.filters.tag} ×</button>}
           </div>

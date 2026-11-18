@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Photo, thumbUrl } from '../api'
 import { useStore } from '../store'
+import { RetryImg } from './RetryImg'
 import { captionValue, field, fmtMonth, groupLabel, LABELS, leaf, stars } from '../fields'
 
 export function Thumb({ p, size = 't', className, style }: { p: Photo; size?: 't' | 'l'; className?: string; style?: React.CSSProperties }) {
-  const [err, setErr] = useState(false)
-  useEffect(() => setErr(false), [p.id, p.preview_ver])
-  if (err || p.preview_state < 0) return <div className="ph">{p.preview_state < 0 ? 'no preview' : 'preview…'}</div>
-  return <img className={className} style={style} src={thumbUrl(p, size)} alt={p.filename} loading="lazy" decoding="async" onError={() => setErr(true)} />
+  if (p.preview_state < 0) return <div className="ph">no preview</div>
+  return <RetryImg className={className} style={style} src={thumbUrl(p, size)} alt={p.filename} placeholder={<div className="ph">preview…</div>} />
 }
 
 export function useGroups(items: Photo[]) {
@@ -44,6 +43,7 @@ export function ContextBar() {
   const f = s.filters
   const chips: { label: string; clear: () => void }[] = []
   if (f.folder) chips.push({ label: 'folder: ' + f.folder, clear: () => s.patchFilters({ folder: null }) })
+  if (f.folders && f.folders.length) chips.push({ label: f.folders.length === 1 ? 'folder: ' + f.folders[0] : `${f.folders.length} folders: ` + f.folders.map(x => x.split('/').pop()).join(', '), clear: () => s.patchFilters({ folders: [] }) })
   if (f.month) chips.push({ label: 'month: ' + fmtMonth(f.month + '-01'), clear: () => s.patchFilters({ month: null }) })
   if (f.tag) chips.push({ label: 'tag: ' + f.tag, clear: () => s.patchFilters({ tag: null }) })
   if (f.series) {

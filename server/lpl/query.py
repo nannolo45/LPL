@@ -85,6 +85,26 @@ def build_where(f: Dict[str, Any]) -> Tuple[str, List[Any], str]:
     elif e == "no":
         where.append("p.edited=0")
     folder = f.get("folder")
+    many = [x for x in (f.get("folders") or []) if x]
+    opened = ([folder] if folder else []) + many
+    # hidden folders: left out unless "show hidden" is on, or you opened that folder (or one inside it) yourself
+    if not f.get("show_hidden"):
+        from .scanner import hidden_folders
+        for h in hidden_folders():
+            if any(o == h or o.startswith(h + "/") for o in opened):
+                continue
+            where.append("NOT (p.folder=? OR p.folder LIKE ? ESCAPE '\\')")
+            args += [h, h.replace("%", "\\%").replace("_", "\\_") + "/%"]
+    if many:  # several folders picked in the Folders view: photos from any of them
+        ors = []
+        for x in many:
+            if f.get("subfolders", True):
+                ors.append("(p.folder=? OR p.folder LIKE ? ESCAPE '\\')")
+                args += [x, x.replace("%", "\\%").replace("_", "\\_") + "/%"]
+            else:
+                ors.append("p.folder=?")
+                args.append(x)
+        where.append("(" + " OR ".join(ors) + ")")
     if folder is not None and folder != "":
         if f.get("subfolders", True):
             where.append("(p.folder=? OR p.folder LIKE ? ESCAPE '\\')")
