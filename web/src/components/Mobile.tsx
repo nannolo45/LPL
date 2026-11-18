@@ -120,7 +120,7 @@ export function MobileApp() {
   const openPhoto = (p: Photo) => { s.setSel([p.id]); setPhoto(p.id) }
   const goTab = (t: Tab) => { setTab(t); setPhoto(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders') }
   const title = photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : tab === 'series' ? 'Series' : 'PC'
-  const fcount = [s.filters.folder, s.filters.month, s.filters.tag, s.filters.series, s.filters.lens, s.filters.camera, s.filters.edited, (s.filters.labels || []).length ? 1 : 0, (s.filters.rating || 'all') !== 'all' ? 1 : 0].filter(Boolean).length
+  const fcount = [s.filters.folder, s.filters.month, s.filters.tag, s.filters.series, s.filters.edited, (s.filters.lenses || []).length, (s.filters.cameras || []).length, (s.filters.labels || []).length, (s.filters.ratings || []).length].filter(Boolean).length
   return (
     <div className="app">
       <div className="mhead">

@@ -40,6 +40,9 @@ export interface SortLevel { f: string; d: 'asc' | 'desc' }
 export interface Filters {
   q?: string
   rating?: string
+  ratings?: number[]
+  lenses?: string[]
+  cameras?: string[]
   labels?: number[]
   label_mode?: 'or' | 'and'
   lens?: string

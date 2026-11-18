@@ -8,11 +8,17 @@ interface Saved { view: View; sort: SortLevel[]; group: boolean; gran: Gran; fil
 const DEFAULTS: Saved = {
   view: 'grid',
   sort: [{ f: 'taken', d: 'asc' }, { f: 'name', d: 'asc' }],
-  group: true, gran: 'day', filters: { rating: 'all', labels: [], label_mode: 'or', subfolders: true }, thumb: 170,
+  group: true, gran: 'day', filters: { ratings: [], labels: [], label_mode: 'or', lenses: [], cameras: [], subfolders: true }, thumb: 170,
 }
 
 function loadSaved(): Saved {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('lpl.v1') || '{}') } } catch { return DEFAULTS }
+  try {
+    const s = { ...DEFAULTS, ...JSON.parse(localStorage.getItem('lpl.v1') || '{}') }
+    // older versions stored single-choice filters; drop them in favour of the multi-choice ones
+    const { rating, lens, camera, ...f } = s.filters || {}
+    s.filters = { ...DEFAULTS.filters, ...f }
+    return s
+  } catch { return DEFAULTS }
 }
 
 export interface Store {

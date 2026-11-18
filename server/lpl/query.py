@@ -60,6 +60,9 @@ def build_where(f: Dict[str, Any]) -> Tuple[str, List[Any], str]:
     elif r.startswith("r") and r[1:].isdigit():
         where.append("p.rating>=?")
         args.append(int(r[1:]))
+    ratings = sorted({int(x) for x in (f.get("ratings") or []) if str(x).lstrip("-").isdigit() and -1 <= int(x) <= 5})
+    if ratings:
+        where.append("p.rating IN (%s)" % ",".join(str(r) for r in ratings))
     labels = [int(x) for x in (f.get("labels") or []) if str(x).lstrip("-").isdigit()]
     if labels:
         marks = ",".join("?" * len(labels))
@@ -69,11 +72,13 @@ def build_where(f: Dict[str, Any]) -> Tuple[str, List[Any], str]:
         else:
             where.append("EXISTS (SELECT 1 FROM photo_labels pl WHERE pl.photo_id=p.id AND pl.label IN (%s))" % marks)
             args += labels
-    for key, col in (("lens", "p.lens"), ("camera", "p.camera")):
-        v = f.get(key)
-        if v:
-            where.append("%s=?" % col)
-            args.append(v)
+    for key, many, col in (("lens", "lenses", "p.lens"), ("camera", "cameras", "p.camera")):
+        vals = [v for v in (f.get(many) or []) if v]
+        if f.get(key):
+            vals.append(f[key])
+        if vals:
+            where.append("%s IN (%s)" % (col, ",".join("?" * len(vals))))
+            args += vals
     e = f.get("edited")
     if e == "yes":
         where.append("p.edited=1")
