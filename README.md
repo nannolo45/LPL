@@ -1,3 +1,5 @@
+<img src="docs/icon.png" width="96" alt="" align="right">
+
 # LightPhotoLibrary 0.1
 
 A fast photo library for a NAS, with a free-form **series board**, darktable-style **sorting and tagging**, phone access, and one-click hand-off to **darktable** for editing.

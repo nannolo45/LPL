@@ -28,8 +28,8 @@ jobs:
         working-directory: agent
         run: |
           python -m pip install --upgrade pip pyinstaller
-          python -m PyInstaller --onefile --console   --name lpl-agent  lpl_agent.py
-          python -m PyInstaller --onefile --noconsole --name lpl-agentw lpl_agent.py
+          python -m PyInstaller --onefile --console   --icon lpl.ico --name lpl-agent  lpl_agent.py
+          python -m PyInstaller --onefile --noconsole --icon lpl.ico --name lpl-agentw lpl_agent.py
           .\dist\lpl-agent.exe --help
 
       - name: Package

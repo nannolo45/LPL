@@ -67,6 +67,10 @@ if ($usePython) {
     $sc.TargetPath = Join-Path $dest "lpl-agentw.exe"
 }
 $sc.WorkingDirectory = $dest
+if ($usePython -and (Test-Path (Join-Path $here "lpl.ico"))) {
+    Copy-Item (Join-Path $here "lpl.ico") (Join-Path $dest "lpl.ico") -Force
+    $sc.IconLocation = (Join-Path $dest "lpl.ico")
+}
 $sc.WindowStyle = 7
 $sc.Description = "LightPhotoLibrary agent (hands photos to darktable)"
 $sc.Save()
