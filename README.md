@@ -24,12 +24,17 @@ NAS (Docker)                                 your PC
 
 ## 1. Install the server on the NAS (Docker)
 
-1. Copy this whole folder to the NAS, e.g. `/volume1/docker/lightphotolibrary`.
-2. Open `docker-compose.yml` and set the photo folder (the left side of `- /volume1/photo:/photos`).
-   Optionally set `LPL_PASSWORD` and `user:` (see the comments in the file).
-3. Start it:
-   - **Synology**: Container Manager → Project → Create → set the path to this folder → it finds `docker-compose.yml` → Build → Start.
-   - **Other NAS / SSH**: `docker compose up -d --build`
+GitHub builds a ready-made image on every push: `ghcr.io/nannolo45/lpl:latest` (Intel/AMD and ARM). Because the repo is private, the NAS needs to log in to GitHub's registry once:
+
+1. On GitHub: Settings → Developer settings → Personal access tokens → **Tokens (classic)** → Generate, with only the **read:packages** scope. Copy the token.
+2. On the NAS, either SSH: `docker login ghcr.io -u nannolo45` and paste the token as password, or on **Synology**: Container Manager → Registry → Settings → Add → URL `https://ghcr.io`, user `nannolo45`, password = the token.
+3. Put `docker-compose.yml` in a folder on the NAS, e.g. `/volume1/docker/lightphotolibrary`, and set the photo folder (the left side of `- /volume1/photo:/photos`). Optionally set `LPL_PASSWORD` and `user:` (see the comments in the file).
+4. Start it:
+   - **Synology**: Container Manager → Project → Create → set the path to that folder → it finds `docker-compose.yml` → Start.
+   - **Other NAS / SSH**: `docker compose up -d`
+   - To update later: pull the image again (Synology: Project → Action → Build / or `docker compose pull && docker compose up -d`).
+
+(Prefer building on the NAS? Copy the whole repo there, and in `docker-compose.yml` swap `image:` for `build: .`.)
 4. Open `http://<nas-address>:8080`. The first scan indexes everything and makes previews; with 20,000 photos expect roughly 30–90 minutes, depending on the NAS. You can browse while it works.
 
 LPL writes **only** `.xmp` sidecar files next to your photos, never the photos themselves. Before it changes an existing XMP for the first time, a backup goes to `data/xmp-backups/`.
@@ -37,9 +42,9 @@ LPL writes **only** `.xmp` sidecar files next to your photos, never the photos t
 ## 2. Install the agent on your PC
 
 ### Windows
-1. Install darktable (if not yet) and **Python 3** from python.org (tick "Add python.exe to PATH").
-   (No Python? On any PC with Python, run `agent\build-windows-exe.ps1` once to get a standalone `lpl-agent.exe`.)
-2. Right-click `agent\install-windows.ps1` → **Run with PowerShell**.
+1. Download **lpl-agent-windows.zip**: on GitHub → Actions → "Windows agent (.exe)" → latest run → Artifacts (or from a Release). No Python needed.
+   (Alternative: install Python 3 and use the `agent` folder of the repo directly.)
+2. Unzip it, right-click `install-windows.ps1` → **Run with PowerShell**.
    It asks for the NAS address (e.g. `http://192.168.1.20:8080`), finds darktable, installs the darktable bridge script and starts the agent now and at every login.
 3. Restart darktable once.
 

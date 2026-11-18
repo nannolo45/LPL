@@ -1,0 +1,54 @@
+name: Windows agent (.exe)
+
+# Builds lpl-agent.exe (setup/status, with a console) and lpl-agentw.exe (runs hidden in the background),
+# packed with the installer and the darktable bridge script into lpl-agent-windows.zip.
+# Download it from the run's "Artifacts", or from the Release when a tag like v0.1.0 is pushed.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["agent/**", ".github/workflows/agent-windows.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the two executables
+        shell: pwsh
+        working-directory: agent
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          python -m PyInstaller --onefile --console   --name lpl-agent  lpl_agent.py
+          python -m PyInstaller --onefile --noconsole --name lpl-agentw lpl_agent.py
+          .\dist\lpl-agent.exe --help
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $out = "lpl-agent-windows"
+          New-Item -ItemType Directory -Force -Path "$out\dist", "$out\darktable" | Out-Null
+          Copy-Item agent\dist\lpl-agent.exe, agent\dist\lpl-agentw.exe "$out\dist\"
+          Copy-Item agent\darktable\lpl_bridge.lua "$out\darktable\"
+          Copy-Item agent\install-windows.ps1, agent\README.md "$out\"
+          Compress-Archive -Path "$out\*" -DestinationPath lpl-agent-windows.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lpl-agent-windows
+          path: lpl-agent-windows.zip
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: lpl-agent-windows.zip

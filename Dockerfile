@@ -2,7 +2,8 @@
 # Build:  docker build -t lightphotolibrary .
 # Works on x86-64 and ARM64 NAS models.
 
-FROM node:20-alpine AS web
+# the web app is plain JS/CSS, so build it once on the build machine's own CPU
+FROM --platform=$BUILDPLATFORM node:20-alpine AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
 RUN npm install --no-audit --no-fund

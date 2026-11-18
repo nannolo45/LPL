@@ -1,13 +1,17 @@
 # LightPhotoLibrary on the NAS.
-# 1. Copy this whole folder to the NAS (e.g. /volume1/docker/lightphotolibrary).
-# 2. Change the photo path below to where your photos are.
-# 3. Synology: Container Manager > Project > Create > choose this folder. Others: `docker compose up -d --build`.
-# 4. Open http://<nas-address>:8080 on your PC or phone.
+#
+# Option A (recommended): use the ready-made image that GitHub builds on every push.
+#   The repo is private, so the NAS must log in to GitHub's registry once:
+#     docker login ghcr.io -u nannolo45      (password: a GitHub token with "read:packages")
+#   Synology: Container Manager > Registry > Settings > Add: https://ghcr.io, same user + token.
+# Option B: build it on the NAS from this folder: comment out "image:" and uncomment "build: .".
+#
+# Then: change the photo path below, start the project, open http://<nas-address>:8080
 
 services:
   lightphotolibrary:
-    build: .
-    image: lightphotolibrary:latest
+    image: ghcr.io/nannolo45/lpl:latest
+    # build: .
     container_name: lightphotolibrary
     restart: unless-stopped
     ports:
