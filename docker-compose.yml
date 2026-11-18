@@ -1,0 +1,27 @@
+# LightPhotoLibrary on the NAS.
+# 1. Copy this whole folder to the NAS (e.g. /volume1/docker/lightphotolibrary).
+# 2. Change the photo path below to where your photos are.
+# 3. Synology: Container Manager > Project > Create > choose this folder. Others: `docker compose up -d --build`.
+# 4. Open http://<nas-address>:8080 on your PC or phone.
+
+services:
+  lightphotolibrary:
+    build: .
+    image: lightphotolibrary:latest
+    container_name: lightphotolibrary
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - SCAN_INTERVAL=900          # look for new photos every 15 minutes
+      - PREVIEW_WORKERS=2          # raise on a fast NAS, lower on a slow one
+      - LPL_PASSWORD=              # optional: set a password for the web app and the PC agent
+      - WRITE_SERIES_TAGS=1        # series are also written as tags "series|<name>" so darktable sees them
+      - TZ=Europe/Berlin
+    volumes:
+      # your photos: read-write, because LPL writes ratings/labels/tags into the .xmp sidecars
+      - /volume1/photo:/photos
+      # LPL's own database, previews and XMP backups (keep this on the NAS's fastest disk)
+      - ./data:/data
+    # Run as your NAS user so new .xmp files belong to you (Synology: id -u / id -g in SSH, often 1026:100)
+    # user: "1026:100"

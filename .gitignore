@@ -1,0 +1,10 @@
+node_modules/
+web/dist/
+server/web_dist/
+data/
+__pycache__/
+*.pyc
+*.tsbuildinfo
+agent/dist/
+agent/build/
+*.spec
