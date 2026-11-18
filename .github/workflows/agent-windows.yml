@@ -38,7 +38,14 @@ jobs:
         shell: pwsh
         run: |
           $ver = (Invoke-WebRequest -UseBasicParsing https://exiftool.org/ver.txt).Content.Trim()
-          Invoke-WebRequest -UseBasicParsing "https://exiftool.org/exiftool-${ver}_64.zip" -OutFile et.zip
+          $urls = @("https://downloads.sourceforge.net/project/exiftool/exiftool-${ver}_64.zip",
+                    "https://exiftool.org/exiftool-${ver}_64.zip")
+          $got = $false
+          foreach ($u in $urls) {
+            try { Invoke-WebRequest -UseBasicParsing -UserAgent "curl/8" $u -OutFile et.zip; $got = $true; break }
+            catch { Write-Host "not at $u" }
+          }
+          if (-not $got) { throw "exiftool $ver download failed" }
           Expand-Archive et.zip -DestinationPath et
           $src = Get-ChildItem et -Directory | Select-Object -First 1
           New-Item -ItemType Directory -Force -Path exiftool | Out-Null
