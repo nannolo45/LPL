@@ -22,20 +22,37 @@ NAS (Docker)                                 your PC
 
 ---
 
-## 1. Install the server on the NAS (Docker)
+## 1. Install the server on the NAS (UGREEN, UGOS Pro)
 
-GitHub builds a ready-made image on every push: `ghcr.io/nannolo45/lpl:latest` (Intel/AMD and ARM). Because the repo is private, the NAS needs to log in to GitHub's registry once:
+Docker runs on the UGREEN **DXP** models (not on the DH series). GitHub builds a ready-made image on every push: `ghcr.io/nannolo45/lpl:latest`.
 
-1. On GitHub: Settings → Developer settings → Personal access tokens → **Tokens (classic)** → Generate, with only the **read:packages** scope. Copy the token.
-2. On the NAS, either SSH: `docker login ghcr.io -u nannolo45` and paste the token as password, or on **Synology**: Container Manager → Registry → Settings → Add → URL `https://ghcr.io`, user `nannolo45`, password = the token.
-3. Put `docker-compose.yml` in a folder on the NAS, e.g. `/volume1/docker/lightphotolibrary`, and set the photo folder (the left side of `- /volume1/photo:/photos`). Optionally set `LPL_PASSWORD` and `user:` (see the comments in the file).
-4. Start it:
-   - **Synology**: Container Manager → Project → Create → set the path to that folder → it finds `docker-compose.yml` → Start.
-   - **Other NAS / SSH**: `docker compose up -d`
-   - To update later: pull the image again (Synology: Project → Action → Build / or `docker compose pull && docker compose up -d`).
+**a) One-time: let the NAS download the private image**
+1. On GitHub: Settings → Developer settings → Personal access tokens → **Tokens (classic)** → Generate new token, tick only **read:packages**. Copy the token.
+2. On the NAS: Control Panel → **Terminal** → enable SSH. From your PC:
+   ```
+   ssh <your-nas-user>@<nas-address>
+   sudo docker login ghcr.io -u nannolo45      # paste the token as the password
+   id                                           # note uid and gid, e.g. uid=1000 gid=10
+   ```
+   You can turn SSH off again afterwards.
+   (UGOS Pro 1.20+ also supports private registries in the Docker app; if you find the registry setting there, adding `ghcr.io` with user `nannolo45` and the token works too.)
 
-(Prefer building on the NAS? Copy the whole repo there, and in `docker-compose.yml` swap `image:` for `build: .`.)
-4. Open `http://<nas-address>:8080`. The first scan indexes everything and makes previews; with 20,000 photos expect roughly 30–90 minutes, depending on the NAS. You can browse while it works.
+**b) Create the project**
+1. Install **Docker** from the App Center if it isn't there yet.
+2. In **Files**, create the folder `docker/lightphotolibrary` on volume 1, and inside it an empty folder `data` (create it yourself: if Docker creates it, it belongs to root and LPL can't write into it).
+3. Docker → **Project** → **Create**. Name: `lightphotolibrary`. Storage path: select `docker/lightphotolibrary`.
+4. Paste the content of `docker-compose.yml` into the Compose configuration and edit the three marked lines:
+   - `user:` your uid:gid from `id` (so the `.xmp` files belong to you, not to root)
+   - `LPL_PASSWORD=` optional password
+   - the photo folder, left of `:/photos` (e.g. `/volume1/Photos`; right-click the folder in Files → Properties shows its path)
+5. Make sure your user has **read & write** permission on the photo folder (Control Panel → Shared folders). LPL writes `.xmp` files next to the photos.
+6. Deploy. Then open `http://<nas-address>:8080`.
+
+The first scan indexes everything and makes previews; with 20,000 photos expect roughly 20–60 minutes on a DXP model. You can browse while it works.
+
+**Updating later**: Docker → Project → `lightphotolibrary` → pull the latest image / rebuild (or over SSH: `sudo docker compose pull && sudo docker compose up -d` in the project folder).
+
+(Other NAS brands work the same way with any Docker Compose UI. Prefer building on the NAS? Copy the whole repo there and replace `image:` with `build: .`.)
 
 LPL writes **only** `.xmp` sidecar files next to your photos, never the photos themselves. Before it changes an existing XMP for the first time, a backup goes to `data/xmp-backups/`.
 
