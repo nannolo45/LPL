@@ -481,11 +481,23 @@ class Agent:
 
 
 # ------------------------------------------------------------------ cli
+def normalize_server(v: str) -> str:
+    """'192.168.1.50' -> 'http://192.168.1.50:8080' (LightPhotoLibrary's default port)."""
+    v = v.strip().rstrip("/")
+    if "://" not in v:
+        v = "http://" + v
+    parts = urllib.parse.urlsplit(v)
+    if parts.port is None and parts.scheme == "http":
+        v = "%s://%s:8080%s" % (parts.scheme, parts.hostname, parts.path)
+    return v
+
+
 def setup(cfg: dict) -> None:
     print("LightPhotoLibrary agent setup\n")
-    v = input("Server address [%s]: " % cfg["server"]).strip()
+    v = input("Server address, e.g. http://192.168.1.50:8080 [%s]: " % cfg["server"]).strip()
     if v:
-        cfg["server"] = v if v.startswith("http") else "http://" + v
+        cfg["server"] = normalize_server(v)
+        print("Using %s" % cfg["server"])
     v = input("Password (empty if none) [%s]: " % ("*****" if cfg["password"] else "")).strip()
     if v:
         cfg["password"] = v
@@ -500,7 +512,13 @@ def setup(cfg: dict) -> None:
         st = Server(cfg).json("GET", "/api/status")
         print("\nConnected: %s photos in the library." % st.get("photos"))
     except Exception as e:
-        print("\nCould not reach the server yet (%s). You can fix the address in %s" % (e, config_path()))
+        msg = str(e)
+        if "CERTIFICATE" in msg or "SSL" in msg:
+            msg = ("that address answered with HTTPS, so it is probably the NAS's own admin page, not LightPhotoLibrary. "
+                   "LightPhotoLibrary listens on port 8080: use http://<nas-address>:8080")
+        elif "refused" in msg.lower() or "timed out" in msg.lower():
+            msg += " - is the LightPhotoLibrary container running? Try the address in a browser."
+        print("\nCould not reach the server: %s\nRun the setup again, or fix the address in %s" % (msg, config_path()))
     try:
         conf = install_bridge(cfg)
         print("darktable bridge script installed in %s" % conf)
