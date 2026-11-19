@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api, coverUrl, Folder, FoldersResult } from '../api'
 import { useStore } from '../store'
 import { fmtMonth } from '../fields'
@@ -215,15 +215,33 @@ export function FoldersView() {
   )
 }
 
+type Month = { month: string; count: number; folders: string[]; paths?: string[]; covers: { id: number; v: number }[] }
+// the last timeline per set of filters, and where you were scrolled: coming back shows it at once
+const timelineCache = new Map<string, Month[]>()
+let timelineScroll: { key: string; top: number } | null = null
+
 export function TimelineView() {
   const s = useStore()
-  const [months, setMonths] = useState<{ month: string; count: number; folders: string[]; paths?: string[]; covers: { id: number; v: number }[] }[]>([])
+  const key = JSON.stringify({ ...s.filters, month: null })
+  const [months, setMonths] = useState<Month[]>(() => timelineCache.get(key) || [])
   const [open, setOpen] = useState<Set<string>>(new Set())  // months whose folder list is unfolded
-  useEffect(() => { api.timeline(s.filters).then(r => setMonths(r.months)).catch(e => s.toast(e.message)) }, [s.filters])
+  const scroller = useRef<HTMLDivElement>(null)
+  // only as many photos per month as fit across the screen (each about 150 px wide)
+  const fit = Math.max(6, Math.min(30, Math.ceil(window.innerWidth / 130)))
+  useEffect(() => {
+    const cached = timelineCache.get(key)
+    if (cached) setMonths(cached)
+    api.timeline(s.filters).then(r => { timelineCache.set(key, r.months); setMonths(r.months) }).catch(e => s.toast(e.message))
+  }, [key])
+  useLayoutEffect(() => {  // back where you were
+    const el = scroller.current
+    if (el && timelineScroll && timelineScroll.key === key && months.length) el.scrollTop = timelineScroll.top
+  }, [months.length > 0])
+  useEffect(() => () => { const el = scroller.current; if (el) timelineScroll = { key, top: el.scrollTop } }, [key])
   const show = (m: string) => { s.patchFilters({ month: m }); s.setView('grid') }
   const showFolder = (path: string) => { s.patchFilters({ folder: path, folders: [], month: null }); s.setView('grid') }
   return (
-    <div className="scroll">
+    <div className="scroll" ref={scroller} onScroll={e => { timelineScroll = { key, top: (e.target as HTMLDivElement).scrollTop } }}>
       {months.map(m => {
         const paths = m.paths || m.folders
         const unfolded = open.has(m.month)
@@ -241,13 +259,30 @@ export function TimelineView() {
               )}
               {paths.map(p => <button key={p} className="mf" title={`Open ${p}`} onClick={() => showFolder(p)}>{p.split('/').pop()}</button>)}
             </div>
-            <div className="strip">
-              {m.covers.map(c => <button key={c.id} className="mcover" onClick={() => show(m.month)} title={`Show ${fmtMonth(m.month + '-01')}`}><RetryImg src={coverUrl(c)} /></button>)}
-            </div>
+            <MonthStrip covers={m.covers.slice(0, fit)} onOpen={() => show(m.month)} label={fmtMonth(m.month + '-01')} />
           </div>
         )
       })}
       {!months.length && <div className="muted" style={{ padding: 30 }}>Nothing yet. Photos without a capture date don't appear here.</div>}
+    </div>
+  )
+}
+
+// a month's photos are only put on the page when the month comes near the screen (hundreds of months × 20 photos
+// made switching to the Timeline slow); once there, they stay
+function MonthStrip({ covers, onOpen, label }: { covers: { id: number; v: number }[]; onOpen: () => void; label: string }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [near, setNear] = useState(false)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || near) return
+    const io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { setNear(true); io.disconnect() } }, { rootMargin: '800px 0px' })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [near])
+  return (
+    <div className="strip" ref={ref}>
+      {near && covers.map(c => <button key={c.id} className="mcover" onClick={onOpen} title={`Show ${label}`}><RetryImg src={coverUrl(c)} /></button>)}
     </div>
   )
 }

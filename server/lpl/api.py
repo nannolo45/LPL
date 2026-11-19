@@ -367,19 +367,26 @@ def folder_order(body: Dict[str, Any] = Body(...)):
 
 @app.post("/api/timeline")
 def timeline(body: Dict[str, Any] = Body(default={})):
+    """Months with their photo count, folders and best photos. Two passes over the photos in total (it used to be
+    one full pass per month, seconds on a big library)."""
     f = dict(body.get("filters") or {})
     f.pop("month", None)
+    per = max(1, min(int(body.get("covers") or 30), 60))
     where, args, join = query.build_where(f)
     c = db.conn()
     rows = c.execute("SELECT substr(p.taken,1,7) m, COUNT(*) n, group_concat(DISTINCT p.folder) folders FROM photos p%s WHERE %s AND p.taken IS NOT NULL "
                      "GROUP BY m ORDER BY m DESC" % (join, where), args).fetchall()
+    covers: Dict[str, list] = {}
+    for x in c.execute(
+            "SELECT m, id, v FROM (SELECT substr(p.taken,1,7) m, p.id id, p.preview_ver v, "
+            "ROW_NUMBER() OVER (PARTITION BY substr(p.taken,1,7) ORDER BY p.rating DESC, p.taken) k "
+            "FROM photos p%s WHERE %s AND p.taken IS NOT NULL) WHERE k <= ? ORDER BY m, k" % (join, where), args + [per]).fetchall():
+        covers.setdefault(x["m"], []).append({"id": x["id"], "v": x["v"]})
     out = []
     for r in rows:
-        cov = c.execute("SELECT p.id, p.preview_ver FROM photos p%s WHERE %s AND substr(p.taken,1,7)=? ORDER BY p.rating DESC, p.taken LIMIT 30" % (join, where),
-                        args + [r["m"]]).fetchall()
         paths = sorted({x for x in (r["folders"] or "").split(",") if x}, key=lambda x: x.split("/")[-1].lower())
         out.append({"month": r["m"], "count": r["n"], "folders": [x.split("/")[-1] for x in paths], "paths": paths,
-                    "covers": [{"id": x["id"], "v": x["preview_ver"]} for x in cov]})
+                    "covers": covers.get(r["m"], [])})
     return {"months": out}
 
 
