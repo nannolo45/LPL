@@ -8,7 +8,7 @@ browser download). Builds nothing: run `npm run build` in web/ first.
     python web/tests/browser-check.py <python with server/requirements.txt> <folder for screenshots>
 
 Starts LPL on a throwaway photo folder (three generated JPEGs), plays a PC agent "Desktop" and a phone "Phone"
-over the API (real darktable XMPs from server/tests/data/xmp), and checks what the page shows. The progress
+over the API (real darktable XMPs from server/tests/fixtures/xmp), and checks what the page shows. The progress
 bar must go away when the phone stops sending heartbeats (LPL counts a device offline after 15 s)."""
 import json
 import os
@@ -24,7 +24,7 @@ from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[2]
-XMPS = ROOT / "server" / "tests" / "data" / "xmp"
+XMPS = ROOT / "server" / "tests" / "fixtures" / "xmp"
 PHONE_UA = ("Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/131.0.0.0 Mobile Safari/537.36")
 

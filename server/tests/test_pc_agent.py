@@ -14,7 +14,7 @@ import uvicorn
 from lpl import db, scanner, xmp
 
 AGENT_PY = Path(__file__).resolve().parents[2] / "agent" / "lpl_agent.py"
-DATA = Path(__file__).resolve().parent / "data" / "xmp"
+DATA = Path(__file__).resolve().parent / "fixtures" / "xmp"
 
 
 @pytest.fixture(scope="module")

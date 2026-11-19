@@ -12,7 +12,7 @@ import pytest
 
 from lpl import db, edits, scanner, xmp
 
-DATA = Path(__file__).resolve().parent / "data" / "xmp"
+DATA = Path(__file__).resolve().parent / "fixtures" / "xmp"
 PC = {"id": "pc-test", "name": "Desktop", "os": "windows"}
 PHONE = {"id": "android-0000-test", "name": "Phone", "os": "android"}
 
@@ -145,7 +145,7 @@ def test_module_names_file(monkeypatch, tmp_path):
 
 
 def test_module_names_place():
-    assert edits.MODULE_NAMES == Path(edits.__file__).resolve().parent / "data" / "module-names.json"
+    assert edits.MODULE_NAMES == Path(edits.__file__).resolve().parent / "resources" / "module-names.json"
 
 
 # ---------------------------------------------------------------- events from XMP posts and the scanner
@@ -301,3 +301,24 @@ def test_first_scan_only_remembers(fresh):
 
 def test_edits_of_unknown_photo(fresh):
     assert fresh.get("/api/photos/99999/edits").status_code == 404
+
+
+def test_files_this_needs_are_not_ignored():
+    """The module-names file and these tests' fixtures must reach git and the Docker image (a folder named
+    "data" is ignored by .gitignore, because a library's data folder must never be committed)."""
+    import fnmatch
+    import shutil
+    import subprocess
+    repo = Path(__file__).resolve().parents[2]
+    paths = ["server/lpl/resources/module-names.json", "server/tests/fixtures/xmp/nop.xmp",
+             "server/tests/fixtures/schema-main-0f1139c.sql"]
+    if shutil.which("git") and (repo / ".git").exists():
+        r = subprocess.run(["git", "-C", str(repo), "check-ignore", "--no-index", *paths], capture_output=True, text=True)
+        assert r.stdout.strip() == "", "ignored by git: " + r.stdout
+    # .dockerignore: patterns match from the build context's root, a match on a folder excludes what is in it
+    pats = [l.strip() for l in (repo / ".dockerignore").read_text().splitlines() if l.strip() and not l.startswith("#")]
+    p = paths[0].split("/")
+    for i in range(1, len(p) + 1):
+        part = "/".join(p[:i])
+        hit = [x for x in pats if not x.startswith("!") and fnmatch.fnmatchcase(part, x.replace("**/", "*/"))]
+        assert not hit, "%s excluded from the Docker image by %s" % (part, hit)

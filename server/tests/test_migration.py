@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Updating a library made by LPL on main (schema in data/schema-main-0f1139c.sql) in place: nothing is lost,
+"""Updating a library made by LPL on main (schema in fixtures/schema-main-0f1139c.sql) in place: nothing is lost,
 the new tables and columns appear, and the server runs on it. 20 000 photos, the size of the owner's library."""
 import json
 import os
@@ -13,7 +13,7 @@ from pathlib import Path
 from lpl import db
 
 HERE = Path(__file__).resolve().parent
-MAIN_SCHEMA = HERE / "data" / "schema-main-0f1139c.sql"
+MAIN_SCHEMA = HERE / "fixtures" / "schema-main-0f1139c.sql"
 N = 20000
 
 

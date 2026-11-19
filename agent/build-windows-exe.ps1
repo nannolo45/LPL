@@ -12,8 +12,10 @@ npx vite build
 Set-Location $here
 py -m pip install --upgrade pyinstaller
 py -m pip install -r ..\server\requirements.txt
+# lpl must be importable at build time, or --collect-data lpl skips its data files (resources\module-names.json)
+$env:PYTHONPATH = (Resolve-Path ..\server).Path
 $common = @("--onefile", "--icon", "lpl.ico", "--paths", "..\server",
-            "--collect-submodules", "lpl", "--collect-submodules", "uvicorn",
+            "--collect-submodules", "lpl", "--collect-data", "lpl", "--collect-submodules", "uvicorn",
             "--collect-binaries", "rawpy", "--add-data", "..\web\dist;web_dist",
             "--exclude-module", "rawpy.enhance", "--exclude-module", "scipy", "--exclude-module", "skimage",
             "--exclude-module", "cv2", "--exclude-module", "imageio", "--exclude-module", "matplotlib", "--exclude-module", "tkinter")

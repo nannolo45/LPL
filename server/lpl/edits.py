@@ -5,7 +5,7 @@ edit uses, and what changed against the XMP LPL had before. A changed XMP that t
 posted is recorded as edited outside LPL. Only modules are compared (operation and instance, on or off, a
 fingerprint of the settings); settings are never decoded.
 
-Display names of modules come from data/module-names.json next to this file (operation -> English name,
+Display names of modules come from resources/module-names.json next to this file (operation -> English name,
 generated in the darktable-android repository as schema/module-names.json). Without the file, or for an
 operation it does not list, the operation itself is shown.
 """
@@ -20,7 +20,7 @@ from .config import config
 
 log = logging.getLogger("lpl.edits")
 
-MODULE_NAMES = Path(__file__).resolve().parent / "data" / "module-names.json"
+MODULE_NAMES = Path(__file__).resolve().parent / "resources" / "module-names.json"
 SUMMARY_NAMES = 4  # names shown in the one-line summary before "and N more"
 
 _names = {"mtime": None, "map": {}}
