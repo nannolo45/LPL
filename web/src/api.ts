@@ -25,6 +25,7 @@ export interface Photo {
   preview_ver: number
   preview_state: number
   meta_mtime: number
+  hidden?: number
   labels: number[]
   tags: string[]
   dt_tags: string[]
@@ -57,6 +58,7 @@ export interface Filters {
   series?: number | null
   tags?: string[]
   tag_mode?: 'or' | 'and'
+  only_hidden?: boolean
   date_from?: string | null
   date_to?: string | null
 }
@@ -122,7 +124,8 @@ export const api = {
   get: (ids: number[]) => call<{ items: Photo[] }>('POST', '/api/photos/get', { ids }),
   photo: (id: number) => call<Photo>('GET', `/api/photos/${id}`),
   meta: (body: Record<string, unknown>) => call<{ items: Photo[]; errors: string[] }>('POST', '/api/meta', body),
-  facets: () => call<{ lenses: { v: string; n: number }[]; cameras: { v: string; n: number }[] }>('GET', '/api/facets'),
+  facets: () => call<{ lenses: { v: string; n: number }[]; cameras: { v: string; n: number }[]; hidden_photos?: number }>('GET', '/api/facets'),
+  hide: (ids: number[], hidden: boolean) => call<{ changed: number; hidden_photos: number }>('POST', '/api/photos/hide', { ids, hidden }),
   folders: () => call<FoldersResult>('GET', '/api/folders'),
   folderHide: (path: string, hidden: boolean) => call<{ hidden: string[] }>('POST', '/api/folders/hide', { path, hidden }),
   folderExclude: (path: string, excluded: boolean) => call<{ excluded: string[]; removed: number }>('POST', '/api/folders/exclude', { path, excluded }),

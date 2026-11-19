@@ -97,12 +97,13 @@ export function GridView() {
           {canGroup && <div className="group-h"><span className="display">{g.label}</span><span className="small muted">{g.items.length}{g.items.length === 1 ? ' photo' : ' photos'}</span></div>}
           <div className="grid">
             {g.items.map(p => (
-              <div key={p.id} data-pid={p.id} className={'tile' + (selSet.has(p.id) ? ' sel' : '') + (p.rating < 0 ? ' rej' : '')}>
+              <div key={p.id} data-pid={p.id} className={'tile' + (selSet.has(p.id) ? ' sel' : '') + (p.rating < 0 ? ' rej' : '') + (p.hidden ? ' hid' : '')}>
                 <button className="img" onClick={e => s.clickSelect(p.id, e)} onDoubleClick={() => s.setViewer(p.id)} aria-label={p.filename}>
                   <Thumb p={p} />
                   <span className="badges">{p.labels.map(l => <span key={l} style={{ background: LABELS[l].c }} />)}</span>
                   {p.rating > 0 && <span className="stars">{stars(p.rating)}</span>}
                   {!!p.edited && <span className="dt">dt</span>}
+                  {!!p.hidden && <span className="hidtag">hidden</span>}
                 </button>
                 <span className="name ellipsis">{p.filename}</span>
                 <span className="cap ellipsis">{capFields.map(f => captionValue(p, f)).filter(Boolean).join(' · ')}</span>
@@ -153,7 +154,7 @@ export function ListView() {
             {groups.map((g, gi) => [
               canGroup ? <tr className="gh" key={'g' + gi}><td colSpan={COLS.length + 1}>{g.label} <span className="muted">· {g.items.length}</span></td></tr> : null,
               ...g.items.map(p => (
-                <tr key={p.id} data-pid={p.id} className={selSet.has(p.id) ? 'sel' : ''} onClick={e => s.clickSelect(p.id, e)} onDoubleClick={() => s.setViewer(p.id)} style={{ cursor: 'pointer', opacity: p.rating < 0 ? .5 : 1 }}>
+                <tr key={p.id} data-pid={p.id} className={selSet.has(p.id) ? 'sel' : ''} onClick={e => s.clickSelect(p.id, e)} onDoubleClick={() => s.setViewer(p.id)} style={{ cursor: 'pointer', opacity: p.rating < 0 || p.hidden ? .5 : 1 }}>
                   <td><Thumb p={p} /></td>
                   <td>{p.filename}</td>
                   <td>{p.taken ? p.taken.replace('T', ' ').slice(0, 16) : ''}</td>

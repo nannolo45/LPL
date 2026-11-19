@@ -33,7 +33,7 @@ SORT_SQL = {
 SELECT_COLS = (
     "p.id, p.relpath, p.folder, p.filename, p.ext, p.taken, p.import_ts, p.change_ts, p.export_ts, p.print_ts, "
     "p.camera, p.lens, p.focal, p.aperture, p.iso, p.exposure, p.width, p.height, p.orientation, p.rating, "
-    "p.title, p.description, p.edited, p.preview_ver, p.preview_state, p.meta_mtime, "
+    "p.title, p.description, p.edited, p.preview_ver, p.preview_state, p.meta_mtime, p.hidden, "
     "(SELECT group_concat(label) FROM photo_labels pl WHERE pl.photo_id=p.id) AS labels_csv, "
     "(SELECT group_concat(t.path, char(31)) FROM photo_tags pt JOIN tags t ON t.id=pt.tag_id WHERE pt.photo_id=p.id) AS tags_us"
 )
@@ -87,8 +87,14 @@ def build_where(f: Dict[str, Any]) -> Tuple[str, List[Any], str]:
     folder = f.get("folder")
     many = [x for x in (f.get("folders") or []) if x]
     opened = ([folder] if folder else []) + many
+    explicit = bool(f.get("ids"))  # asked for by id (a board, a selection): hidden or not, they come back
+    # hidden photos: left out unless "show hidden" is on
+    if not f.get("show_hidden") and not explicit:
+        where.append("COALESCE(p.hidden,0)=0")
+    if f.get("only_hidden"):
+        where.append("p.hidden=1")
     # hidden folders: left out unless "show hidden" is on, or you opened that folder (or one inside it) yourself
-    if not f.get("show_hidden"):
+    if not f.get("show_hidden") and not explicit:
         from .scanner import hidden_folders
         for h in hidden_folders():
             if any(o == h or o.startswith(h + "/") for o in opened):

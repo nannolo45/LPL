@@ -3,7 +3,7 @@ import { api, coverUrl, Photo } from '../api'
 import { useStore } from '../store'
 import { exifLine, fmtDay, stars } from '../fields'
 import { FilterPanel, SortPanel } from './Left'
-import { RatingLabels, SeriesPicker, TagPanel } from './Inspector'
+import { HideButton, RatingLabels, SeriesPicker, TagPanel } from './Inspector'
 import { Thumb, useGroups, useReveal } from './Library'
 import { FoldersView } from './Folders'
 import { WorkView } from './Work'
@@ -89,6 +89,7 @@ function PhotoPage({ id, onBack }: { id: number; onBack: () => void }) {
         <span className="small muted" style={{ marginTop: -6 }}>Opens on your PC (or as soon as it's online). Ratings, labels and tags are saved to the XMP right away.</span>
         <SeriesPicker ids={[p.id]} />
         <TagPanel photos={[p]} />
+        <HideButton photos={[p]} big />
         <button className="btn big" onClick={onBack}>Back to library</button>
       </div>
     </div>
@@ -177,6 +178,7 @@ export function MobileApp() {
         <RatingLabels photos={s.selPhotos} big />
         <SeriesPicker ids={s.sel} />
         <TagPanel photos={s.selPhotos} />
+        <HideButton photos={s.selPhotos} big />
       </Sheet>}
     </div>
   )

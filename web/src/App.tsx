@@ -81,6 +81,7 @@ function useShortcuts() {
       else if (a === 'reject') s.meta({ rating: -1 })
       else if (a.startsWith('label')) s.meta({ toggle_label: +a.slice(5) })
       else if (a === 'edit') s.editInDarktable(s.sel)
+      else if (a === 'hide') { const ps = s.selPhotos; s.hidePhotos(s.sel, !(ps.length === s.sel.length && ps.every(p => p.hidden))) }
       else if (a === 'deselect') s.setSel([])
       else if (a === 'view') s.setViewer(s.sel[0])
     }

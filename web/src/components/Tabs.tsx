@@ -40,6 +40,7 @@ export function tabTitle(t: WTab, series: SeriesInfo[]): string {
   if (f.lenses?.length) parts.push(f.lenses.length === 1 ? f.lenses[0] : `${f.lenses.length} lenses`)
   if (f.cameras?.length) parts.push(f.cameras.length === 1 ? f.cameras[0] : `${f.cameras.length} cameras`)
   if (f.edited) parts.push(f.edited === 'yes' ? 'edited' : 'not edited')
+  if (f.only_hidden) parts.push('hidden photos')
   return parts.join(' · ') || (st.view === 'timeline' ? 'Timeline' : 'All photos')
 }
 

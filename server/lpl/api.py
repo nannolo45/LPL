@@ -233,7 +233,23 @@ def facets():
     c = db.conn()
     lenses = [dict(r) for r in c.execute("SELECT lens AS v, COUNT(*) n FROM photos WHERE missing=0 AND lens IS NOT NULL AND lens<>'' GROUP BY lens ORDER BY lens").fetchall()]
     cams = [dict(r) for r in c.execute("SELECT camera AS v, COUNT(*) n FROM photos WHERE missing=0 AND camera IS NOT NULL AND camera<>'' GROUP BY camera ORDER BY camera").fetchall()]
-    return {"lenses": lenses, "cameras": cams}
+    hidden = c.execute("SELECT COUNT(*) n FROM photos WHERE missing=0 AND hidden=1").fetchone()["n"]
+    return {"lenses": lenses, "cameras": cams, "hidden_photos": hidden}
+
+
+@app.post("/api/photos/hide")
+def photos_hide(body: Dict[str, Any] = Body(...)):
+    """Hide photos from the library views, or show them again. Only in LPL: nothing is written to the files."""
+    ids = [int(i) for i in body.get("ids") or []][:20000]
+    flag = 1 if body.get("hidden", True) else 0
+    with db.write_lock:
+        c = db.conn()
+        for k in range(0, len(ids), 900):
+            part = ids[k:k + 900]
+            c.execute("UPDATE photos SET hidden=? WHERE id IN (%s)" % ",".join("?" * len(part)), [flag] + part)
+        c.commit()
+    n = db.conn().execute("SELECT COUNT(*) n FROM photos WHERE missing=0 AND hidden=1").fetchone()["n"]
+    return {"changed": len(ids), "hidden_photos": n}
 
 
 @app.get("/api/folders")

@@ -25,6 +25,7 @@ export const ACTIONS: Action[] = [
   { id: 'label3', label: 'Toggle blue label', scope: 'photos', keys: ['F4'] },
   { id: 'label4', label: 'Toggle purple label', scope: 'photos', keys: ['F5'] },
   { id: 'edit', label: 'Edit in darktable', scope: 'photos', keys: ['E'] },
+  { id: 'hide', label: 'Hide from the library (again: show)', scope: 'photos', keys: ['H'] },
   { id: 'view', label: 'Open large', scope: 'photos', keys: ['Enter'] },
   { id: 'fullscreen', label: 'Full screen (and back)', scope: 'photos', keys: ['F'] },
   { id: 'selectAll', label: 'Select all', scope: 'photos', keys: ['Ctrl+A'] },

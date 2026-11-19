@@ -151,6 +151,10 @@ def init() -> None:
     with write_lock:
         c = conn()
         c.executescript(SCHEMA)
+        # columns added after the first release
+        cols = {r[1] for r in c.execute("PRAGMA table_info(photos)").fetchall()}
+        if "hidden" not in cols:  # photos hidden from the library views (LPL only, not written to XMP)
+            c.execute("ALTER TABLE photos ADD COLUMN hidden INTEGER DEFAULT 0")
         c.commit()
 
 

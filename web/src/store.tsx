@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { Agent, api, Filters, Photo, SeriesInfo, SortLevel, Tag } from './api'
+import { keysOf } from './shortcuts'
 
 export type View = 'grid' | 'list' | 'folders' | 'timeline' | 'board' | 'work' | 'send'
 export type Gran = 'day' | 'month' | 'year'
@@ -48,7 +49,9 @@ export interface Store {
   mergePhotos: (ps: Photo[]) => void
   meta: (body: Record<string, unknown>, ids?: number[]) => Promise<void>
   tags: Tag[]; reloadTags: () => void
-  facets: { lenses: { v: string; n: number }[]; cameras: { v: string; n: number }[] }
+  facets: { lenses: { v: string; n: number }[]; cameras: { v: string; n: number }[]; hidden_photos?: number }
+  /** Hide photos from the library views (or show them again); LPL only, files untouched. */
+  hidePhotos: (ids: number[], hidden: boolean) => Promise<void>
   series: SeriesInfo[]; reloadSeries: () => void
   agents: Agent[]; status: any; isLocal: boolean
   sendIds: number[] | null; setSendIds: (ids: number[] | null) => void
@@ -300,10 +303,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const moveTab = (id: string, to: number) => setTabs(ts => { const n = ts.filter(t => t.id !== id); const t = ts.find(x => x.id === id)!; n.splice(Math.max(0, Math.min(to, n.length)), 0, t); return n })
   useEffect(() => { const t = tabs.find(x => x.id === activeTab); if (t) applyTab(t.st) }, [])  // reopen where you were
 
+  const hidePhotos = async (ids: number[], hidden: boolean) => {
+    if (!ids.length) return
+    try {
+      const r = await api.hide(ids, hidden)
+      setFacets(f => ({ ...f, hidden_photos: r.hidden_photos }))
+      setCache(prev => { const n = new Map(prev); ids.forEach(id => { const p = n.get(id) || items.find(x => x.id === id); if (p) n.set(id, { ...p, hidden: hidden ? 1 : 0 }) }); return n })
+      const k = keysOf('hide')[0]
+      if (hidden) toast(`${ids.length} photo${ids.length > 1 ? 's' : ''} hidden${filters.show_hidden ? '' : ' from the library'}. ${k ? k + ' again brings them back; ' : ''}“Show hidden” in Filters shows them.`)
+      else toast(`${ids.length} photo${ids.length > 1 ? 's' : ''} shown again`)
+      reload()
+    } catch (e: any) { toast(e.message || String(e)) }
+  }
+
   const value: Store = {
     isMobile, tabs, activeTab, switchTab, newTab, closeTab, renameTab, moveTab, liveTab, view, setView, sort, setSort, group, setGroup, gran, setGran, filters, patchFilters, clearFilters,
     thumb, setThumb, seed, reshuffle: () => setSeed(s => s + 1), items, total, loading, loadMore, reload,
-    sel, setSel, clickSelect, selPhotos, selectAll, mergePhotos, meta, tags, reloadTags, facets, series, reloadSeries,
+    sel, setSel, clickSelect, selPhotos, selectAll, mergePhotos, meta, tags, reloadTags, facets, hidePhotos, series, reloadSeries,
     agents, status, isLocal: status?.mode === 'local', sendIds, setSendIds, editInDarktable, toast, toastMsg, viewer, setViewer, boardSeries, setBoardSeries,
     reveal, revealId, clearReveal: () => setRevealId(null), fullscreen, setFullscreen,
   }

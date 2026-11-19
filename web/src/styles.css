@@ -300,3 +300,7 @@ a { color: var(--accent); }
 .vbadge { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: #1a1a1a; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
 /* long filter chips (e.g. many folders) stay on one line and shorten */
 .ctxbar .chip { max-width: min(520px, 45vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* photos hidden from the library (seen only with "Show hidden") */
+.tile.hid .img img { opacity: .4; filter: grayscale(.6); }
+.tile .hidtag { position: absolute; left: 6px; top: 6px; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,.65); color: #ddd; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }

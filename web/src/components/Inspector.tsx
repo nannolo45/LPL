@@ -61,6 +61,22 @@ export function SeriesPicker({ ids }: { ids: number[] }) {
 
 interface Node { path: string; name: string; depth: number; isTag: boolean; kids: boolean; n: number; syn: string; category: boolean; priv: boolean }
 
+/** Hide the photos from the library views, or show them again (only in LPL; the files and XMPs are untouched). */
+export function HideButton({ photos, big }: { photos: Photo[]; big?: boolean }) {
+  const s = useStore()
+  useShortcutsVersion()
+  if (!photos.length) return null
+  const all = photos.every(p => p.hidden)
+  const k = keysOf('hide')[0]
+  const what = photos.length > 1 ? `${photos.length} photos` : 'this photo'
+  return (
+    <button className={'btn' + (big ? ' big' : '')} title="Only in LightPhotoLibrary: the files and their XMPs stay as they are. Turn on “Show hidden photos” in Filters to see them again."
+      onClick={() => s.hidePhotos(photos.map(p => p.id), !all)}>
+      {all ? `Show ${what} again` : `Hide ${what} from the library`}{k && !big ? ` (${k})` : ''}
+    </button>
+  )
+}
+
 export function TagPanel({ photos }: { photos: Photo[] }) {
   const s = useStore()
   const [q, setQ] = useState('')
@@ -279,6 +295,7 @@ export function Inspector() {
             Send {photos.length > 1 ? `${photos.length} photos` : 'this photo'} to the NAS…
           </button>}
           <SeriesPicker ids={photos.map(p => p.id)} />
+          <HideButton photos={photos} />
         </>
       )}
       <div className="hr" />

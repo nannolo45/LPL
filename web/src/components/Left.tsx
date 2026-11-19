@@ -136,6 +136,15 @@ export function FilterPanel() {
           ))}
         </div>
       </Section>
+      <div className="col" style={{ gap: 4 }}>
+        <label className="row" style={{ cursor: 'pointer' }}>
+          <input type="checkbox" checked={!!f.show_hidden} onChange={() => s.patchFilters({ show_hidden: !f.show_hidden, only_hidden: false })} style={{ accentColor: '#E8A33D' }} />
+          <span className="small">Show hidden photos and folders{s.facets.hidden_photos ? ` (${s.facets.hidden_photos} photos)` : ''}</span>
+        </label>
+        {(f.show_hidden || f.only_hidden) && !!s.facets.hidden_photos && (
+          <button className={'chip' + (f.only_hidden ? ' on' : '')} style={{ alignSelf: 'flex-start' }} onClick={() => s.patchFilters({ only_hidden: !f.only_hidden, show_hidden: true })}>only the hidden ones</button>
+        )}
+      </div>
       <span className="tiny muted">Within one filter, any selected value matches; different filters must all match.</span>
       <label className="row" style={{ cursor: 'pointer' }}>
         <input type="checkbox" checked={f.subfolders !== false} onChange={() => s.patchFilters({ subfolders: f.subfolders === false })} style={{ accentColor: '#E8A33D' }} />
