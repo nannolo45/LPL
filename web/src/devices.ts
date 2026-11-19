@@ -18,7 +18,11 @@ export const STATUS: Record<string, [string, string, string]> = {
 /** The darktable phone app reports os "android"; it only gets jobs addressed to it. */
 export const isPhoneAgent = (a: Pick<Agent, 'os'>) => a.os === 'android'
 
-export const isAndroidBrowser = (ua: string = typeof navigator === 'undefined' ? '' : navigator.userAgent) => /\bAndroid\b/i.test(ua)
+const userAgent = () => (typeof navigator === 'undefined' ? '' : navigator.userAgent)
+/** Chrome, Firefox and web views on Android (a web view's user agent has "Android" and "; wv"). */
+export const isAndroidBrowser = (ua: string = userAgent()) => /\bAndroid\b/i.test(ua)
+/** Inside the LPL shell app for Android (a full-screen web view that adds " LPLShell/<version>" to the user agent). */
+export const inShell = (ua: string = userAgent()) => ua.includes('LPLShell/')
 
 /** A device's name as its user set it on the device; when two have the same name, the system is added,
  *  and if that is the same too, the start of the id. */

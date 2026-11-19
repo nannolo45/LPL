@@ -2,7 +2,7 @@
 // Tests for src/devices.ts with Node's own test runner, no extra packages: npm test (Node 22.6 or newer).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { agentLabel, defaultAgent, isAndroidBrowser, needsDeviceChoice, parseDeepLink, phoneEditLink, photoWhere } from '../src/devices.ts'
+import { agentLabel, defaultAgent, inShell, isAndroidBrowser, needsDeviceChoice, parseDeepLink, phoneEditLink, photoWhere } from '../src/devices.ts'
 
 const origin = 'http://192.0.2.10:8080'  // documentation address (RFC 5737)
 const tail = '#Intent;scheme=lpldt;package=app.dtandroid;S.browser_fallback_url=http%3A%2F%2F192.0.2.10%3A8080%2Fandroid-app.html;end'
@@ -43,12 +43,22 @@ test('Android browsers', () => {
   assert.ok(isAndroidBrowser('Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36'))
   assert.ok(isAndroidBrowser('Mozilla/5.0 (Android 14; Mobile; rv:132.0) Gecko/132.0 Firefox/132.0'))
   assert.ok(!isAndroidBrowser('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'))
+  const wv = 'Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0 Mobile Safari/537.36'
+  assert.ok(isAndroidBrowser(wv))
+  assert.ok(isAndroidBrowser(wv + ' LPLShell/0.1.0'))
   assert.ok(!isAndroidBrowser('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148'))
 })
 
 const desk = { id: 'pc-aaaa1111', name: 'Desktop', os: 'windows', online: true }
 const lap = { id: 'pc-bbbb2222', name: 'Laptop', os: 'linux', online: false }
 const phone = { id: 'android-cccc3333', name: 'Phone', os: 'android', online: true }
+
+test('inside the LPL shell', () => {
+  const wv = 'Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/130.0 Mobile Safari/537.36'
+  assert.ok(inShell(wv + ' LPLShell/0.1.0'))
+  assert.ok(!inShell(wv))
+  assert.ok(!inShell('Mozilla/5.0 (Android 14; Mobile; rv:132.0) Gecko/132.0 Firefox/132.0'))
+})
 
 test('device names: as set on the device, told apart when equal', () => {
   assert.equal(agentLabel(desk, [desk, lap, phone]), 'Desktop')
