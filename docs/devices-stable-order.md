@@ -57,7 +57,9 @@ cd web && npm ci && npm test && npm run build  # 30 passed (27 on main), build p
   the row; picker order and words; phone layout Devices tab; the phone stopping: "app not open", the hint, no bar.
   The earlier `web/tests/browser-check.py` still passes.
 
-Fresh clone: see the log.
+Fresh clone of the pushed branch (commit 7273125), new virtualenv: server `pytest -q tests` 67 passed, 1 warning
+(Starlette's httpx notice); web `npm ci && npm test` 30 passed, 0 failed; `npm run build` passes.
+`git status --short --ignored` lists only caches and build output.
 
 ### Screenshots (`docs/shots/devices-stable-order/`)
 `desktop-devices.png`, `desktop-device-picker.png`, `phone-devices.png`, `phone-devices-app-closed.png`.
@@ -68,3 +70,4 @@ Pull the new image as usual. Nothing else.
 ## Log
 - 2026-11-19: branch from main 398274a; stable order, phone card, picker words, pill and bar together; tests;
   browser checks OK.
+- 2026-11-19: fresh clone at 7273125: 67 server, 30 web tests pass, build passes; `browser-check.py` OK too.
