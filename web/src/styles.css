@@ -165,8 +165,13 @@ a { color: var(--accent); }
 .bitem .num.maybe { background: #9a9aa0; }
 .seqstrip { flex: 0 0 auto; border-top: 1px solid var(--line); background: #1b1b1e; padding: 10px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
 .seqstrip .thumbs { flex: 1 1 300px; min-width: 0; display: flex; gap: 6px; overflow-x: auto; }
-.seqstrip .thumbs div { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.seqstrip img { height: 38px; border-radius: 3px; }
+.seqstrip .thumbs { scrollbar-width: thin; padding: 2px; }
+.seqstrip.folded { padding: 4px 12px; }
+.sthumb { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 3px; border: 0; border-radius: 5px; background: transparent; cursor: pointer; }
+.sthumb:hover { background: #26262b; }
+.sthumb.sel { background: var(--accent-bg); box-shadow: 0 0 0 2px var(--accent); }
+.sthumb img { height: 56px; border-radius: 3px; display: block; }
+.ldot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 1px; }
 
 /* working set */
 .card { padding: 16px; border-radius: 10px; background: #1f1f23; display: flex; flex-direction: column; gap: 10px; }

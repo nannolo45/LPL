@@ -21,11 +21,16 @@ export interface Settings {
   /** the zoom a board opens at (100 = 100%); the phone uses its own */
   boardZoom: number
   boardZoomPhone: number
+  /** the photo strip under the board: shown, how it's sorted */
+  boardStrip: boolean
+  boardStripSort: 'reading' | 'taken' | 'name' | 'rating' | 'label' | 'folder'
+  boardStripDesc: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   boardPan: 'both', boardWheel: 'scroll', boardTouch: 'pan', boardPhotoDouble: 'darktable',
   boardNumbers: true, boardSnap: false, boardNoteColor: '#f5d76e', boardZoom: 100, boardZoomPhone: 50,
+  boardStrip: true, boardStripSort: 'reading', boardStripDesc: false,
 }
 
 let current: Settings = (() => {

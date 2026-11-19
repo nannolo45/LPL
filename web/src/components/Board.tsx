@@ -3,7 +3,8 @@ import { api, BoardArrow, BoardEnd, BoardNote, BoardShape, Frame, LastAdd, Photo
 import { useStore } from '../store'
 import { AddPhotosDialog } from './AddPhotos'
 import { actionFor, comboOf, keysOf, typingIn, useShortcutsVersion } from '../shortcuts'
-import { getSettings, useSettings } from '../settings'
+import { getSettings, setSetting, Settings, useSettings } from '../settings'
+import { LABELS } from '../fields'
 
 type Item = Photo & { x: number; y: number }
 type Tool = 'select' | 'note' | 'arrow'
@@ -884,27 +885,88 @@ export function BoardView() {
                 <button onClick={() => zoomTo(zoom + .1)} aria-label="Zoom in" title={'Zoom in (' + keysOf('zoomIn').join(', ') + ', or Ctrl + wheel)'}>+</button>
               </div>
             </div>
-            {!s.isMobile && <div className="seqstrip">
-              <div className="col" style={{ gap: 2, width: 150 }}>
-                <span className="caps">Reading order</span>
-                <span className="small muted">updates as you drag</span>
-              </div>
-              <div className="thumbs">
-                {order.map((it, i) => (
-                  <div key={it.id} onClick={() => { s.setSel([it.id]); setSelShapes([]); showRect({ ...itemRect(it), x: itemRect(it).x - 150, y: itemRect(it).y - 100, w: 450, h: 305 }, zoomRef.current) }} style={{ cursor: 'pointer' }} title="Go to this photo">
-                    <img src={thumbUrl(it)} alt="" />
-                    <span className="tiny muted">{String(i + 1).padStart(2, '0')}</span>
-                  </div>
-                ))}
-              </div>
-              <button className="btn" onClick={() => s.editInDarktable(order.map(i => i.id))} disabled={!order.length}>Edit whole series in darktable</button>
-            </div>}
+            {!s.isMobile && <PhotoStrip photos={shown} pos={pos} sel={selSet}
+              onPick={(it, e) => {
+                const add = e.ctrlKey || e.metaKey || e.shiftKey
+                s.setSel(add ? (selSet.has(it.id) ? s.sel.filter(x => x !== it.id) : [...s.sel, it.id]) : [it.id]); if (!add) setSelShapes([])
+                const r = itemRect(it); showRect({ x: r.x - 150, y: r.y - 100, w: 450, h: 305 }, zoomRef.current)
+              }}
+              onEditAll={() => s.editInDarktable(order.map(i => i.id))} canEditAll={order.length > 0} />}
           </>
         )}
       </div>
       {adding && sid != null && (
         <AddPhotosDialog sid={sid} name={name} frames={frames} lastAdd={lastAdd} onClose={() => setAdding(false)} onAdded={onAdded} />
       )}
+    </div>
+  )
+}
+
+
+const STRIP_SORTS: [Settings['boardStripSort'], string][] = [['reading', 'Board order'], ['taken', 'Capture time'], ['name', 'Filename'], ['rating', 'Rating'], ['label', 'Colour label'], ['folder', 'Folder']]
+
+/** Every photo on the board in a strip you can sort as you like (it doesn't jump around while you arrange the board).
+ *  Click one to go to it on the board, Ctrl/Shift-click to select several; the wheel scrolls the strip. */
+function PhotoStrip({ photos, pos, sel, onPick, onEditAll, canEditAll }: {
+  photos: Item[]; pos: Map<number, number>; sel: Set<number>
+  onPick: (it: Item, e: React.MouseEvent) => void; onEditAll: () => void; canEditAll: boolean
+}) {
+  const st = useSettings()
+  const list = useMemo(() => {
+    const key = st.boardStripSort, dir = st.boardStripDesc ? -1 : 1
+    const v = (p: Item): number | string => {
+      switch (key) {
+        case 'taken': return p.taken || ''
+        case 'name': return p.filename.toLowerCase()
+        case 'rating': return p.rating
+        case 'label': return p.labels.length ? Math.min(...p.labels) : 99
+        case 'folder': return p.relpath.toLowerCase()
+        default: return pos.get(p.id) ?? 1e6
+      }
+    }
+    return [...photos].sort((a, b) => { const x = v(a), y = v(b); return (x < y ? -1 : x > y ? 1 : 0) * dir || a.filename.localeCompare(b.filename) })
+  }, [photos, pos, st.boardStripSort, st.boardStripDesc])
+  const strip = useRef<HTMLDivElement>(null)
+  useEffect(() => {  // the mouse wheel scrolls the strip sideways
+    const el = strip.current
+    if (!el) return
+    const h = (e: WheelEvent) => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { e.preventDefault(); el.scrollLeft += e.deltaY } }
+    el.addEventListener('wheel', h, { passive: false })
+    return () => el.removeEventListener('wheel', h)
+  }, [st.boardStrip])
+  if (!st.boardStrip) return (
+    <div className="seqstrip folded"><button className="btn ghost small" onClick={() => setSetting('boardStrip', true)}>▴ Show the photo strip ({photos.length})</button></div>
+  )
+  return (
+    <div className="seqstrip">
+      <div className="col" style={{ gap: 6, width: 170 }}>
+        <div className="row" style={{ gap: 6 }}>
+          <span className="caps grow">Photos · {photos.length}</span>
+          <button className="btn ghost tiny" title="Hide the strip" aria-label="Hide the strip" onClick={() => setSetting('boardStrip', false)}>▾</button>
+        </div>
+        <div className="row" style={{ gap: 4 }}>
+          <select className="input" style={{ flex: '1 1 auto', padding: '4px 6px' }} value={st.boardStripSort} aria-label="Sort the strip by" onChange={e => setSetting('boardStripSort', e.target.value as Settings['boardStripSort'])}>
+            {STRIP_SORTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+          <button className="btn" style={{ padding: '4px 8px' }} title={st.boardStripDesc ? 'Descending' : 'Ascending'} aria-label="Reverse the order" onClick={() => setSetting('boardStripDesc', !st.boardStripDesc)}>{st.boardStripDesc ? '↓' : '↑'}</button>
+        </div>
+      </div>
+      <div className="thumbs" ref={strip}>
+        {list.map(it => {
+          const n = pos.get(it.id)
+          return (
+            <button key={it.id} className={'sthumb' + (sel.has(it.id) ? ' sel' : '')} onClick={e => onPick(it, e)} title={`${it.filename} — go to it on the board (Ctrl/Shift-click to select several)`}>
+              <img src={thumbUrl(it)} alt="" draggable={false} />
+              <span className="tiny muted">
+                {st.boardStripSort === 'rating' ? (it.rating > 0 ? '★' + it.rating : it.rating < 0 ? 'rej' : '–')
+                  : st.boardStripSort === 'label' ? (it.labels.length ? it.labels.map(l => <i key={l} className="ldot" style={{ background: LABELS[l].c }} />) : '–')
+                  : n ? String(n).padStart(2, '0') : 'maybe'}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+      <button className="btn" onClick={onEditAll} disabled={!canEditAll}>Edit whole series in darktable</button>
     </div>
   )
 }
