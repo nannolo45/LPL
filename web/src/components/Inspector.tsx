@@ -4,6 +4,7 @@ import { useStore } from '../store'
 import { keysOf, useShortcutsVersion } from '../shortcuts'
 import { exifLine, fmtDay, LABELS, leaf } from '../fields'
 import { Thumb } from './Library'
+import { photoWhere } from '../devices'
 
 export function RatingLabels({ photos, big = false }: { photos: Photo[]; big?: boolean }) {
   const s = useStore()
@@ -243,6 +244,14 @@ export function TagPanel({ photos }: { photos: Photo[] }) {
   )
 }
 
+/** Where a photo is checked out for darktable, if anywhere: "on Phone: edited · not synced yet". */
+export function WhereLine({ id }: { id: number }) {
+  const s = useStore()
+  const lines = photoWhere(s.agents, id)
+  if (!lines.length) return null
+  return <span className="small soft" title="See the working set for more">{lines.join(' · ')}</span>
+}
+
 export function Inspector() {
   const s = useStore()
   useShortcutsVersion()
@@ -275,6 +284,7 @@ export function Inspector() {
             <span>darktable</span><span>{one.edited ? 'edited' : 'not edited'}</span>
             {one.title && <><span>Title</span><span>{one.title}</span></>}
           </div>
+          <WhereLine id={one.id} />
         </>
       )}
       {photos.length > 1 && (

@@ -1,4 +1,6 @@
 fastapi>=0.110
+# FileResponse answers Range requests (resumable downloads of originals) from 0.39; 1.0 fixed the 416 Content-Range header
+starlette>=1.0
 uvicorn>=0.29
 pillow>=10.3
 lxml>=5.2

@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { Agent, api, Filters, Photo, SeriesInfo, SortLevel, Tag } from './api'
 import { keysOf } from './shortcuts'
+import { agentLabel, needsDeviceChoice } from './devices'
 
 export type View = 'grid' | 'list' | 'folders' | 'timeline' | 'board' | 'work' | 'send'
 export type Gran = 'day' | 'month' | 'year'
@@ -56,6 +57,9 @@ export interface Store {
   agents: Agent[]; status: any; isLocal: boolean
   sendIds: number[] | null; setSendIds: (ids: number[] | null) => void
   editInDarktable: (ids: number[]) => Promise<void>
+  /** "Edit in darktable" with several devices: the photos waiting for the user to pick a device, and sending them to one. */
+  devicePick: number[] | null; closeDevicePick: () => void
+  editOn: (ids: number[], agentId: string) => Promise<void>
   toast: (m: string) => void; toastMsg: string
   viewer: number | null; setViewer: (id: number | null) => void
   boardSeries: number | null; setBoardSeries: (id: number | null) => void
@@ -106,6 +110,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [viewer, setViewer] = useState<number | null>(null)
   const [boardSeries, setBoardSeries] = useState<number | null>(null)
   const [sendIds, setSendIds] = useState<number[] | null>(null)
+  const [devicePick, setDevicePick] = useState<number[] | null>(null)
   const [revealId, setRevealId] = useState<number | null>(null)
   const [fullscreen, setFullscreen] = useState<Store['fullscreen']>(null)
   const [revealTick, setRevealTick] = useState(0)
@@ -232,13 +237,26 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         toast(r.message || 'Opening in darktable…')
         return
       }
+      if (needsDeviceChoice(agents)) { setDevicePick(ids); return }  // which device: DevicePicker, then editOn
       const online = agents.filter(a => a.online)
       const r = await api.job('edit', { ids }, online.length === 1 ? online[0].id : undefined)
       const ag = agents.find(a => a.id === r.agent_id)
-      toast(ag && ag.online ? `Sending ${ids.length} photo${ids.length > 1 ? 's' : ''} to darktable on ${ag.name}…`
+      toast(ag && ag.online ? `Sending ${ids.length} photo${ids.length > 1 ? 's' : ''} to darktable on ${agentLabel(ag, agents)}…`
         : 'Queued. It opens in darktable as soon as your PC agent is online.')
     } catch (e: any) { toast(e.message || String(e)) }
   }, [agents, toast, status])
+
+  const editOn = useCallback(async (ids: number[], agentId: string) => {
+    setDevicePick(null)
+    try {
+      localStorage.setItem('lpl.editDevice', agentId)
+      await api.job('edit', { ids }, agentId)
+      const ag = agents.find(a => a.id === agentId)
+      const name = ag ? agentLabel(ag, agents) : agentId
+      toast(ag && ag.online ? `Sending ${ids.length} photo${ids.length > 1 ? 's' : ''} to darktable on ${name}…`
+        : `Queued. It opens in darktable as soon as ${name} is online.`)
+    } catch (e: any) { toast(e.message || String(e)) }
+  }, [agents, toast])
 
   const reveal = useCallback((pid: number) => {
     api.photo(pid).then(p => {
@@ -320,7 +338,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     isMobile, tabs, activeTab, switchTab, newTab, closeTab, renameTab, moveTab, liveTab, view, setView, sort, setSort, group, setGroup, gran, setGran, filters, patchFilters, clearFilters,
     thumb, setThumb, seed, reshuffle: () => setSeed(s => s + 1), items, total, loading, loadMore, reload,
     sel, setSel, clickSelect, selPhotos, selectAll, mergePhotos, meta, tags, reloadTags, facets, hidePhotos, series, reloadSeries,
-    agents, status, isLocal: status?.mode === 'local', sendIds, setSendIds, editInDarktable, toast, toastMsg, viewer, setViewer, boardSeries, setBoardSeries,
+    agents, status, isLocal: status?.mode === 'local', sendIds, setSendIds, editInDarktable, devicePick, closeDevicePick: () => setDevicePick(null), editOn, toast, toastMsg, viewer, setViewer, boardSeries, setBoardSeries,
     reveal, revealId, clearReveal: () => setRevealId(null), fullscreen, setFullscreen,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>

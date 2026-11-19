@@ -1,16 +1,8 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useStore } from '../store'
+import { agentLabel, STATUS } from '../devices'
 
-const STATUS: Record<string, [string, string, string]> = {
-  downloading: ['copying to this PC', '#2a2a2e', '#c8c8cc'],
-  opening: ['opening in darktable', '#3a2f1c', '#E8A33D'],
-  editing: ['open in darktable', '#3a2f1c', '#E8A33D'],
-  dirty: ['edited · not synced yet', '#1c2a3a', '#8cb8e6'],
-  syncing: ['syncing', '#1c2a3a', '#8cb8e6'],
-  synced: ['synced to NAS', '#1d2e1d', '#8fd08f'],
-  error: ['error', '#3a1c1c', '#ff8b8e'],
-}
 
 const ago = (t: number, now: number) => { const s = Math.max(0, Math.round(now - t)); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago` }
 
@@ -22,15 +14,16 @@ export function WorkView() {
     t(); const i = window.setInterval(t, 4000); return () => window.clearInterval(i)
   }, [])
   const now = s.status?.server_time || Date.now() / 1000
+  const label = (id: string) => { const a = s.agents.find(x => x.id === id); return a ? agentLabel(a, s.agents) : id }
   const job = (kind: string, agent: string, ids?: number[]) =>
-    api.job(kind, ids ? { ids } : { all: true }, agent).then(() => s.toast('Sent to the PC agent')).catch(e => s.toast(e.message))
+    api.job(kind, ids ? { ids } : { all: true }, agent).then(() => s.toast(`Sent to ${label(agent)}`)).catch(e => s.toast(e.message))
   const scan = s.status?.scan
   return (
     <div className="scroll">
       <div className="col" style={{ gap: 18, maxWidth: 1100, padding: s.isMobile ? '0 14px' : 0 }}>
         <div className="col" style={{ gap: 4 }}>
           <span className="display" style={{ fontSize: 24, fontWeight: 500 }}>Working set</span>
-          <span className="soft">Photos copied to a PC so darktable can edit them at SSD speed. The NAS is read once and only the XMP goes back.</span>
+          <span className="soft">Photos copied to your devices so darktable can edit them at SSD speed. The NAS is read once and only the XMP goes back.</span>
         </div>
         {!s.agents.length && (
           <div className="card soft" style={{ lineHeight: 1.6 }}>
@@ -40,6 +33,7 @@ export function WorkView() {
         )}
         {s.agents.map(a => {
           const ws = a.state?.working_set || []
+          const name = agentLabel(a, s.agents)
           const dirty = ws.filter(w => w.status === 'dirty' || w.status === 'editing').map(w => w.id)
           return (
             <div className="card" key={a.id}>
@@ -50,12 +44,12 @@ export function WorkView() {
                 {a.online && <span className={a.state?.darktable_running ? 'pill-ok' : 'pill-off'}><i />darktable {a.state?.darktable_running ? 'running' : 'not running'}</span>}
                 {a.online && a.state?.darktable_running && <span className={a.state?.bridge_alive ? 'pill-ok' : 'pill-off'}><i />bridge script {a.state?.bridge_alive ? 'active' : 'not seen'}</span>}
                 <div className="grow" />
-                {!a.online && <button className="btn ghost" onClick={() => window.confirm(`Remove “${a.name}” from this list? It comes back if its agent connects again.`) && fetch(`/api/agents/${encodeURIComponent(a.id)}`, { method: 'DELETE' }).then(() => s.toast('Removed'))}>Remove</button>}
+                {!a.online && <button className="btn ghost" onClick={() => window.confirm(`Remove “${name}” from this list? It comes back if its agent connects again.`) && fetch(`/api/agents/${encodeURIComponent(a.id)}`, { method: 'DELETE' }).then(() => s.toast('Removed'))}>Remove</button>}
                 <button className="btn primary" disabled={!dirty.length} title="Copy the edits of every changed photo back to the NAS" onClick={() => job('sync', a.id, dirty)}>Save {dirty.length || ''} edited to NAS</button>
-                <button className="btn danger" disabled={!ws.some(w => w.status === 'synced')} title={`Delete the working copies on ${a.name} whose edits are already on the NAS`} onClick={() => job('release', a.id, ws.filter(w => w.status === 'synced').map(w => w.id))}>Remove saved copies from PC</button>
+                <button className="btn danger" disabled={!ws.some(w => w.status === 'synced')} title={`Delete the working copies on ${name} whose edits are already on the NAS`} onClick={() => job('release', a.id, ws.filter(w => w.status === 'synced').map(w => w.id))}>Remove saved copies from {name}</button>
               </div>
               {a.state?.message && <div className="small soft">{a.state.message}</div>}
-              {a.online && a.state?.local_url && <span className="small soft">This PC also has a local library: on that PC, open <a href={a.state.local_url} target="_blank" rel="noreferrer">{a.state.local_url}</a></span>}
+              {a.online && a.state?.local_url && <span className="small soft">{name} also has a local library: on {name}, open <a href={a.state.local_url} target="_blank" rel="noreferrer">{a.state.local_url}</a></span>}
               {a.online && a.state?.local_error && <span className="small muted">{a.state.local_error}</span>}
               {a.online && a.state?.bridge_status && <pre className="tiny muted" style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, Consolas, monospace' }}>{'darktable bridge:\n' + a.state.bridge_status}</pre>}
               {ws.length > 0 ? (
@@ -73,9 +67,9 @@ export function WorkView() {
                             <td className="muted">{w.checkout_ts ? ago(w.checkout_ts, now) : ''}</td>
                             <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                               <button className="btn" title="Find it in LightPhotoLibrary: its folder, scrolled to it" onClick={() => s.reveal(w.id)}>Show in library</button>{' '}
-                              <button className="btn" title={`Open the copy on ${a.name} in darktable's darkroom`} onClick={() => job('open', a.id, [w.id])}>Open in darktable</button>{' '}
-                              <button className="btn" title={`Copy the edits (XMP) from ${a.name} back to the NAS now. The photo stays on ${a.name} so you can keep editing.`} onClick={() => job('sync', a.id, [w.id])}>Save edits to NAS</button>{' '}
-                              <button className="btn danger" title={`Done with it: save the edits to the NAS, close it in darktable and delete the working copy on ${a.name}. The original on the NAS is never touched.`} onClick={() => job('release', a.id, [w.id])}>Done · remove from PC</button>
+                              <button className="btn" title={`Open the copy on ${name} in darktable's darkroom`} onClick={() => job('open', a.id, [w.id])}>Open in darktable</button>{' '}
+                              <button className="btn" title={`Copy the edits (XMP) from ${name} back to the NAS now. The photo stays on ${name} so you can keep editing.`} onClick={() => job('sync', a.id, [w.id])}>Save edits to NAS</button>{' '}
+                              <button className="btn danger" title={`Done with it: save the edits to the NAS, close it in darktable and delete the working copy on ${name}. The original on the NAS is never touched.`} onClick={() => job('release', a.id, [w.id])}>Done · remove from {name}</button>
                             </td>
                           </tr>
                         )
@@ -83,7 +77,7 @@ export function WorkView() {
                     </tbody>
                   </table>
                 </div>
-              ) : <div className="small muted">Nothing checked out on this PC.</div>}
+              ) : <div className="small muted">Nothing checked out on {name}.</div>}
             </div>
           )
         })}
@@ -94,7 +88,7 @@ export function WorkView() {
             <div key={j.id} className="row small">
               <span className="muted" style={{ width: 90 }}>{ago(j.created, now)}</span>
               <span style={{ width: 70 }}>{j.kind}</span>
-              <span className="grow muted ellipsis">{j.payload?.ids ? `${j.payload.ids.length} photo(s)` : 'all'} · {j.agent_id || 'waiting for a PC'}</span>
+              <span className="grow muted ellipsis">{j.payload?.ids ? `${j.payload.ids.length} photo(s)` : 'all'} · {j.agent_id ? label(j.agent_id) : 'waiting for a PC'}</span>
               <span className={j.status === 'queued' ? 'soft' : 'muted'}>{j.status}</span>
             </div>
           )) : <span className="small muted">None yet.</span>}
