@@ -11,10 +11,12 @@ import { BoardView } from './Board'
 import { SettingsDialog } from './Shortcuts'
 import { EditOnPhone, useListTitle } from './PhoneEdit'
 import { selectionIds, takeDeepLink } from '../devices'
+import { useBackLayer } from '../back'
 
 type Tab = 'lib' | 'folders' | 'series' | 'pc'  // 'pc': the devices and their working sets
 
 function Sheet({ onClose, title, children }: { onClose: () => void; title: string; children: React.ReactNode }) {
+  useBackLayer(true, onClose)  // Back closes it
   return (
     <>
       <div className="backdrop" onClick={onClose} />
@@ -138,8 +140,13 @@ export function MobileApp() {
   const [photo, setPhoto] = useState<number | null>(null)
   const [board, setBoard] = useState<number | null>(null)
   const [settings, setSettings] = useState(false)
+  const [cameFrom, setCameFrom] = useState<'folders' | 'series' | null>(null)  // a folder or series opened from its overview
   useEffect(() => { if (photo != null && s.sel.length === 1 && s.sel[0] !== photo) setPhoto(s.sel[0]) }, [s.sel])
   useEffect(() => { if (['folders', 'timeline', 'board', 'work', 'list'].includes(s.view) && tab === 'lib') s.setView('grid') }, [])
+  // the phone's Back steps out of what is open, one thing at a time
+  useBackLayer(photo != null, () => setPhoto(null))
+  useBackLayer(board != null, () => { setBoard(null); s.setView('grid') })
+  useBackLayer(cameFrom != null && tab === 'lib', () => goTab(cameFrom!))
   // a deep link: ?photo=<id> opens the photo's page, ?series=<id> the series' board
   useEffect(() => {
     const d = takeDeepLink()
@@ -155,7 +162,7 @@ export function MobileApp() {
   // "Show in library" (e.g. from the Devices tab): go to the Library, where the grid scrolls to the photo
   useEffect(() => { if (s.revealId != null) { setTab('lib'); setPhoto(null) } }, [s.revealId])
   const openPhoto = (p: Photo) => { s.setSel([p.id]); setPhoto(p.id) }
-  const goTab = (t: Tab) => { setTab(t); setPhoto(null); setBoard(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders') }
+  const goTab = (t: Tab) => { setTab(t); setPhoto(null); setBoard(null); setCameFrom(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders') }
   const title = board != null ? (s.series.find(x => x.id === board)?.name || 'Board') : photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : tab === 'series' ? 'Series' : 'Devices'
   const fcount = [s.filters.folder, (s.filters.folders || []).length, s.filters.month, s.filters.tag, s.filters.series, s.filters.edited, (s.filters.lenses || []).length, (s.filters.cameras || []).length, (s.filters.labels || []).length, (s.filters.ratings || []).length].filter(Boolean).length
   return (
@@ -187,8 +194,8 @@ export function MobileApp() {
         {photo != null ? <PhotoPage id={photo} onBack={() => setPhoto(null)} />
           : board != null ? <div className="mboard"><BoardView /></div>
           : tab === 'lib' ? <MobileGrid selecting={selecting} onOpen={openPhoto} />
-          : tab === 'folders' ? <FoldersViewMobile onOpen={() => goTab('lib')} />
-          : tab === 'series' ? <SeriesTab board={id => { s.setBoardSeries(id); s.setView('board'); setBoard(id) }} open={id => { s.patchFilters({ series: id, folder: null, tag: null, month: null }); s.setSort([{ f: 'custom', d: 'asc' }]); s.setGroup(false); goTab('lib') }} />
+          : tab === 'folders' ? <FoldersViewMobile onOpen={() => { goTab('lib'); setCameFrom('folders') }} />
+          : tab === 'series' ? <SeriesTab board={id => { s.setBoardSeries(id); s.setView('board'); setBoard(id) }} open={id => { s.patchFilters({ series: id, folder: null, tag: null, month: null }); s.setSort([{ f: 'custom', d: 'asc' }]); s.setGroup(false); goTab('lib'); setCameFrom('series') }} />
           : <WorkView />}
       </div>
       {selecting && s.sel.length > 0 && photo == null && (

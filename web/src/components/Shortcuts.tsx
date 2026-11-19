@@ -3,6 +3,8 @@ import { ACTIONS, comboOf, isCustom, keysOf, resetAll, SCOPES, setKeys, useShort
 import { DEFAULT_SETTINGS, resetSettings, setSetting, Settings, useSettings } from '../settings'
 import { FRAME_COLORS, NOTE_COLORS } from './Board'
 import { useStore } from '../store'
+import { useInstall } from '../install'
+import { useBackLayer } from '../back'
 
 const pretty = (k: string) => k.replace('ArrowRight', '→').replace('ArrowLeft', '←').replace('ArrowUp', '↑').replace('ArrowDown', '↓')
 
@@ -14,6 +16,7 @@ export function SettingsDialog({ onClose, section = 'board' }: { onClose: () => 
   const [sec, setSec] = useState<SettingsSection>(s.isMobile ? 'board' : section)
   const [rec, setRec] = useState<string | null>(null)   // shortcut waiting for a key
   const [note, setNote] = useState('')
+  useBackLayer(s.isMobile, onClose)  // the phone's Back closes it
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -47,6 +50,7 @@ export function SettingsDialog({ onClose, section = 'board' }: { onClose: () => 
           <span className="display grow" style={{ fontSize: 19 }}>Settings</span>
           <button className="btn" onClick={onClose}>Close</button>
         </div>
+        <InstallRow />
         <div className="settings-body">
           {!s.isMobile && (
             <nav className="settings-nav" aria-label="Settings sections">
@@ -60,6 +64,19 @@ export function SettingsDialog({ onClose, section = 'board' }: { onClose: () => 
         </div>
       </div>
     </>
+  )
+}
+
+/** Install LPL as an app: the browser's prompt, or how to do it where there is no prompt (see install.ts). */
+function InstallRow() {
+  const { hint, install } = useInstall()
+  if (hint === 'none') return null
+  return (
+    <div className="row small soft" style={{ gap: 10 }}>
+      {hint === 'button' && <><span className="grow">Use LightPhotoLibrary like an app, in its own window and on the home screen.</span><button className="btn primary" onClick={install}>Install app</button></>}
+      {hint === 'menu' && <span className="grow">To install it as an app, open the browser's menu and choose “Install” or “Add app to Home screen”.</span>}
+      {hint === 'https' && <span className="grow muted">Installing it as an app needs LightPhotoLibrary to be opened over https (see “Install as an app” in the README).</span>}
+    </div>
   )
 }
 
