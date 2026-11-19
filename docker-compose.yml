@@ -4,7 +4,7 @@
 #   - Project name: lightphotolibrary
 #   - Storage path: /volume1/docker/lightphotolibrary, with an empty "data" folder inside that you created
 #     yourself in Files (if Docker creates it, it belongs to root and LPL can't write to it)
-#   - Paste this file into the Compose configuration, edit the three marked lines, then deploy.
+#   - Paste this file into the Compose configuration, edit the four marked lines, then deploy.
 #
 # The image comes from GitHub (ghcr.io). The repo is private, so the NAS has to log in once,
 # see "Install the server" in README.md. Then open http://<nas-address>:8080
@@ -24,6 +24,9 @@ services:
       - PREVIEW_WORKERS=3          # threads making previews; the DXP models' Intel CPUs handle 3-4 well
       - LPL_PASSWORD=              # (2) optional: a password for the web app and the PC agent
       - WRITE_SERIES_TAGS=1        # series are also written as tags "series|<name>" so darktable sees them
+      # (4) your time zone, as Area/City (list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones),
+      #     e.g. Europe/Lisbon or America/New_York. Without it the container runs in UTC: times in the log and
+      #     where a day ends in a photo's list of edits (saves of one device on one day are one entry) follow UTC.
       - TZ=Europe/Berlin
     volumes:
       # (3) your photo folder on the NAS, left of the colon. Read-write: LPL writes .xmp sidecars next to the photos.

@@ -148,7 +148,8 @@ def history(desc) -> list:
     undone in the history stack and are not part of the edit. When several items name the same instance,
     the last one counts. Settings are not decoded: only a fingerprint is kept, to see whether they changed.
 
-    Returns [{"operation", "instance", "priority", "enabled", "params", "num"}], most recently changed first."""
+    Returns [{"operation", "instance", "priority", "enabled", "params", "num", "first", "second"}], most recently
+    changed first; num is the instance's last item, first its first, second its second (None when it has one)."""
     el = desc.find(q("darktable", "history"))
     if el is None:
         return []
@@ -166,8 +167,11 @@ def history(desc) -> list:
         prio = _int(_item_value(li, "multi_priority"), 0)
         fp = hashlib.sha1(("%s\0%s\0%s" % (_item_value(li, "modversion") or "", _item_value(li, "params") or "",
                                            _item_value(li, "blendop_params") or "")).encode()).hexdigest()[:16]
+        old = state.get((op, prio))
         state[(op, prio)] = {"operation": op, "instance": _item_value(li, "multi_name") or "", "priority": prio,
-                             "enabled": _item_value(li, "enabled") not in ("0", "false", "False"), "params": fp, "num": num}
+                             "enabled": _item_value(li, "enabled") not in ("0", "false", "False"), "params": fp, "num": num,
+                             # the instance's first item and its second (None: only one), to tell darktable's own items
+                             "first": old["first"] if old else num, "second": (old["second"] if old["second"] is not None else num) if old else None}
     return sorted(state.values(), key=lambda m: (-m["num"], m["operation"], m["priority"]))
 
 

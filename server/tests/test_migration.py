@@ -107,3 +107,25 @@ def test_server_runs_on_a_migrated_library(tmp_path):
     assert out["rating"] == 5 % 6 - 1 and out["last_edit"] is None and out["edits"] == []
     assert [j["kind"] for j in out["jobs"]] == ["sync"]  # the queued job; the old taken one stays taken
     assert out["total"] == N - len(range(97, N + 1, 97))  # hidden photos stay hidden
+
+
+def test_edit_events_of_this_branch_get_the_new_columns(tmp_path):
+    """edit_events as first made on this branch (before saves were merged): rows kept, columns added."""
+    p = tmp_path / "lpl.sqlite"
+    old_library(p)
+    c = sqlite3.connect(str(p))
+    c.executescript("""CREATE TABLE edit_events (id INTEGER PRIMARY KEY, photo_id INTEGER NOT NULL, ts REAL NOT NULL,
+        source TEXT NOT NULL, agent_id TEXT, device TEXT, device_os TEXT, modules TEXT NOT NULL, changes TEXT);
+        INSERT INTO edit_events(photo_id, ts, source, agent_id, device, modules) VALUES(5, 1.7e9, 'agent', 'pc-1', 'Desktop', '[]');""")
+    c.commit()
+    c.row_factory = sqlite3.Row
+    db.migrate(c)
+    db.migrate(c)
+    cols = [r[1] for r in c.execute("PRAGMA table_info(edit_events)")]
+    assert cols[-3:] == ["first_ts", "saves", "before"]
+    r = c.execute("SELECT * FROM edit_events").fetchone()
+    assert (r["photo_id"], r["device"], r["saves"], r["first_ts"]) == (5, "Desktop", 1, None)
+    from lpl import edits
+    e = edits.event_dict(r)
+    assert e["saves"] == 1 and e["first_time"] == 1.7e9
+    c.close()

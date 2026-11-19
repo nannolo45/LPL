@@ -142,7 +142,10 @@ CREATE TABLE IF NOT EXISTS edit_events (
     device TEXT,                   -- the agent's name at that time
     device_os TEXT,
     modules TEXT NOT NULL,         -- JSON: the modules the edit uses
-    changes TEXT                   -- JSON: added / removed / switched_on / switched_off / changed; NULL = nothing to compare with
+    changes TEXT,                  -- JSON: added / removed / switched_on / switched_off / changed; NULL = nothing to compare with
+    first_ts REAL,                 -- saves of one device on one day are one entry: ts is the last save, first_ts the first
+    saves INTEGER DEFAULT 1,
+    before TEXT                    -- JSON: the modules before the first save (what changes compares with); NULL = unknown
 );
 CREATE INDEX IF NOT EXISTS idx_edit_events_photo ON edit_events(photo_id, ts);
 
@@ -185,6 +188,10 @@ def migrate(c: sqlite3.Connection) -> None:
     if "color" not in fcols:  # frame look on the board: fill colour and border style (solid / dashed / none)
         c.execute("ALTER TABLE series_frames ADD COLUMN color TEXT DEFAULT ''")
         c.execute("ALTER TABLE series_frames ADD COLUMN border TEXT DEFAULT ''")
+    ecols = {r[1] for r in c.execute("PRAGMA table_info(edit_events)").fetchall()}
+    for col, decl in (("first_ts", "REAL"), ("saves", "INTEGER DEFAULT 1"), ("before", "TEXT")):
+        if col not in ecols:  # edit_events as first made on this branch
+            c.execute("ALTER TABLE edit_events ADD COLUMN %s %s" % (col, decl))
     jcols = {r[1] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
     if "attempts" not in jcols:  # how often a job was handed out (a taken job is handed out again after a while)
         c.execute("ALTER TABLE jobs ADD COLUMN attempts INTEGER DEFAULT 0")

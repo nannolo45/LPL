@@ -43,10 +43,12 @@ Docker runs on the UGREEN **DXP** models (not on the DH series). GitHub builds a
 1. Install **Docker** from the App Center if it isn't there yet.
 2. In **Files**, create the folder `docker/lightphotolibrary` on volume 1, and inside it an empty folder `data` (create it yourself: if Docker creates it, it belongs to root and LPL can't write into it).
 3. Docker → **Project** → **Create**. Name: `lightphotolibrary`. Storage path: select `docker/lightphotolibrary`.
-4. Paste the content of `docker-compose.yml` into the Compose configuration and edit the three marked lines:
+4. Paste the content of `docker-compose.yml` into the Compose configuration and edit the four marked lines:
    - `user:` your uid:gid from `id` (so the `.xmp` files belong to you, not to root)
    - `LPL_PASSWORD=` optional password
    - the photo folder, left of `:/photos` (e.g. `/volume1/Photos`; right-click the folder in Files → Properties shows its path)
+   - `TZ=` your time zone as Area/City (e.g. `Europe/Lisbon`). Without it the container runs in UTC, and a
+     photo's list of edits (which puts one device's saves of one day together) ends the day at UTC midnight.
 5. Make sure your user has **read & write** permission on the photo folder (Control Panel → Shared folders). LPL writes `.xmp` files next to the photos.
 6. Deploy. Then open `http://<nas-address>:8080`.
 

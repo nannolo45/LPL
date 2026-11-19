@@ -9,6 +9,8 @@ WEB_DIR        folder with the built web UI (served at /)
 LPL_MODE       "nas" (default: one photo folder, PHOTO_ROOT) or "local" (a PC's own library: several folders
                added in the web app, darktable opened directly, "Send to NAS")
 EXIFTOOL       path of the exiftool program (default: "exiftool" on the PATH)
+TZ             time zone, as Area/City (e.g. Europe/Lisbon): where a day ends for the list of edits (saves of one
+               device on one photo on one day are one entry). Unset: the system's local time (UTC in Docker).
 JOB_RETRY_SECONDS  a job an agent took but never reported done is handed to that agent again after this many
                seconds (default 1800 = 30 min; 0 = never, as before). Long enough for the longest normal job
                (an "edit" of many RAW files over a slow remote link, which the PC agent reports only when all are
@@ -36,6 +38,7 @@ class Config:
         self.mode = os.environ.get("LPL_MODE", "nas")
         self.exiftool = os.environ.get("EXIFTOOL", "exiftool")
         self.job_retry_seconds = int(os.environ.get("JOB_RETRY_SECONDS", "1800"))
+        self.tz = os.environ.get("TZ", "").strip()
         self.darktable = os.environ.get("LPL_DARKTABLE", "")
         self.dt_library = os.environ.get("LPL_DT_LIBRARY", "")
         self.bridge_dir = Path(os.environ.get("LPL_BRIDGE_DIR", str(self.data_dir / "bridge")))

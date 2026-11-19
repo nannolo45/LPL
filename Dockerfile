@@ -13,8 +13,9 @@ RUN npm run build
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     PHOTO_ROOT=/photos DATA_DIR=/data WEB_DIR=/app/web_dist PORT=8080
+# tzdata: the time zones, so TZ in docker-compose.yml works (slim images may come without them)
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libimage-exiftool-perl tini \
+ && apt-get install -y --no-install-recommends libimage-exiftool-perl tini tzdata \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY server/requirements.txt ./

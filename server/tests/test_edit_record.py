@@ -188,23 +188,23 @@ def edits_of(c, pid=3):
 def test_post_records_device_and_changes(fresh):
     c = fresh
     beat(c, PC)
-    post(c, real("nop.xmp"), agent=PC["id"])
-    beat(c, {**PC, "name": "Desktop renamed"})  # the name at the time of the edit is kept
+    beat(c, PHONE)
+    post(c, real("nop.xmp"), agent=PHONE["id"])
+    beat(c, {**PC, "name": "Desktop renamed"})
     post(c, real("exposure.xmp"), agent=PC["id"])
     ev = edits_of(c)
     assert len(ev) == 2
     newest, first = ev
     assert newest["source"] == "agent" and newest["agent_id"] == PC["id"] and newest["device"] == "Desktop renamed"
-    assert first["device"] == "Desktop" and first["device_os"] == "windows"
+    assert first["device"] == "Phone" and first["device_os"] == "android"
     assert first["changes"] is None  # nothing to compare the first XMP with
     assert [m["operation"] for m in newest["changes"]["added"]] == ["exposure"]
     assert newest["summary"] == "exposure"
     assert {m["operation"] for m in newest["modules"]} >= {"exposure", "flip"}
-    assert set(newest["modules"][0]) == {"operation", "name", "instance", "priority", "enabled", "label"}
-    assert newest["time"] >= first["time"]
+    assert set(newest["modules"][0]) == {"operation", "name", "instance", "priority", "enabled", "label", "auto"}
+    assert newest["time"] >= first["time"] and newest["saves"] == 1 and newest["first_time"] == newest["time"]
     d = c.get("/api/photos/3").json()
     assert d["last_edit"] == newest
-
 
 def test_post_from_the_phone_after_a_pc(fresh):
     c = fresh
@@ -212,12 +212,13 @@ def test_post_from_the_phone_after_a_pc(fresh):
     beat(c, PHONE)
     post(c, real("nop.xmp"), agent=PC["id"])
     post(c, with_history_end(real("exposure.xmp"), 8), agent=PHONE["id"])  # same modules: nothing changed
-    post(c, real("exposure.xmp"), agent=PHONE["id"])
     ev = edits_of(c)
-    assert [e["device"] for e in ev] == ["Phone", "Phone", "Desktop"]
-    assert ev[1]["summary"] == "no module changed"
-    assert ev[0]["summary"] == "exposure"
-
+    assert [e["device"] for e in ev] == ["Phone", "Desktop"]
+    assert ev[0]["summary"] == "no module changed"
+    post(c, real("exposure.xmp"), agent=PHONE["id"])  # same device, same day: the same entry
+    ev = edits_of(c)
+    assert [e["device"] for e in ev] == ["Phone", "Desktop"]
+    assert ev[0]["summary"] == "exposure" and ev[0]["saves"] == 2
 
 def test_old_agent_without_agent_parameter(fresh):
     c = fresh
@@ -243,12 +244,12 @@ def test_unknown_agent_id_is_kept(fresh):
 def test_xmp_without_history_is_recorded(fresh):
     c = fresh
     beat(c, PC)
-    post(c, real("exposure.xmp"), agent=PC["id"])
+    beat(c, PHONE)
+    post(c, real("exposure.xmp"), agent=PHONE["id"])
     post(c, without_history(real("exposure.xmp")), agent=PC["id"])  # history discarded in darktable
     e = edits_of(c)[0]
     assert e["modules"] == [] and len(e["changes"]["removed"]) == 9
     assert "exposure" in e["summary"]
-
 
 def touch_later(p: Path, data: bytes, dt: float = 5):
     p.write_bytes(data)
@@ -310,15 +311,17 @@ def test_files_this_needs_are_not_ignored():
     import shutil
     import subprocess
     repo = Path(__file__).resolve().parents[2]
-    paths = ["server/lpl/resources/module-names.json", "server/tests/fixtures/xmp/nop.xmp",
+    paths = ["server/lpl/resources/module-names.json", "server/lpl/resources/module-flags.json",
+             "server/tests/fixtures/module-flags.json", "server/tests/fixtures/xmp/nop.xmp",
              "server/tests/fixtures/schema-main-0f1139c.sql"]
     if shutil.which("git") and (repo / ".git").exists():
         r = subprocess.run(["git", "-C", str(repo), "check-ignore", "--no-index", *paths], capture_output=True, text=True)
         assert r.stdout.strip() == "", "ignored by git: " + r.stdout
     # .dockerignore: patterns match from the build context's root, a match on a folder excludes what is in it
     pats = [l.strip() for l in (repo / ".dockerignore").read_text().splitlines() if l.strip() and not l.startswith("#")]
-    p = paths[0].split("/")
-    for i in range(1, len(p) + 1):
-        part = "/".join(p[:i])
-        hit = [x for x in pats if not x.startswith("!") and fnmatch.fnmatchcase(part, x.replace("**/", "*/"))]
-        assert not hit, "%s excluded from the Docker image by %s" % (part, hit)
+    for path in paths[:2]:
+        p = path.split("/")
+        for i in range(1, len(p) + 1):
+            part = "/".join(p[:i])
+            hit = [x for x in pats if not x.startswith("!") and fnmatch.fnmatchcase(part, x.replace("**/", "*/"))]
+            assert not hit, "%s excluded from the Docker image by %s" % (part, hit)
