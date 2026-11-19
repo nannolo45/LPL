@@ -149,6 +149,19 @@ def photos_ids(body: Dict[str, Any] = Body(...)):
     return {"ids": [r["id"] for r in rows]}
 
 
+@app.post("/api/photos/position")
+def photos_position(body: Dict[str, Any] = Body(...)):
+    """Where a photo sits in a query's order (0-based), or -1 when it doesn't match."""
+    filters = body.get("filters") or {}
+    pid = int(body.get("id"))
+    where, args, join = query.build_where(filters)
+    order = query.build_order(body.get("sort") or [], body.get("seed") or 1, bool(filters.get("series")))
+    r = db.conn().execute(
+        "SELECT n FROM (SELECT p.id, ROW_NUMBER() OVER (ORDER BY %s) - 1 AS n FROM photos p%s WHERE %s) WHERE id=?" % (order, join, where),
+        args + [pid]).fetchone()
+    return {"index": r["n"] if r else -1}
+
+
 @app.post("/api/photos/get")
 def photos_get(body: Dict[str, Any] = Body(...)):
     return {"items": photo_dicts([int(i) for i in body.get("ids") or []][:2000])}
@@ -467,6 +480,31 @@ def tag_suggest(body: Dict[str, Any] = Body(...)):
         s = set(db.photo_tags(pid))
         have = s if have is None else have & s
     return {"tags": [r["path"] for r in rows if r["path"] not in (have or set())][:6]}
+
+
+# ---------------------------------------------------------------- user preferences kept on the server (shared by every PC)
+PREF_KEYS = {"shortcuts"}
+
+
+@app.get("/api/prefs/{key}")
+def pref_get(key: str):
+    if key not in PREF_KEYS:
+        raise HTTPException(404, "unknown preference")
+    try:
+        return {"value": json.loads(db.get_setting("pref." + key) or "null")}
+    except ValueError:
+        return {"value": None}
+
+
+@app.put("/api/prefs/{key}")
+def pref_set(key: str, body: Dict[str, Any] = Body(...)):
+    if key not in PREF_KEYS:
+        raise HTTPException(404, "unknown preference")
+    data = json.dumps(body.get("value"))
+    if len(data) > 100_000:
+        raise HTTPException(413, "too large")
+    db.set_setting("pref." + key, data)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- series + board

@@ -118,6 +118,7 @@ export const api = {
   query: (sort: SortLevel[], filters: Filters, offset: number, limit: number, seed: number) =>
     call<{ total: number; offset: number; items: Photo[] }>('POST', '/api/photos/query', { sort, filters, offset, limit, seed }),
   ids: (sort: SortLevel[], filters: Filters, seed: number) => call<{ ids: number[] }>('POST', '/api/photos/ids', { sort, filters, seed }),
+  position: (sort: SortLevel[], filters: Filters, seed: number, id: number) => call<{ index: number }>('POST', '/api/photos/position', { sort, filters, seed, id }),
   get: (ids: number[]) => call<{ items: Photo[] }>('POST', '/api/photos/get', { ids }),
   photo: (id: number) => call<Photo>('GET', `/api/photos/${id}`),
   meta: (body: Record<string, unknown>) => call<{ items: Photo[]; errors: string[] }>('POST', '/api/meta', body),
@@ -146,6 +147,8 @@ export const api = {
     call<{ series: { id: number; name: string }; frames: Frame[]; items: Photo[] }>('PUT', `/api/series/${id}/board`, frames ? { items, frames } : { items }),
   seriesAdd: (id: number, ids: number[]) => call<{ added: number }>('POST', `/api/series/${id}/items`, { ids }),
   seriesRemove: (id: number, ids: number[]) => call('POST', `/api/series/${id}/remove`, { ids }),
+  prefGet: (key: string) => call<{ value: unknown }>('GET', `/api/prefs/${key}`),
+  prefSet: (key: string, value: unknown) => call<{ ok: boolean }>('PUT', `/api/prefs/${key}`, { value }),
   agents: () => call<{ agents: Agent[]; server_time: number }>('GET', '/api/agents'),
   job: (kind: string, payload: Record<string, unknown>, agent_id?: string) => call<{ id: number; agent_id: string | null; message?: string }>('POST', '/api/jobs', { kind, payload, agent_id }),
   jobs: () => call<{ jobs: { id: number; agent_id: string | null; kind: string; payload: any; created: number; status: string }[] }>('GET', '/api/jobs'),

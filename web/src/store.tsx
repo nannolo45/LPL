@@ -44,6 +44,9 @@ export interface Store {
   toast: (m: string) => void; toastMsg: string
   viewer: number | null; setViewer: (id: number | null) => void
   boardSeries: number | null; setBoardSeries: (id: number | null) => void
+  /** Open the Library on a photo's folder, scrolled to it and selected. */
+  reveal: (id: number) => void
+  revealId: number | null; clearReveal: () => void
 }
 
 const Ctx = createContext<Store | null>(null)
@@ -86,6 +89,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [viewer, setViewer] = useState<number | null>(null)
   const [boardSeries, setBoardSeries] = useState<number | null>(null)
   const [sendIds, setSendIds] = useState<number[] | null>(null)
+  const [revealId, setRevealId] = useState<number | null>(null)
+  const [revealTick, setRevealTick] = useState(0)
+  const revealRef = useRef<number | null>(null)
   const reqId = useRef(0)
   const anchor = useRef<number | null>(null)
   const toastTimer = useRef<number>()
@@ -103,11 +109,25 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const reload = useCallback(() => {
     const id = ++reqId.current
     setLoading(true)
-    api.query(sort, filters, 0, PAGE, seed).then(r => {
-      if (id !== reqId.current) return
-      setItems(r.items); setTotal(r.total)
-    }).catch(e => toast(String(e.message || e))).finally(() => { if (id === reqId.current) setLoading(false) })
-  }, [sort, filters, seed, toast])
+    const want = revealRef.current
+    ;(async () => {
+      let need = PAGE
+      if (want != null) {  // load far enough to include the photo we're going to
+        const r = await api.position(sort, filters, seed, want)
+        if (r.index >= 0) need = Math.max(PAGE, r.index + 60)
+        else toast("That photo isn't in this view")
+      }
+      let got: Photo[] = [], total = 0
+      while (got.length < need) {
+        const r = await api.query(sort, filters, got.length, Math.min(2000, need - got.length), seed)
+        if (id !== reqId.current) return
+        got = got.concat(r.items); total = r.total
+        if (!r.items.length || got.length >= total) break
+      }
+      setItems(got); setTotal(total)
+      if (want != null && revealRef.current === want) { revealRef.current = null; setRevealId(want) }
+    })().catch(e => toast(String(e.message || e))).finally(() => { if (id === reqId.current) setLoading(false) })
+  }, [sort, filters, seed, toast, revealTick])
 
   useEffect(() => { const t = window.setTimeout(reload, 120); return () => window.clearTimeout(t) }, [reload])
 
@@ -202,6 +222,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     } catch (e: any) { toast(e.message || String(e)) }
   }, [agents, toast, status])
 
+  const reveal = useCallback((pid: number) => {
+    api.photo(pid).then(p => {
+      revealRef.current = pid
+      setFilters(f => ({ ...DEFAULTS.filters, show_hidden: f.show_hidden, folder: p.folder }))
+      setSel([pid])
+      setView(v => (v === 'list' ? 'list' : 'grid'))
+      setRevealTick(t => t + 1)
+      toast(`Showing ${p.filename} in ${p.folder || 'its folder'}`)
+    }).catch(e => toast(e.message))
+  }, [toast])
+
   const patchFilters = useCallback((p: Partial<Filters>) => setFilters(f => ({ ...f, ...p })), [])
   const clearFilters = useCallback(() => setFilters(DEFAULTS.filters), [])
 
@@ -210,6 +241,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     thumb, setThumb, seed, reshuffle: () => setSeed(s => s + 1), items, total, loading, loadMore, reload,
     sel, setSel, clickSelect, selPhotos, selectAll, mergePhotos, meta, tags, reloadTags, facets, series, reloadSeries,
     agents, status, isLocal: status?.mode === 'local', sendIds, setSendIds, editInDarktable, toast, toastMsg, viewer, setViewer, boardSeries, setBoardSeries,
+    reveal, revealId, clearReveal: () => setRevealId(null),
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

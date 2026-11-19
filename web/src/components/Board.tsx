@@ -1,12 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api, BoardArrow, BoardEnd, BoardNote, BoardShape, Frame, LastAdd, Photo, thumbUrl } from '../api'
 import { useStore } from '../store'
 import { AddPhotosDialog } from './AddPhotos'
+import { actionFor, comboOf, keysOf, typingIn, useShortcutsVersion } from '../shortcuts'
 
 type Item = Photo & { x: number; y: number }
 type Tool = 'select' | 'note' | 'arrow'
 type Rect = { x: number; y: number; w: number; h: number }
 type Pt = { x: number; y: number }
+
+// tool icons: a mouse pointer, a sticky note with a folded corner, a connector between two dots
+const TOOL_ICONS = {
+  select: <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 2.5l13.5 11.2-6.1.6 3.6 7.1-2.6 1.3-3.6-7.2-4.8 3.9z" /></svg>,
+  note: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true"><path d="M4 4h16v10l-6 6H4z" /><path d="M14 20v-6h6" /><path d="M8 9h8M8 12.5h4" strokeLinecap="round" /></svg>,
+  arrow: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="5" cy="19" r="2.2" fill="currentColor" stroke="none" /><path d="M6.8 17.2L18 6" /><path d="M11.5 5.5H18.5V12.5" strokeLinejoin="round" /></svg>,
+}
 
 export const NOTE_COLORS = ['#f5d76e', '#f6b26b', '#f4a6c0', '#b9a6f0', '#9cc8f0', '#a8dba0', '#d8d8dc']
 
@@ -348,28 +356,65 @@ export function BoardView() {
     setShapes(prev => prev.map(x => (x.kind === 'note' && ks.has(x.key) ? { ...x, color: c } : x)))
   }
 
-  // keys: V select, N note, A arrow, Space (hold) to pan, Delete, Esc, Ctrl+A
+  // keys (changeable in the Shortcuts dialog): tools, remove, hold-to-pan, zoom, select all
+  useShortcutsVersion()
   useEffect(() => {
-    const typing = (t: EventTarget | null) => { const el = t as HTMLElement; return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable) }
     const down = (e: KeyboardEvent) => {
-      if (adding || typing(e.target)) return
-      if (e.key === ' ') { e.preventDefault(); setSpace(true); return }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); s.setSel(items.map(i => i.id)); setSelShapes(shapes.map(x => x.key)); return }
-      if (e.ctrlKey || e.metaKey || e.altKey) return
-      const k = e.key.toLowerCase()
-      if (k === 'v') setTool('select')
-      else if (k === 'n') setTool('note')
-      else if (k === 'a') setTool('arrow')
-      else if (e.key === 'Escape') { setTool('select'); setSelShapes([]) }
-      else if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selShapes.length) { e.preventDefault(); deleteShapes(selShapes) }
-        else if (s.sel.some(id => byPhoto.has(id))) s.toast('To take photos off the board, use “Remove from board”.')
+      if (adding || s.viewer != null || typingIn(e.target)) return
+      const a = actionFor(e, ['board', 'photos'])
+      if (a === 'pan') { e.preventDefault(); setSpace(true); return }
+      if (a === 'selectAll') { e.preventDefault(); s.setSel(items.map(i => i.id)); setSelShapes(shapes.map(x => x.key)); return }
+      if (a === 'toolSelect') setTool('select')
+      else if (a === 'toolNote') setTool('note')
+      else if (a === 'toolArrow') setTool('arrow')
+      else if (a === 'zoomIn') { e.preventDefault(); zoomTo(zoomRef.current + .1) }
+      else if (a === 'zoomOut') { e.preventDefault(); zoomTo(zoomRef.current - .1) }
+      else if (a === 'zoomReset') { e.preventDefault(); zoomTo(1) }
+      else if (a === 'deselect') { setTool('select'); setSelShapes([]) }
+      else if (a === 'boardDelete') {
+        if (!selShapes.length && !s.sel.some(id => byPhoto.has(id))) return
+        e.preventDefault(); removeSel()
       }
     }
-    const up = (e: KeyboardEvent) => { if (e.key === ' ') setSpace(false) }
+    const up = (e: KeyboardEvent) => { if (keysOf('pan').includes(comboOf(e)) || e.key === ' ') setSpace(false) }
     window.addEventListener('keydown', down); window.addEventListener('keyup', up)
     return () => { window.removeEventListener('keydown', down); window.removeEventListener('keyup', up) }
   })
+
+  // zoom: Ctrl + wheel (or a trackpad pinch) zooms the board, keeping the point under the pointer still.
+  // React's wheel handler can't stop the browser zooming the whole page, so this listener is a real one.
+  const zoomRef = useRef(zoom)
+  zoomRef.current = zoom
+  const keepAt = useRef<{ bx: number; by: number; vx: number; vy: number } | null>(null)
+  const zoomTo = (z: number, at?: { clientX: number; clientY: number }) => {
+    const nz = Math.min(2, Math.max(.2, +z.toFixed(2)))
+    const w = wrap.current
+    if (w) {
+      const r = w.getBoundingClientRect()
+      const vx = at ? at.clientX - r.left : w.clientWidth / 2, vy = at ? at.clientY - r.top : w.clientHeight / 2
+      keepAt.current = { bx: (w.scrollLeft + vx) / zoomRef.current, by: (w.scrollTop + vy) / zoomRef.current, vx, vy }
+    }
+    setZoom(nz)
+  }
+  useLayoutEffect(() => {
+    const k = keepAt.current, w = wrap.current
+    if (!k || !w) return
+    keepAt.current = null
+    w.scrollLeft = k.bx * zoom - k.vx
+    w.scrollTop = k.by * zoom - k.vy
+  }, [zoom])
+  useEffect(() => {
+    const w = wrap.current
+    if (!w) return
+    const h = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      const step = Math.max(-0.25, Math.min(0.25, -e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.002)))
+      zoomTo(zoomRef.current * (1 + step), e)
+    }
+    w.addEventListener('wheel', h, { passive: false })
+    return () => w.removeEventListener('wheel', h)
+  }, [sid, items.length > 0])
 
   const addFrame = (maybe: boolean) => {
     const maxY = Math.max(0, ...frames.map(f => f.y + f.h), ...items.map(i => i.y + 120))
@@ -393,6 +438,7 @@ export function BoardView() {
     if (!ids.length || sid == null) return
     await api.seriesRemove(sid, ids)
     setItems(prev => prev.filter(i => !ids.includes(i.id))); s.setSel([]); s.reloadSeries(); s.reloadTags()
+    s.toast(`${ids.length} photo${ids.length > 1 ? 's' : ''} taken off “${name}” (the files are untouched)`)
   }
   const newSeries = async () => {
     const n = window.prompt('Name of the new series')
@@ -419,7 +465,12 @@ export function BoardView() {
     if (r) save(r.items, r.frames, false)  // stores the new reading order
     s.reloadSeries(); s.reloadTags()
   }
-  const showInLibrary = () => { if (sid == null) return; s.patchFilters({ series: sid, folder: null, month: null, tag: null }); s.setSort([{ f: 'custom', d: 'asc' }]); s.setView('grid') }
+  // with a photo selected: its folder in the Library, scrolled to it; otherwise the whole series in board order
+  const showInLibrary = () => {
+    if (sid == null) return
+    if (selPhotosHere.length) { s.reveal(selPhotosHere[0]); return }
+    s.patchFilters({ series: sid, folder: null, folders: [], month: null, tag: null }); s.setSort([{ f: 'custom', d: 'asc' }]); s.setView('grid')
+  }
 
   const W = Math.max(1400, ...frames.map(f => f.x + f.w + 200), ...items.map(i => i.x + 400), ...notes.map(n => n.x + n.w + 300))
   const H = Math.max(900, ...frames.map(f => f.y + f.h + 200), ...items.map(i => i.y + 300), ...notes.map(n => n.y + n.h + 300))
@@ -442,7 +493,7 @@ export function BoardView() {
           <button className="btn dashed" style={{ margin: '6px 4px' }} onClick={newSeries}>+ New series{s.sel.length ? ` from ${s.sel.length} selected` : ''}</button>
           <div className="small muted" style={{ padding: 8, lineHeight: 1.5 }}>
             “+ Add photos” brings in whole folders or everything matching a rating, label, tag or date. Frames are chapters; photos in a Maybe pile are not part of the series.
-            <br /><br />Drag on empty space to select several things (Shift adds). Hold Space or the middle mouse button and drag to move around. Keys: V select, N note, A arrow, Delete removes notes and arrows. Double-click empty space for a note, an arrow to write on it.
+            <br /><br />Drag on empty space to select several things (Shift adds). Hold Space or the middle mouse button and drag to move around. Keys: V select, N note, A arrow, Delete takes what's selected off the board (change them with the keyboard button at the top). Double-click empty space for a note, an arrow to write on it.
           </div>
         </div>
       )}
@@ -462,13 +513,12 @@ export function BoardView() {
               <button className="btn primary" onClick={() => setAdding(true)} title="Add photos from folders, or by rating, label, tag and date">+ Add photos</button>
               <button className="btn" onClick={() => addFrame(false)}>+ Frame</button>
               <button className="btn" onClick={() => addFrame(true)}>+ Maybe pile</button>
-              <button className="btn" onClick={showInLibrary}>Show in library</button>
+              <button className="btn" onClick={showInLibrary} title={selPhotosHere.length ? "Open the selected photo's folder in the Library, scrolled to it" : "Show the whole series in the Library, in board order"}>Show in library</button>
               <button className="btn" onClick={rename}>Rename</button>
               <button className="btn danger" onClick={del}>Delete</button>
             </div>
             <div className="board-area">
-              <div className="canvas-wrap" ref={wrap} style={{ cursor: canvasCursor }}
-                onWheel={e => { if (e.ctrlKey) { e.preventDefault(); setZoom(z => Math.min(2, Math.max(.3, +(z - Math.sign(e.deltaY) * .1).toFixed(2)))) } }}>
+              <div className="canvas-wrap" ref={wrap} style={{ cursor: canvasCursor }}>
                 <div className="canvas" data-bg="1" style={{ width: W * zoom, height: H * zoom }} onPointerDown={onBgDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
                   onDoubleClick={e => { if (tool === 'select' && (e.target as HTMLElement).dataset?.bg) addNote(toBoard(e)) }}>
                   <div ref={inner} data-bg="1" style={{ transform: `scale(${zoom})`, transformOrigin: '0 0', width: W, height: H, position: 'absolute', left: 0, top: 0 }}>
@@ -532,22 +582,23 @@ export function BoardView() {
                 </div>
               </div>
               <div className="btools" role="toolbar" aria-label="Board tools">
-                {([['select', 'Select and move (V)', '↖'], ['note', 'Note (N): click where it goes', '▭'], ['arrow', 'Arrow (A): drag from one thing to another', '↗']] as const).map(([t, title, icon]) => (
-                  <button key={t} className={tool === t ? 'on' : ''} title={title} aria-label={title} aria-pressed={tool === t} onClick={() => setTool(t)}>{icon}</button>
-                ))}
+                {([['select', 'toolSelect', 'Select and move'], ['note', 'toolNote', 'Note: click where it goes'], ['arrow', 'toolArrow', 'Arrow: drag from one thing to another']] as const).map(([t, act, label]) => {
+                  const title = `${label} (${keysOf(act).join(', ') || 'no key'})`
+                  return <button key={t} className={tool === t ? 'on' : ''} title={title} aria-label={title} aria-pressed={tool === t} onClick={() => setTool(t)}>{TOOL_ICONS[t]}</button>
+                })}
               </div>
               {(selPhotosHere.length > 0 || nSh > 0) && (
                 <div className="bselbar">
                   <span className="small soft">{[selPhotosHere.length ? `${selPhotosHere.length} photo${selPhotosHere.length > 1 ? 's' : ''}` : '', nSh ? `${nSh} note${nSh > 1 ? 's' : ''} or arrow${nSh > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ')}</span>
                   {selNotes.length > 0 && NOTE_COLORS.map(c => <button key={c} className="swatch" style={{ background: c }} aria-label="Note color" onClick={() => colorNotes(c)} />)}
                   {selPhotosHere.length > 0 && <button className="btn" onClick={() => s.editInDarktable(selPhotosHere)}>Edit in darktable</button>}
-                  <button className="btn" onClick={removeSel}>{selPhotosHere.length ? 'Remove from board' : 'Delete'}</button>
+                  <button className="btn" onClick={removeSel} title={keysOf('boardDelete').join(', ')}>{selPhotosHere.length ? 'Remove from board' : 'Delete'}</button>
                 </div>
               )}
               <div className="bzoom">
-                <button onClick={() => setZoom(z => Math.max(.3, +(z - .1).toFixed(2)))} aria-label="Zoom out">−</button>
-                <span className="small muted">{Math.round(zoom * 100)}%</span>
-                <button onClick={() => setZoom(z => Math.min(2, +(z + .1).toFixed(2)))} aria-label="Zoom in">+</button>
+                <button onClick={() => zoomTo(zoom - .1)} aria-label="Zoom out" title={'Zoom out (' + keysOf('zoomOut').join(', ') + ', or Ctrl + wheel)'}>−</button>
+                <button className="small muted zpct" onClick={() => zoomTo(1)} title="Back to 100%">{Math.round(zoom * 100)}%</button>
+                <button onClick={() => zoomTo(zoom + .1)} aria-label="Zoom in" title={'Zoom in (' + keysOf('zoomIn').join(', ') + ', or Ctrl + wheel)'}>+</button>
               </div>
             </div>
             <div className="seqstrip">

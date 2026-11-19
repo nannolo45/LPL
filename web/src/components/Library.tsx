@@ -66,8 +66,27 @@ export function ContextBar() {
   )
 }
 
+// after “Show in library”: scroll the photo into the middle of the view and make it blink once
+function useReveal() {
+  const s = useStore()
+  useEffect(() => {
+    if (s.revealId == null) return
+    const id = s.revealId
+    const t = window.setTimeout(() => {
+      const el = document.querySelector(`[data-pid="${id}"]`) as HTMLElement | null
+      if (el) {
+        el.scrollIntoView({ block: 'center' })
+        el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash')
+      }
+      s.clearReveal()
+    }, 60)
+    return () => window.clearTimeout(t)
+  }, [s.revealId, s.items])
+}
+
 export function GridView() {
   const s = useStore()
+  useReveal()
   const { groups, canGroup } = useGroups(s.items)
   const capFields = (canGroup ? s.sort.slice(1, 3) : s.sort.slice(0, 2)).map(l => l.f)
   const selSet = new Set(s.sel)
@@ -78,7 +97,7 @@ export function GridView() {
           {canGroup && <div className="group-h"><span className="display">{g.label}</span><span className="small muted">{g.items.length}{g.items.length === 1 ? ' photo' : ' photos'}</span></div>}
           <div className="grid">
             {g.items.map(p => (
-              <div key={p.id} className={'tile' + (selSet.has(p.id) ? ' sel' : '') + (p.rating < 0 ? ' rej' : '')}>
+              <div key={p.id} data-pid={p.id} className={'tile' + (selSet.has(p.id) ? ' sel' : '') + (p.rating < 0 ? ' rej' : '')}>
                 <button className="img" onClick={e => s.clickSelect(p.id, e)} onDoubleClick={() => s.setViewer(p.id)} aria-label={p.filename}>
                   <Thumb p={p} />
                   <span className="badges">{p.labels.map(l => <span key={l} style={{ background: LABELS[l].c }} />)}</span>
@@ -103,6 +122,7 @@ const COLS: [string, string][] = [['name', 'filename'], ['taken', 'taken'], ['pa
 
 export function ListView() {
   const s = useStore()
+  useReveal()
   const { groups, canGroup } = useGroups(s.items)
   const selSet = new Set(s.sel)
   const sortBy = (f: string) => {
@@ -133,7 +153,7 @@ export function ListView() {
             {groups.map((g, gi) => [
               canGroup ? <tr className="gh" key={'g' + gi}><td colSpan={COLS.length + 1}>{g.label} <span className="muted">· {g.items.length}</span></td></tr> : null,
               ...g.items.map(p => (
-                <tr key={p.id} className={selSet.has(p.id) ? 'sel' : ''} onClick={e => s.clickSelect(p.id, e)} onDoubleClick={() => s.setViewer(p.id)} style={{ cursor: 'pointer', opacity: p.rating < 0 ? .5 : 1 }}>
+                <tr key={p.id} data-pid={p.id} className={selSet.has(p.id) ? 'sel' : ''} onClick={e => s.clickSelect(p.id, e)} onDoubleClick={() => s.setViewer(p.id)} style={{ cursor: 'pointer', opacity: p.rating < 0 ? .5 : 1 }}>
                   <td><Thumb p={p} /></td>
                   <td>{p.filename}</td>
                   <td>{p.taken ? p.taken.replace('T', ' ').slice(0, 16) : ''}</td>

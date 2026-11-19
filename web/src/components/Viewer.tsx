@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, Photo } from '../api'
 import { useStore } from '../store'
+import { actionFor, typingIn } from '../shortcuts'
 import { exifLine, fmtDay, leaf } from '../fields'
 import { RatingLabels } from './Inspector'
 import { Thumb } from './Library'
@@ -19,12 +20,11 @@ export function Viewer() {
   }
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (id == null) return  // closed: leave the keys alone (Space used to be swallowed everywhere, even while typing)
-      const t = e.target as HTMLElement
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return
-      if (e.key === 'Escape') s.setViewer(null)
-      else if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); go(1) }
-      else if (e.key === 'ArrowLeft') go(-1)
+      if (id == null || typingIn(e.target)) return  // closed: leave the keys alone
+      const a = actionFor(e, ['viewer'])
+      if (a === 'close') s.setViewer(null)
+      else if (a === 'next') { e.preventDefault(); go(1) }
+      else if (a === 'prev') { e.preventDefault(); go(-1) }
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)

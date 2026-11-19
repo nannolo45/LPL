@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, Photo } from '../api'
 import { useStore } from '../store'
+import { keysOf, useShortcutsVersion } from '../shortcuts'
 import { exifLine, fmtDay, LABELS, leaf } from '../fields'
 import { Thumb } from './Library'
 
@@ -220,6 +221,7 @@ export function TagPanel({ photos }: { photos: Photo[] }) {
 
 export function Inspector() {
   const s = useStore()
+  useShortcutsVersion()
   const photos = s.selPhotos
   const one = photos.length === 1 ? photos[0] : null
   return (
@@ -227,7 +229,7 @@ export function Inspector() {
       {!photos.length && (
         <div className="card soft" style={{ lineHeight: 1.5 }}>
           Click a photo to select it. Ctrl-click adds, Shift-click selects a range. Double-click opens it large.
-          <br /><br />Keys: 0–5 rating, R reject, F1–F5 labels, E edit in darktable.
+          <br /><br />Keys: {keysOf('rate0')[0] ?? '–'}–{keysOf('rate5')[0] ?? '–'} rating, {keysOf('reject')[0] ?? '–'} reject, {keysOf('label0')[0] ?? '–'}–{keysOf('label4')[0] ?? '–'} labels, {keysOf('edit')[0] ?? '–'} edit in darktable. Change them with the keyboard button at the top.
         </div>
       )}
       {one && (
@@ -235,7 +237,11 @@ export function Inspector() {
           <Thumb p={one} size="l" className="preview" />
           <div className="col" style={{ gap: 2 }}>
             <b style={{ fontSize: 15 }} className="ellipsis">{one.filename}</b>
-            <span className="small muted">{one.folder || '/'}</span>
+            <div className="row" style={{ gap: 6 }}>
+              <span className="small muted ellipsis grow">{one.folder || '/'}</span>
+              {!(s.filters.folder === one.folder && (s.view === 'grid' || s.view === 'list')) &&
+                <button className="btn ghost tiny" title="Open its folder in the Library, scrolled to this photo" onClick={() => s.reveal(one.id)}>Show in folder</button>}
+            </div>
           </div>
           <div className="kv">
             <span>Taken</span><span>{one.taken ? fmtDay(one.taken) + ' ' + one.taken.slice(11, 16) : '—'}</span>

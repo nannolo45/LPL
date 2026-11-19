@@ -10,6 +10,8 @@ import { WorkView } from './components/Work'
 import { SendView } from './components/Send'
 import { Viewer } from './components/Viewer'
 import { MobileApp } from './components/Mobile'
+import { ShortcutsDialog } from './components/Shortcuts'
+import { actionFor, typingIn, useShortcutsVersion } from './shortcuts'
 
 const BASE: [View, string][] = [['grid', 'Grid'], ['list', 'List'], ['folders', 'Folders'], ['timeline', 'Timeline'], ['board', 'Board']]
 
@@ -17,6 +19,7 @@ function TopBar() {
   const s = useStore()
   const online = s.agents.filter(a => a.online)
   const ws = s.agents.reduce((n, a) => n + (a.state?.working_set?.length || 0), 0)
+  const [keysOpen, setKeysOpen] = useState(false)
   const VIEWS: [View, string][] = [...BASE, s.isLocal ? ['send', 'Send to NAS'] : ['work', 'Working set']]
   return (
     <div className="topbar">
@@ -34,6 +37,10 @@ function TopBar() {
         <input aria-label="Search" placeholder="Search filename, folder, tag, lens, camera…" value={s.filters.q || ''} onChange={e => s.patchFilters({ q: e.target.value })} />
       </label>
       <div className="grow" />
+      <button className="btn ghost" onClick={() => setKeysOpen(true)} title="Keyboard shortcuts: see and change them" aria-label="Keyboard shortcuts">
+        <svg width="18" height="14" viewBox="0 0 24 18" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true" style={{ verticalAlign: '-2px' }}><rect x="1" y="1" width="22" height="16" rx="3" /><path d="M5 6h1M9 6h1M13 6h1M17 6h2M5 10h1M9 10h1M13 10h1M17 10h2M7 13.5h10" strokeLinecap="round" /></svg>
+      </button>
+      {keysOpen && <ShortcutsDialog onClose={() => setKeysOpen(false)} />}
       {s.isLocal ? null : online.length ? <span className="pill-ok" title={online.map(a => a.name).join(', ')}><i />{online.length === 1 ? online[0].name : `${online.length} PCs`} ready</span>
         : <span className="pill-off" title="Start the LightPhotoLibrary agent on your PC"><i />no PC agent</span>}
     </div>
@@ -42,21 +49,23 @@ function TopBar() {
 
 function useShortcuts() {
   const s = useStore()
+  useShortcutsVersion()
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return
+      if (typingIn(e.target)) return
       if (!['grid', 'list', 'board'].includes(s.view) && s.viewer == null) return
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { if (s.view === 'board') return; e.preventDefault(); s.selectAll(); return }
-      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const a = actionFor(e, ['photos'])
+      if (!a) return
+      if (s.viewer != null && (a === 'view' || a === 'deselect' || a === 'selectAll')) return  // the large view has its own keys
+      if (a === 'selectAll') { if (s.view === 'board') return; e.preventDefault(); s.selectAll(); return }  // the board selects its own things
       if (!s.sel.length) return
-      if (/^[0-5]$/.test(e.key)) { s.meta({ rating: +e.key }); return }
-      if (e.key.toLowerCase() === 'r') { s.meta({ rating: -1 }); return }
-      const fk = ['F1', 'F2', 'F3', 'F4', 'F5'].indexOf(e.key)
-      if (fk >= 0) { e.preventDefault(); s.meta({ toggle_label: fk }); return }
-      if (e.key.toLowerCase() === 'e') { s.editInDarktable(s.sel); return }
-      if (e.key === 'Escape' && s.viewer == null) s.setSel([])
-      if (e.key === 'Enter' && s.viewer == null) s.setViewer(s.sel[0])
+      e.preventDefault()
+      if (a.startsWith('rate')) s.meta({ rating: +a.slice(4) })
+      else if (a === 'reject') s.meta({ rating: -1 })
+      else if (a.startsWith('label')) s.meta({ toggle_label: +a.slice(5) })
+      else if (a === 'edit') s.editInDarktable(s.sel)
+      else if (a === 'deselect') s.setSel([])
+      else if (a === 'view') s.setViewer(s.sel[0])
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
