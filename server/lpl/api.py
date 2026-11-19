@@ -499,7 +499,7 @@ def tag_suggest(body: Dict[str, Any] = Body(...)):
 
 
 # ---------------------------------------------------------------- user preferences kept on the server (shared by every PC)
-PREF_KEYS = {"shortcuts"}
+PREF_KEYS = {"shortcuts", "settings"}
 
 
 @app.get("/api/prefs/{key}")

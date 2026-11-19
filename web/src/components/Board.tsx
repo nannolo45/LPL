@@ -3,6 +3,7 @@ import { api, BoardArrow, BoardEnd, BoardNote, BoardShape, Frame, LastAdd, Photo
 import { useStore } from '../store'
 import { AddPhotosDialog } from './AddPhotos'
 import { actionFor, comboOf, keysOf, typingIn, useShortcutsVersion } from '../shortcuts'
+import { getSettings, useSettings } from '../settings'
 
 type Item = Photo & { x: number; y: number }
 type Tool = 'select' | 'note' | 'arrow'
@@ -87,7 +88,9 @@ export function BoardView() {
   const [ghost, setGhost] = useState<{ a: Pt; b: Pt } | null>(null)
   const [space, setSpace] = useState(false)
   const [name, setName] = useState('')
-  const [zoom, setZoom] = useState(1)
+  const opt = useSettings()
+  const [zoom, setZoom] = useState(() => { const st = getSettings(); return (s.isMobile ? st.boardZoomPhone : st.boardZoom) / 100 })
+  const sn = (v: number) => (opt.boardSnap ? Math.round(v / 20) * 20 : v)  // snap to the grid when that's on
   const [lastAdd, setLastAdd] = useState<LastAdd | null>(null)
   const [adding, setAdding] = useState(false)
   const drag = useRef<Drag | null>(null)
@@ -221,7 +224,8 @@ export function BoardView() {
   // on a touch screen, dragging empty space moves around (there's no Space key); on desktop it draws a selection box
   // moving around: drag with the right or middle mouse button (anywhere), or hold Space and drag;
   // on a touch screen, one finger on empty space moves around and two fingers pinch to zoom
-  const panWanted = (e: React.PointerEvent, bg = false) => e.button === 1 || e.button === 2 || space || (bg && e.pointerType === 'touch' && tool === 'select')
+  const panWanted = (e: React.PointerEvent, bg = false) => (e.button === 1 && opt.boardPan !== 'right') || (e.button === 2 && opt.boardPan !== 'middle') || space
+    || (bg && e.pointerType === 'touch' && tool === 'select' && opt.boardTouch === 'pan')
   const touches = useRef(new Map<number, Pt>())
   const pinchInfo = () => {
     const [a, b] = [...touches.current.values()]
@@ -282,8 +286,14 @@ export function BoardView() {
   }
 
   // pressing on a photo, a note or an arrow
+  const lastTap = useRef<{ id: number; t: number } | null>(null)
   const onObjDown = (e: React.PointerEvent, obj: { photo?: number; shape?: string }) => {
     if (editing && obj.shape === editing) return  // typing in this note
+    if (e.pointerType === 'touch' && obj.photo != null && tool === 'select') {  // touch screens don't send double-clicks reliably
+      const now = Date.now(), lt = lastTap.current
+      lastTap.current = { id: obj.photo, t: now }
+      if (lt && lt.id === obj.photo && now - lt.t < 320) { e.stopPropagation(); e.preventDefault(); lastTap.current = null; photoDouble(obj.photo); return }
+    }
     e.stopPropagation()
     if (panWanted(e)) { startPan(e); return }
     e.preventDefault()
@@ -348,11 +358,11 @@ export function BoardView() {
   }
 
   const applyMove = (o: MoveOrig, dx: number, dy: number) => {
-    if (o.photos.size) setItems(prev => prev.map(it => { const p = o.photos.get(it.id); return p ? { ...it, x: Math.max(0, p.x + dx), y: Math.max(0, p.y + dy) } : it }))
+    if (o.photos.size) setItems(prev => prev.map(it => { const p = o.photos.get(it.id); return p ? { ...it, x: Math.max(0, sn(p.x + dx)), y: Math.max(0, sn(p.y + dy)) } : it }))
     if (o.notes.size || o.ends.length) {
       const ends = new Map(o.ends.map(x => [x.key + x.end, x]))
       setShapes(prev => prev.map(x => {
-        if (x.kind === 'note') { const p = o.notes.get(x.key); return p ? { ...x, x: Math.max(0, p.x + dx), y: Math.max(0, p.y + dy) } : x }
+        if (x.kind === 'note') { const p = o.notes.get(x.key); return p ? { ...x, x: Math.max(0, sn(p.x + dx)), y: Math.max(0, sn(p.y + dy)) } : x }
         const ea = ends.get(x.key + 'a'), eb = ends.get(x.key + 'b')
         if (!ea && !eb) return x
         return { ...x, a: ea ? { ...x.a, x: ea.x + dx, y: ea.y + dy } : x.a, b: eb ? { ...x.b, x: eb.x + dx, y: eb.y + dy } : x.b }
@@ -389,11 +399,11 @@ export function BoardView() {
       applyMove(d, dx, dy)
     } else if (d.kind === 'frame') {
       applyMove(d, dx, dy)
-      setFrames(prev => prev.map((f, i) => (i === d.fi ? { ...f, x: Math.max(0, d.of.x + dx), y: Math.max(0, d.of.y + dy) } : f)))
+      setFrames(prev => prev.map((f, i) => (i === d.fi ? { ...f, x: Math.max(0, sn(d.of.x + dx)), y: Math.max(0, sn(d.of.y + dy)) } : f)))
     } else if (d.kind === 'resize') {
-      setFrames(prev => prev.map((f, i) => (i === d.fi ? { ...f, w: Math.max(160, d.of.w + dx), h: Math.max(120, d.of.h + dy) } : f)))
+      setFrames(prev => prev.map((f, i) => (i === d.fi ? { ...f, w: Math.max(160, sn(d.of.w + dx)), h: Math.max(120, sn(d.of.h + dy)) } : f)))
     } else if (d.kind === 'note-resize') {
-      setShapes(prev => prev.map(x => (x.kind === 'note' && x.key === d.key ? { ...x, w: Math.max(80, d.ow + dx), h: Math.max(50, d.oh + dy) } : x)))
+      setShapes(prev => prev.map(x => (x.kind === 'note' && x.key === d.key ? { ...x, w: Math.max(80, sn(d.ow + dx)), h: Math.max(50, sn(d.oh + dy)) } : x)))
     }
   }
 
@@ -428,7 +438,7 @@ export function BoardView() {
 
   const addNote = (p: Pt, text = '') => {
     const key = newKey()
-    const n: BoardNote = { key, kind: 'note', x: Math.max(0, Math.round(p.x - 90)), y: Math.max(0, Math.round(p.y - 50)), w: 180, h: 110, text, color: NOTE_COLORS[0] }
+    const n: BoardNote = { key, kind: 'note', x: Math.max(0, Math.round(p.x - 90)), y: Math.max(0, Math.round(p.y - 50)), w: 180, h: 110, text, color: opt.boardNoteColor || NOTE_COLORS[0] }
     checkpoint()
     newNote.current = key; editCp.current = true
     setShapes(prev => [...prev, n])
@@ -525,7 +535,10 @@ export function BoardView() {
     const w = wrap.current
     if (!w) return
     const h = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return
+      const zoomWheel = getSettings().boardWheel === 'zoom'
+      if (zoomWheel && (e.ctrlKey || e.metaKey)) { e.preventDefault(); w.scrollTop += e.deltaY; return }  // zoom mode: Ctrl + wheel scrolls
+      if (zoomWheel && e.shiftKey) return  // sideways, as the browser does it
+      if (!zoomWheel && !e.ctrlKey && !e.metaKey) return
       e.preventDefault()
       const step = Math.max(-0.25, Math.min(0.25, -e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.002)))
       zoomTo(zoomRef.current * (1 + step), e)
@@ -552,6 +565,14 @@ export function BoardView() {
     s.toast(`Frame “${frames[fi].label}” removed; its photos stay on the board (${keysOf('undo')[0] || 'Undo'} brings it back)`)
   }
   const selPhotosHere = s.sel.filter(id => byPhoto.has(id))
+  const photoDouble = (id: number) => {
+    const how = opt.boardPhotoDouble
+    if (how === 'darktable') { s.editInDarktable([id]); return }
+    const list = [...order, ...shown.filter(it => !pos.has(it.id))]
+    const k = list.findIndex(it => it.id === id)
+    if ((how === 'fullscreen' || s.isMobile) && k >= 0) s.setFullscreen({ list, index: k })  // the phone has no large view
+    else s.setViewer(id)
+  }
   const toggleHidden = async (ids = selPhotosHere) => {
     if (!ids.length) return
     const hide = !ids.every(id => byPhoto.get(id)?.hidden)
@@ -625,7 +646,7 @@ export function BoardView() {
           <button className="btn dashed" style={{ margin: '6px 4px' }} onClick={newSeries}>+ New series{s.sel.length ? ` from ${s.sel.length} selected` : ''}</button>
           <div className="small muted" style={{ padding: 8, lineHeight: 1.5 }}>
             “+ Add photos” brings in whole folders or everything matching a rating, label, tag or date. Frames are chapters; photos in a Maybe pile are not part of the series.
-            <br /><br />Drag on empty space to select several things (Shift adds). Drag with the right (or middle) mouse button, or hold Space and drag, to move around; on a touch screen drag empty space with one finger and pinch with two to zoom. Keys: V select, N note, A arrow, Delete takes what's selected off the board (change them with the keyboard button at the top). Double-click empty space for a note, an arrow to write on it.
+            <br /><br />Drag on empty space to select several things (Shift adds). Drag with the right or middle mouse button, or hold Space and drag, to move around; on a touch screen drag empty space with one finger and pinch with two to zoom. How the mouse, wheel and double-click behave is in Settings (⚙ at the top). Keys: V select, N note, A arrow, Delete takes what's selected off the board (change them with the keyboard button at the top). Double-click empty space for a note, an arrow to write on it.
           </div>
         </div>
       )}
@@ -639,7 +660,7 @@ export function BoardView() {
         ) : (
           <>
             <div className="ctxbar">
-              <span className="display" style={{ fontSize: 17 }}>{name}</span>
+              {!s.isMobile && <span className="display" style={{ fontSize: 17 }}>{name}</span>}
               <span className="muted">{order.length} in series · {items.length - hiddenCount - order.length} in maybe piles</span>
               {(hiddenCount > 0 || showHidden) && (
                 <button className={'chip' + (showHidden ? ' on' : '')} title="Photos you hid from the library. They stay in the series and keep their place on the board." onClick={() => s.patchFilters({ show_hidden: !showHidden, only_hidden: false })}>
@@ -648,11 +669,13 @@ export function BoardView() {
               )}
               <div className="grow" />
               <button className="btn primary" onClick={() => { preAdd.current = cur.current; setAdding(true) }} title="Add photos from folders, or by rating, label, tag and date">+ Add photos</button>
+              {!s.isMobile && <>
               <button className="btn" onClick={() => addFrame(false)}>+ Frame</button>
               <button className="btn" onClick={() => addFrame(true)}>+ Maybe pile</button>
               <button className="btn" onClick={showInLibrary} title={selPhotosHere.length ? "Open the selected photo's folder in the Library, scrolled to it" : "Show the whole series in the Library, in board order"}>Show in library</button>
               <button className="btn" onClick={rename}>Rename</button>
               <button className="btn danger" onClick={del}>Delete</button>
+              </>}
             </div>
             <div className="board-area">
               <div className="canvas-wrap" ref={wrap} style={{ cursor: drag.current?.kind === 'pan' ? 'grabbing' : canvasCursor }} onContextMenu={e => e.preventDefault()}
@@ -674,9 +697,9 @@ export function BoardView() {
                       const n = pos.get(it.id)
                       return (
                         <button key={it.id} className={'bitem' + (selSet.has(it.id) ? ' sel' : '') + (it.hidden ? ' hid' : '')} style={{ left: it.x, top: it.y, width: w, height: h, zIndex: selSet.has(it.id) ? 5 : 1, cursor: grab }}
-                          onPointerDown={e => onObjDown(e, { photo: it.id })} onDoubleClick={e => { e.stopPropagation(); if (tool === 'select') s.editInDarktable([it.id]) }} aria-label={it.filename + (n ? `, position ${n}` : ', maybe')}>
+                          onPointerDown={e => onObjDown(e, { photo: it.id })} onDoubleClick={e => { e.stopPropagation(); if (tool === 'select') photoDouble(it.id) }} aria-label={it.filename + (n ? `, position ${n}` : ', maybe')}>
                           <img src={thumbUrl(it)} alt="" draggable={false} />
-                          {it.hidden ? <span className="num maybe">hidden</span> : <span className={'num' + (n ? '' : ' maybe')}>{n ? String(n).padStart(2, '0') : '?'}</span>}
+                          {it.hidden ? <span className="num maybe">hidden</span> : opt.boardNumbers && <span className={'num' + (n ? '' : ' maybe')}>{n ? String(n).padStart(2, '0') : '?'}</span>}
                         </button>
                       )
                     })}
@@ -743,7 +766,7 @@ export function BoardView() {
                 <button onClick={() => zoomTo(zoom + .1)} aria-label="Zoom in" title={'Zoom in (' + keysOf('zoomIn').join(', ') + ', or Ctrl + wheel)'}>+</button>
               </div>
             </div>
-            <div className="seqstrip">
+            {!s.isMobile && <div className="seqstrip">
               <div className="col" style={{ gap: 2, width: 150 }}>
                 <span className="caps">Reading order</span>
                 <span className="small muted">updates as you drag</span>
@@ -757,7 +780,7 @@ export function BoardView() {
                 ))}
               </div>
               <button className="btn" onClick={() => s.editInDarktable(order.map(i => i.id))} disabled={!order.length}>Edit whole series in darktable</button>
-            </div>
+            </div>}
           </>
         )}
       </div>

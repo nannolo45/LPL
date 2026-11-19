@@ -1,24 +1,32 @@
 import { useEffect, useState } from 'react'
 import { ACTIONS, comboOf, isCustom, keysOf, resetAll, SCOPES, setKeys, useShortcutsVersion } from '../shortcuts'
+import { DEFAULT_SETTINGS, resetSettings, setSetting, Settings, useSettings } from '../settings'
+import { NOTE_COLORS } from './Board'
+import { useStore } from '../store'
 
 const pretty = (k: string) => k.replace('ArrowRight', '→').replace('ArrowLeft', '←').replace('ArrowUp', '↑').replace('ArrowDown', '↓')
 
-export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
-  useShortcutsVersion()
-  const [rec, setRec] = useState<string | null>(null)   // action waiting for a key
+export type SettingsSection = 'board' | 'keys'
+
+/** Settings: board options and keyboard shortcuts, saved in the library so every PC (and the phone) gets them. */
+export function SettingsDialog({ onClose, section = 'board' }: { onClose: () => void; section?: SettingsSection }) {
+  const s = useStore()
+  const [sec, setSec] = useState<SettingsSection>(s.isMobile ? 'board' : section)
+  const [rec, setRec] = useState<string | null>(null)   // shortcut waiting for a key
   const [note, setNote] = useState('')
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement
       if (!rec) {  // while this is open, other shortcuts stay quiet
         if (e.key === 'Escape') { e.preventDefault(); onClose() }
-        e.stopPropagation()
+        if (!(t && (t.tagName === 'INPUT' || t.tagName === 'SELECT'))) e.stopPropagation()
         return
       }
       e.preventDefault(); e.stopPropagation()
       const c = comboOf(e)
       if (!c) return  // a modifier alone: wait for the real key
-      if (c === 'Escape' && rec) { setRec(null); return }
+      if (c === 'Escape') { setRec(null); return }
       const me = ACTIONS.find(a => a.id === rec)!
       const clash = ACTIONS.find(a => a.id !== rec && a.scope === me.scope && keysOf(a.id).includes(c))
       if (clash) setKeys(clash.id, keysOf(clash.id).filter(k => k !== c))
@@ -33,30 +41,101 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
   return (
     <>
       <div className="backdrop" onClick={onClose} />
-      <div className="dialog" role="dialog" aria-label="Keyboard shortcuts" style={{ width: 'min(640px, calc(100vw - 32px))', maxHeight: '88vh', overflow: 'auto' }}>
+      <div className={s.isMobile ? 'sheet' : 'dialog settings'} role="dialog" aria-label="Settings">
+        {s.isMobile && <span className="grab" />}
         <div className="row">
-          <span className="display grow" style={{ fontSize: 19 }}>Keyboard shortcuts</span>
-          <button className="btn ghost" onClick={() => { if (window.confirm('Put every shortcut back to how it was?')) resetAll() }}>Reset all</button>
+          <span className="display grow" style={{ fontSize: 19 }}>Settings</span>
+          <button className="btn" onClick={onClose}>Close</button>
         </div>
-        <span className="small muted">Click “+” and press the key (with Ctrl, Alt or Shift if you like). Click a key to remove it. They're saved in the library, so every PC gets them.</span>
-        {note && <span className="small" style={{ color: 'var(--accent-text)' }}>{note}</span>}
-        {SCOPES.map(([scope, title]) => (
-          <div key={scope} className="col" style={{ gap: 2 }}>
-            <span className="caps" style={{ marginTop: 6 }}>{title}</span>
-            {ACTIONS.filter(a => a.scope === scope).map(a => (
-              <div key={a.id} className="row keyrow">
-                <span className="grow small">{a.label}</span>
-                {keysOf(a.id).map(k => (
-                  <button key={k} className="kbd" title="Remove this key" onClick={() => setKeys(a.id, keysOf(a.id).filter(x => x !== k))}>{pretty(k)}</button>
-                ))}
-                <button className={'kbd add' + (rec === a.id ? ' rec' : '')} onClick={() => setRec(rec === a.id ? null : a.id)}>{rec === a.id ? 'press a key…' : '+'}</button>
-                {isCustom(a.id) ? <button className="btn ghost tiny" title="Back to the default" onClick={() => setKeys(a.id, null)}>↺</button> : <span style={{ width: 26 }} />}
-              </div>
-            ))}
+        <div className="settings-body">
+          {!s.isMobile && (
+            <nav className="settings-nav" aria-label="Settings sections">
+              <button className={sec === 'board' ? 'on' : ''} onClick={() => setSec('board')}>Board</button>
+              <button className={sec === 'keys' ? 'on' : ''} onClick={() => setSec('keys')}>Keyboard shortcuts</button>
+            </nav>
+          )}
+          <div className="settings-main">
+            {sec === 'board' ? <BoardSettings phone={s.isMobile} /> : <ShortcutsPanel rec={rec} setRec={setRec} note={note} />}
           </div>
-        ))}
-        <div className="row"><div className="grow" /><button className="btn" onClick={onClose}>Close</button></div>
+        </div>
       </div>
     </>
+  )
+}
+
+function Choice<K extends keyof Settings>({ k, label, help, options }: { k: K; label: string; help?: string; options: [Settings[K], string][] }) {
+  const st = useSettings()
+  return (
+    <div className="setrow">
+      <div className="col" style={{ gap: 2, minWidth: 0 }}>
+        <span className="small">{label}</span>
+        {help && <span className="tiny muted">{help}</span>}
+      </div>
+      <div className="seg">
+        {options.map(([v, l]) => <button key={String(v)} className={st[k] === v ? 'on' : ''} aria-pressed={st[k] === v} onClick={() => setSetting(k, v)}>{l}</button>)}
+      </div>
+    </div>
+  )
+}
+
+function BoardSettings({ phone }: { phone: boolean }) {
+  const st = useSettings()
+  return (
+    <div className="col" style={{ gap: 4 }}>
+      <span className="caps">Moving around</span>
+      {!phone && <Choice k="boardPan" label="Drag the board with" help="Holding Space and dragging always works too." options={[['both', 'Right or middle button'], ['right', 'Right button'], ['middle', 'Middle button']]} />}
+      {!phone && <Choice k="boardWheel" label="Mouse wheel" help={st.boardWheel === 'scroll' ? 'Ctrl + wheel zooms.' : 'Shift + wheel scrolls sideways, Ctrl + wheel up and down.'} options={[['scroll', 'Scrolls'], ['zoom', 'Zooms']]} />}
+      <Choice k="boardTouch" label="One finger on empty space (touch screens)" help="Two fingers always pinch to zoom." options={[['pan', 'Moves around'], ['select', 'Draws a selection box']]} />
+      <span className="caps" style={{ marginTop: 10 }}>Photos and notes</span>
+      <Choice k="boardPhotoDouble" label={phone ? 'Double-tap on a photo' : 'Double-click on a photo'} options={[['darktable', 'Edit in darktable'], ['fullscreen', 'Full screen'], ['large', 'Open large']]} />
+      <Choice k="boardNumbers" label="Reading-order numbers on photos" options={[[true, 'Show'], [false, 'Hide']]} />
+      <Choice k="boardSnap" label="Snap to a grid" help="Photos, notes and frames land on a 20 px grid when you let go." options={[[false, 'Off'], [true, 'On']]} />
+      <div className="setrow">
+        <span className="small">Colour of new notes</span>
+        <div className="row" style={{ gap: 6 }}>
+          {NOTE_COLORS.map(c => <button key={c} className={'swatch' + (st.boardNoteColor === c ? ' on' : '')} style={{ background: c }} aria-label={`Note colour ${c}`} aria-pressed={st.boardNoteColor === c} onClick={() => setSetting('boardNoteColor', c)} />)}
+        </div>
+      </div>
+      <div className="setrow">
+        <div className="col" style={{ gap: 2 }}><span className="small">Zoom a board opens at</span><span className="tiny muted">{phone ? 'On the phone.' : 'On computers and tablets; the phone has its own.'}</span></div>
+        <div className="row" style={{ gap: 8 }}>
+          <input type="range" min={20} max={200} step={10} value={phone ? st.boardZoomPhone : st.boardZoom} style={{ accentColor: '#E8A33D', width: 140 }} aria-label="Opening zoom"
+            onChange={e => setSetting(phone ? 'boardZoomPhone' : 'boardZoom', +e.target.value)} />
+          <span className="small" style={{ width: 40 }}>{phone ? st.boardZoomPhone : st.boardZoom}%</span>
+        </div>
+      </div>
+      <div className="row" style={{ marginTop: 10 }}>
+        <span className="tiny muted grow">Saved in the library, so every PC and the phone get the same.</span>
+        <button className="btn ghost" onClick={() => resetSettings(Object.keys(DEFAULT_SETTINGS).filter(k => k.startsWith('board')) as (keyof Settings)[])}>Reset board settings</button>
+      </div>
+    </div>
+  )
+}
+
+function ShortcutsPanel({ rec, setRec, note }: { rec: string | null; setRec: (r: string | null) => void; note: string }) {
+  useShortcutsVersion()
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      <div className="row">
+        <span className="small muted grow">Click “+” and press the key (with Ctrl, Alt or Shift if you like). Click a key to remove it. Saved in the library, so every PC gets them.</span>
+        <button className="btn ghost" onClick={() => { if (window.confirm('Put every shortcut back to how it was?')) resetAll() }}>Reset all</button>
+      </div>
+      {note && <span className="small" style={{ color: 'var(--accent-text)' }}>{note}</span>}
+      {SCOPES.map(([scope, title]) => (
+        <div key={scope} className="col" style={{ gap: 2 }}>
+          <span className="caps" style={{ marginTop: 6 }}>{title}</span>
+          {ACTIONS.filter(a => a.scope === scope).map(a => (
+            <div key={a.id} className="row keyrow">
+              <span className="grow small">{a.label}</span>
+              {keysOf(a.id).map(k => (
+                <button key={k} className="kbd" title="Remove this key" onClick={() => setKeys(a.id, keysOf(a.id).filter(x => x !== k))}>{pretty(k)}</button>
+              ))}
+              <button className={'kbd add' + (rec === a.id ? ' rec' : '')} onClick={() => setRec(rec === a.id ? null : a.id)}>{rec === a.id ? 'press a key…' : '+'}</button>
+              {isCustom(a.id) ? <button className="btn ghost tiny" title="Back to the default" onClick={() => setKeys(a.id, null)}>↺</button> : <span style={{ width: 26 }} />}
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
   )
 }

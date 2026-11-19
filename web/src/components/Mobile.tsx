@@ -7,6 +7,8 @@ import { HideButton, RatingLabels, SeriesPicker, TagPanel } from './Inspector'
 import { Thumb, useGroups, useReveal } from './Library'
 import { FoldersView } from './Folders'
 import { WorkView } from './Work'
+import { BoardView } from './Board'
+import { SettingsDialog } from './Shortcuts'
 
 type Tab = 'lib' | 'folders' | 'series' | 'pc'
 
@@ -96,21 +98,27 @@ function PhotoPage({ id, onBack }: { id: number; onBack: () => void }) {
   )
 }
 
-function SeriesTab({ open }: { open: (id: number) => void }) {
+function SeriesTab({ open, board }: { open: (id: number) => void; board: (id: number) => void }) {
   const s = useStore()
   return (
     <div className="scroll">
       <div className="col" style={{ padding: '0 14px', gap: 12 }}>
         {s.series.map(x => (
-          <button key={x.id} className="card" style={{ border: 0, textAlign: 'left', color: 'inherit' }} onClick={() => open(x.id)}>
-            <div className="row"><b className="grow">{x.name}</b><span className="muted">{x.count}</span></div>
-            <div className="row" style={{ gap: 3, overflow: 'hidden' }}>
-              {x.covers.map(c => <img key={c.id} src={coverUrl(c)} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 4 }} />)}
+          <div key={x.id} className="card">
+            <button style={{ border: 0, background: 'none', padding: 0, textAlign: 'left', color: 'inherit' }} className="col" onClick={() => board(x.id)}>
+              <div className="row"><b className="grow">{x.name}</b><span className="muted">{x.count}</span></div>
+              <div className="row" style={{ gap: 3, overflow: 'hidden' }}>
+                {x.covers.map(c => <img key={c.id} src={coverUrl(c)} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 4 }} />)}
+              </div>
+            </button>
+            <div className="row" style={{ gap: 8 }}>
+              <button className="btn primary big grow" onClick={() => board(x.id)}>Board</button>
+              <button className="btn big grow" onClick={() => open(x.id)}>Photos in order</button>
             </div>
-          </button>
+          </div>
         ))}
         {!s.series.length && <span className="muted">No series yet. Select photos and use “Add to series”.</span>}
-        <span className="small muted">Arranging a series on the free-form board works on a tablet or computer. Here you see it in board order.</span>
+        <span className="small muted">On the board: drag empty space to move around, pinch to zoom, tap a photo to select it and drag it to move it. What happens on a double-tap and more are in Settings (⚙ at the top).</span>
       </div>
     </div>
   )
@@ -122,19 +130,22 @@ export function MobileApp() {
   const [sheet, setSheet] = useState<'' | 'sort' | 'edit'>('')
   const [selecting, setSelecting] = useState(false)
   const [photo, setPhoto] = useState<number | null>(null)
+  const [board, setBoard] = useState<number | null>(null)
+  const [settings, setSettings] = useState(false)
   useEffect(() => { if (photo != null && s.sel.length === 1 && s.sel[0] !== photo) setPhoto(s.sel[0]) }, [s.sel])
   useEffect(() => { if (['folders', 'timeline', 'board', 'work', 'list'].includes(s.view) && tab === 'lib') s.setView('grid') }, [])
   // "Show in library" (e.g. from the PC tab): go to the Library, where the grid scrolls to the photo
   useEffect(() => { if (s.revealId != null) { setTab('lib'); setPhoto(null) } }, [s.revealId])
   const openPhoto = (p: Photo) => { s.setSel([p.id]); setPhoto(p.id) }
-  const goTab = (t: Tab) => { setTab(t); setPhoto(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders') }
-  const title = photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : tab === 'series' ? 'Series' : 'PC'
+  const goTab = (t: Tab) => { setTab(t); setPhoto(null); setBoard(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders') }
+  const title = board != null ? (s.series.find(x => x.id === board)?.name || 'Board') : photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : tab === 'series' ? 'Series' : 'PC'
   const fcount = [s.filters.folder, (s.filters.folders || []).length, s.filters.month, s.filters.tag, s.filters.series, s.filters.edited, (s.filters.lenses || []).length, (s.filters.cameras || []).length, (s.filters.labels || []).length, (s.filters.ratings || []).length].filter(Boolean).length
   return (
     <div className="app">
       <div className="mhead">
-        {photo != null && <button className="btn ghost big" onClick={() => setPhoto(null)} aria-label="Back">‹</button>}
+        {(photo != null || board != null) && <button className="btn ghost big" onClick={() => { if (photo != null) setPhoto(null); else { setBoard(null); s.setView('grid') } }} aria-label="Back">‹</button>}
         <span className="display">{title}</span>
+        {photo == null && !(tab === 'lib' && !board) && <button className="btn ghost big" aria-label="Settings" onClick={() => setSettings(true)}>⚙</button>}
         {tab === 'lib' && photo == null && (
           <>
             <button className={'btn big' + (selecting ? ' primary' : '')} onClick={() => { setSelecting(!selecting); if (selecting) s.setSel([]) }}>{selecting ? 'Done' : 'Select'}</button>
@@ -156,9 +167,10 @@ export function MobileApp() {
       )}
       <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {photo != null ? <PhotoPage id={photo} onBack={() => setPhoto(null)} />
+          : board != null ? <div className="mboard"><BoardView /></div>
           : tab === 'lib' ? <MobileGrid selecting={selecting} onOpen={openPhoto} />
           : tab === 'folders' ? <FoldersViewMobile onOpen={() => goTab('lib')} />
-          : tab === 'series' ? <SeriesTab open={id => { s.patchFilters({ series: id, folder: null, tag: null, month: null }); s.setSort([{ f: 'custom', d: 'asc' }]); s.setGroup(false); goTab('lib') }} />
+          : tab === 'series' ? <SeriesTab board={id => { s.setBoardSeries(id); s.setView('board'); setBoard(id) }} open={id => { s.patchFilters({ series: id, folder: null, tag: null, month: null }); s.setSort([{ f: 'custom', d: 'asc' }]); s.setGroup(false); goTab('lib') }} />
           : <WorkView />}
       </div>
       {selecting && s.sel.length > 0 && photo == null && (
@@ -173,6 +185,7 @@ export function MobileApp() {
           <button key={t} className={tab === t ? 'on' : ''} onClick={() => goTab(t)}><i />{l}</button>
         ))}
       </nav>
+      {settings && <SettingsDialog onClose={() => setSettings(false)} />}
       {sheet === 'sort' && <Sheet title="Sort & filter" onClose={() => setSheet('')}><SortPanel /><div className="hr" /><FilterPanel /></Sheet>}
       {sheet === 'edit' && <Sheet title={`${s.selPhotos.length} photos`} onClose={() => setSheet('')}>
         <RatingLabels photos={s.selPhotos} big />
