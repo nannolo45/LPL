@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api, coverUrl, Folder, FoldersResult } from '../api'
 import { useStore } from '../store'
+import { useBackLayer } from '../back'
 import { fmtMonth } from '../fields'
 import { RetryImg } from './RetryImg'
 
@@ -32,6 +33,7 @@ export function FoldersView() {
   const fkey = 'lpl.folder.' + s.activeTab  // each tab remembers where it is in the folders
   const [cur, setCur] = useState<string>(() => localStorage.getItem(fkey) ?? localStorage.getItem('lpl.folder') ?? '')
   const [mode, setMode] = useState<string>(() => localStorage.getItem('lpl.folderSort') || 'custom')
+  useBackLayer(s.isMobile && cur !== '', () => setCur(cur.split('/').slice(0, -1).join('/')), cur)  // phone: Back goes up a folder
   const [drag, setDrag] = useState<string | null>(null)
   const [over, setOver] = useState<string | null>(null)
   const load = () => api.folders().then(r => { writeCached(r); setAll(r.folders); setExcluded(r.excluded || []); setPendingPreviews(r.previews_pending || 0) }).catch(e => s.toast(e.message))

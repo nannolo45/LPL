@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { useStore } from '../store'
 import { agentLabel, defaultAgent, isPhoneAgent } from '../devices'
+import { useBackLayer } from '../back'
 
 /** "Edit in darktable" when there is more than one device: pick where the photos open. Remembers the last
  *  choice on this browser; otherwise suggests a PC agent. A device that is offline gets the photos when it's back. */
@@ -14,6 +15,7 @@ export function DevicePicker() {
     return defaultAgent(s.agents, last)?.id ?? ''
   })
   const go = () => { if (pick) s.editOn(ids, pick) }
+  useBackLayer(s.isMobile, s.closeDevicePick)  // the phone's Back closes it
   return (
     <>
       <div className="backdrop" onClick={s.closeDevicePick} />

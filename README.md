@@ -88,6 +88,15 @@ It installs a systemd user service. darktable from your distribution and the Fla
 ### When the same photo is changed in two places
 If rating, labels or tags are changed in LPL (e.g. on the phone) while the photo is open in darktable, the LPL values win and darktable is told to reload them. Otherwise darktable's values are kept. darktable's edit history always comes from darktable.
 
+### Install as an app
+Browsers only install a web app ("Install app" in LPL's Settings, or the browser's own menu) when it is opened over **https**; on a plain `http://` address in your home network they don't offer it. Without https, LPL works the same in the browser, only not as an installed app. One way to get https without opening any port, with Tailscale:
+
+1. In the Tailscale admin console, under DNS, turn on **MagicDNS** and **HTTPS certificates** for your tailnet.
+2. On the machine that runs LPL (with Tailscale installed and signed in), run `tailscale serve --bg 8080` (8080 = LPL's port).
+3. It prints an address like `https://<machine>.<tailnet>.ts.net`. Open that in Chrome on the phone and choose **Install app** (in LPL's Settings, or in Chrome's menu). In Firefox: browser menu → **Install** / **Add app to Home screen**.
+
+Any other reverse proxy that serves LPL with a valid certificate works too.
+
 ## 4. Local library on the laptop (travel, PC-only photos)
 
 The Windows agent also runs a library on the PC itself, at **http://localhost:8090** (shortcut "LightPhotoLibrary (this PC)" on the desktop). It works with no NAS connection: same grid, list, folders, timeline, board, tags and filters.

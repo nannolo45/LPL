@@ -1,7 +1,9 @@
 {
   "name": "LightPhotoLibrary",
   "short_name": "LPL",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#18181a",
   "theme_color": "#18181a",
