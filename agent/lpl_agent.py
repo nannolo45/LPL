@@ -138,10 +138,23 @@ class Server:
         with self._req(method, path, data, "application/json" if data else None, timeout) as r:
             return json.loads(r.read().decode() or "{}")
 
-    def download(self, path, dest: Path):
+    def download(self, path, dest: Path, progress=None):
+        """progress(fraction) is called while the file arrives, when the server says how big it is."""
         tmp = dest.with_name(dest.name + ".part")
         with self._req("GET", path, timeout=300) as r, open(tmp, "wb") as f:
-            shutil.copyfileobj(r, f, 1024 * 1024)
+            try:
+                total = int(r.headers.get("Content-Length") or 0)
+            except ValueError:
+                total = 0
+            done = 0
+            while True:
+                chunk = r.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                if progress and total:
+                    progress(min(1.0, done / total))
         os.replace(tmp, dest)
 
     def upload(self, path, data: bytes, ctype: str):
@@ -348,6 +361,9 @@ class Agent:
                 self.items = json.loads(STATE_FILE.read_text(encoding="utf-8"))
             except Exception:
                 self.items = {}
+        for it in self.items.values():  # whatever was under way when the agent stopped is not any more
+            it.pop("step", None)
+            it.pop("progress", None)
 
     def save(self):
         with self.lock:
@@ -357,7 +373,7 @@ class Agent:
 
     def state(self):
         with self.lock:
-            ws = [{k: v for k, v in it.items() if k in ("id", "filename", "status", "checkout_ts", "synced_ts", "error")}
+            ws = [{k: v for k, v in it.items() if k in ("id", "filename", "status", "checkout_ts", "synced_ts", "error", "step", "progress")}
                   for it in sorted(self.items.values(), key=lambda x: x.get("checkout_ts", 0))]
         running = darktable_running()
         return {"working_set": ws, "darktable_running": running, "bridge_alive": bridge_alive(),
@@ -391,6 +407,19 @@ class Agent:
         except Exception:
             pass
 
+    def step(self, it: dict, step=None, progress=None):
+        """What the agent is doing with a photo right now, reported with the next heartbeat (R16): step is
+        "downloading", "sending edit" or "sending preview", progress 0..1 where known; None = nothing."""
+        with self.lock:
+            if step is None:
+                it.pop("step", None)
+            else:
+                it["step"] = step
+            if progress is None:
+                it.pop("progress", None)
+            else:
+                it["progress"] = round(progress, 3)
+
     def local_path(self, pid: str, filename: str) -> Path:
         return WORK / ("%s_%s" % (pid, filename))
 
@@ -410,7 +439,8 @@ class Agent:
                 self.items[pid] = it
             try:
                 if not (dest.is_file() and dest.stat().st_size == info.get("size")):
-                    self.srv.download("/api/photos/%s/original" % pid, dest)
+                    self.step(it, "downloading", 0.0)
+                    self.srv.download("/api/photos/%s/original" % pid, dest, lambda f, it=it: self.step(it, "downloading", f))
                 xmp = Path(str(dest) + ".xmp")
                 self.srv.download("/api/photos/%s/xmp" % pid, xmp)
                 it["synced_mtime"] = xmp.stat().st_mtime
@@ -418,6 +448,8 @@ class Agent:
                 opened.append(dest)
             except Exception as e:
                 it.update(status="error", error=str(e))
+            finally:
+                self.step(it)
             self.save()
         self.open_paths(opened)
 
@@ -471,19 +503,24 @@ class Agent:
             return
         xmp = Path(it["local_path"] + ".xmp")
         if preview is not None and preview.is_file():
+            self.step(it, "sending preview")
             try:
                 self.srv.upload("/api/photos/%s/preview" % pid, preview.read_bytes(), "image/jpeg")
             except Exception as e:
                 log.warning("preview upload failed: %s", e)
+            finally:
+                self.step(it)
         if not xmp.is_file():
             return
         mtime = xmp.stat().st_mtime
         if not force and abs(mtime - it.get("synced_mtime", 0)) < 0.01:
             return
         it["status"] = "syncing"
+        self.step(it, "sending edit")
         try:
-            body, headers = self.srv.upload("/api/photos/%s/xmp?checkout_ts=%s" % (pid, it["checkout_ts"]), xmp.read_bytes(),
-                                            "application/rdf+xml")
+            # agent=: LPL records which device sent the edit ("last edited on Desktop")
+            body, headers = self.srv.upload("/api/photos/%s/xmp?checkout_ts=%s&agent=%s" % (
+                pid, it["checkout_ts"], urllib.parse.quote(self.cfg["id"], safe="")), xmp.read_bytes(), "application/rdf+xml")
             merged = (headers.get("X-LPL-Merged") or headers.get("x-lpl-merged")) == "1"
             if merged:
                 # LPL had newer rating/labels/tags: put them into the local file and tell darktable to re-read it
@@ -493,6 +530,8 @@ class Agent:
             log.info("synced %s%s", it["filename"], " (merged)" if merged else "")
         except Exception as e:
             it.update(status="error", error="sync failed: %s" % e)
+        finally:
+            self.step(it)
         self.save()
 
     def release(self, pid: str):

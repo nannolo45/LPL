@@ -10,3 +10,7 @@ Branch `android-edit-record-progress`. Report: not written yet (work in progress
   R14 (`GET /api/auth/token`). Test XMPs from darktable's integration tests in `server/tests/data/xmp`.
   Found: darktable's `num` has gaps and the `mask_manager` pseudo-module is a history item (always off).
   Next: tests for R13, R14, R16 and the migration; PC agent; web UI.
+- 2026-11-19: done: PC agent sends `agent=<id>` with XMP posts and `step`/`progress` (downloading with progress,
+  sending preview, sending edit); test runs the real agent code against the server over HTTP. Migration test
+  from main's schema with 20 000 photos (0.01 s). Server: 48 tests pass. Next: web UI (last-edit line, list of
+  edits, progress bar), APK name in the help page, screenshots, report.
