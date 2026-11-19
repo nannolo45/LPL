@@ -440,6 +440,8 @@ class Agent:
             for p in paths[1:]:
                 self.bridge.add("import", p)
             self.bridge.flush()
+            self.message = ("Sent to darktable. It opens as soon as you move the mouse over darktable's window "
+                            "(darktable only takes outside requests while you use it).")
         elif running and not IS_WIN:
             # Linux: a second 'darktable <file>' hands the file to the running instance over D-Bus
             launch_darktable(self.cfg, paths[0], guard=False)

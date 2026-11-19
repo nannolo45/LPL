@@ -181,31 +181,54 @@ local function short(path)
   return (tostring(path):match("[^/\\]+$")) or tostring(path)
 end
 
-local function handle_file(request_file)
+-- Requests are read by the background loop (plain file reading only) and carried out on darktable's
+-- main thread, from darktable's own events. Calling darktable (import, switching to darkroom) from the
+-- background thread can deadlock darktable on Windows.
+local pending = {}
+local announced = false
+
+local function read_requests(request_file)
   if not file_exists(request_file) then return end
   local f = io.open(request_file, "rb")
   if not f then return end
   local text = f:read("*a") or ""
   f:close()
   os.remove(request_file)
-  local first = nil
   for line in text:gmatch("[^\r\n]+") do
     local cmd, path = line:match("^(%w+)\t(.+)$")
-    if cmd then status("request: " .. cmd .. " " .. short(path)) end
-    if cmd == "open" or cmd == "import" then
-      local img, fresh = import(path)
+    if cmd then
+      table.insert(pending, { cmd = cmd, path = path })
+      status("request: " .. cmd .. " " .. short(path))
+    end
+  end
+end
+
+local function collect()
+  read_requests(REQUEST)
+  read_requests(BRIDGE .. sep .. "request-local.txt")
+end
+
+local function carry_out()
+  if #pending == 0 then return end
+  local todo = pending
+  pending = {}
+  announced = false
+  local first = nil
+  for _, r in ipairs(todo) do
+    if r.cmd == "open" or r.cmd == "import" then
+      local img = import(r.path)
       if img then
-        status("imported " .. short(path))
+        status("imported " .. short(r.path))
         reload_sidecar(img)
-        if cmd == "open" and not first then first = img end
+        if r.cmd == "open" then first = img end  -- the latest open wins
       else
-        status("could not import " .. short(path) .. " (see darktable log)")
+        status("could not import " .. short(r.path) .. " (see darktable log)")
       end
-    elseif cmd == "reload" then
-      local img = import(path)
+    elseif r.cmd == "reload" then
+      local img = import(r.path)
       if img then reload_sidecar(img) end
-    elseif cmd == "forget" then
-      forget(path)
+    elseif r.cmd == "forget" then
+      forget(r.path)
     end
   end
   if first then
@@ -215,25 +238,31 @@ local function handle_file(request_file)
   end
 end
 
--- request.txt comes from the agent (NAS working set), request-local.txt from the PC's local library
-local function handle_requests()
-  handle_file(REQUEST)
-  handle_file(BRIDGE .. sep .. "request-local.txt")
-end
-
-
 local busy = false
 local last_tick = 0
 local rearm = nil  -- set by the loop below
+
+-- background loop: alive + read requests only
+local function tick_bg()
+  write_file(ALIVE, tostring(os.time()))
+  local ok, err = pcall(collect)
+  if not ok then status("reading requests failed: " .. tostring(err)) end
+  if #pending > 0 and not announced then
+    announced = true
+    status("waiting for darktable: move the mouse over darktable's window to open it")
+  end
+end
+
+-- darktable's events (main thread): carry out what's waiting
 local function tick(from_activity)
   local now = os.time()
   if from_activity and rearm then pcall(rearm) end
-  if from_activity and now - last_tick < 1 then return end  -- mouse events fire very often
+  if from_activity and now - last_tick < 1 and #pending == 0 then return end
   if busy then return end
   busy = true
   last_tick = now
   write_file(ALIVE, tostring(now))
-  local ok, err = pcall(handle_requests)
+  local ok, err = pcall(function() collect(); carry_out() end)
   if not ok then status("request failed: " .. tostring(err)) end
   busy = false
 end
@@ -273,7 +302,7 @@ local function round(my_chain)
   rounds = rounds + 1
   if rounds <= 2 then status("background loop running (round " .. rounds .. ")") end
   local ok, err = pcall(function()
-    tick(false)
+    tick_bg()
     dt.control.sleep(1000)
   end)
   if not ok then status("background loop error: " .. tostring(err)) end
@@ -304,7 +333,7 @@ end
 start_loop()
 
 -- backup: also check whenever you use darktable (hover, select, change collection), in case the loop stalls
-for _, ev in ipairs({ "mouse-over-image-changed", "selection-changed", "collection-changed" }) do
+for _, ev in ipairs({ "mouse-over-image-changed", "selection-changed", "collection-changed", "pixelpipe-processing-complete" }) do
   pcall(dt.register_event, MODULE .. "_" .. ev, ev, function() tick(true) end)
 end
 
@@ -318,7 +347,7 @@ script_data.metadata = {
 }
 script_data.destroy = function()
   stopping = true
-  for _, ev in ipairs({ "darkroom-image-loaded", "view-changed", "mouse-over-image-changed", "selection-changed", "collection-changed" }) do
+  for _, ev in ipairs({ "darkroom-image-loaded", "view-changed", "mouse-over-image-changed", "selection-changed", "collection-changed", "pixelpipe-processing-complete" }) do
     local name = (ev == "darkroom-image-loaded") and (MODULE .. "_loaded") or (ev == "view-changed") and (MODULE .. "_view") or (MODULE .. "_" .. ev)
     pcall(dt.destroy_event, name, ev)
   end
