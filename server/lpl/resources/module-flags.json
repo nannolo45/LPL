@@ -1,0 +1,390 @@
+{
+ "agx": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "ashift": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "atrous": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "basecurve": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "basicadj": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "bilat": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "bilateral": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "bloom": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "blurs": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "borders": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "cacorrect": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "cacorrectrgb": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "censorize": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "channelmixer": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "channelmixerrgb": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "clahe": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "clipping": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "colisa": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "colorbalance": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "colorbalancergb": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "colorchecker": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "colorcontrast": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "colorcorrection": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "colorequal": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "colorharmonizer": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "colorin": {
+  "default_enabled": true,
+  "hidden": false
+ },
+ "colorize": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "colormapping": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "colorout": {
+  "default_enabled": true,
+  "hidden": false
+ },
+ "colorreconstruct": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "colortransfer": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "colorzones": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "contrastntexture": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "crop": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "defringe": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "demosaic": {
+  "default_enabled": true,
+  "hidden": false
+ },
+ "demosaicscale": {
+  "default_enabled": false,
+  "hidden": true
+ },
+ "denoiseprofile": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "diffuse": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "dither": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "enlargecanvas": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "equalizer": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "exposure": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "filmic": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "filmicrgb": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "finalscale": {
+  "default_enabled": false,
+  "hidden": true
+ },
+ "flip": {
+  "default_enabled": true,
+  "hidden": false
+ },
+ "gamma": {
+  "default_enabled": false,
+  "hidden": true
+ },
+ "globaltonemap": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "graduatednd": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "grain": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "hazeremoval": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "highlights": {
+  "default_enabled": true,
+  "hidden": false
+ },
+ "highpass": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "hotpixels": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "invert": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "lens": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "levels": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "liquify": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "lowlight": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "lowpass": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "lut3d": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "mask_manager": {
+  "default_enabled": false,
+  "hidden": true
+ },
+ "monochrome": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "negadoctor": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "nlmeans": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "overexposed": {
+  "default_enabled": false,
+  "hidden": true
+ },
+ "overlay": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "primaries": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "profile_gamma": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "rasterfile": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "rawdenoise": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "rawoverexposed": {
+  "default_enabled": false,
+  "hidden": true
+ },
+ "rawprepare": {
+  "default_enabled": true,
+  "hidden": false
+ },
+ "relight": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "retouch": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "rgbcurve": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "rgblevels": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "rotatepixels": {
+  "default_enabled": false,
+  "hidden": true
+ },
+ "satcurvergb": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "scalepixels": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "shadhi": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "sharpen": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "sigmoid": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "soften": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "spektrafilm": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "splittoning": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "spots": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "temperature": {
+  "default_enabled": true,
+  "hidden": false
+ },
+ "tonecurve": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "toneequal": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "tonemap": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "velvia": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "vibrance": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "vignette": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "watermark": {
+  "default_enabled": false,
+  "hidden": false
+ },
+ "zonesystem": {
+  "default_enabled": false,
+  "hidden": false
+ }
+}

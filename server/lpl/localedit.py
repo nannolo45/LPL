@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import db, media, scanner, xmp
+from . import db, edits, media, scanner, xmp
 from .config import config
 
 log = logging.getLogger("lpl.local")
@@ -142,6 +142,7 @@ def _handle_outbox() -> None:
             with db.write_lock:
                 if x:
                     scanner.apply_xmp_to_db(pid, x)
+                    edits.observe_scan(pid, x)
                 db.conn().execute("UPDATE photos SET preview_ver=preview_ver+1, preview_state=1 WHERE id=?", (pid,))
                 db.conn().commit()
         for f in (marker, jpg):

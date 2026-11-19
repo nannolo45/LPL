@@ -4,7 +4,8 @@ import { useStore } from '../store'
 import { keysOf, useShortcutsVersion } from '../shortcuts'
 import { exifLine, fmtDay, LABELS, leaf } from '../fields'
 import { Thumb } from './Library'
-import { photoWhere } from '../devices'
+import { photoActivity, serverNow } from '../devices'
+import { LastEdit, ProgressBar, useTick } from './EditRecord'
 import { NewSeriesSheet } from './NewSeries'
 
 export function RatingLabels({ photos, big = false }: { photos: Photo[]; big?: boolean }) {
@@ -256,12 +257,21 @@ export function TagPanel({ photos }: { photos: Photo[] }) {
   )
 }
 
-/** Where a photo is checked out for darktable, if anywhere: "on Phone: edited · not synced yet". */
+/** Where a photo is checked out for darktable, if anywhere: "on Phone: edited · not synced yet", or a progress
+ *  bar ("on Phone: downloading · 42%") while a device downloads or syncs it. */
 export function WhereLine({ id }: { id: number }) {
   const s = useStore()
-  const lines = photoWhere(s.agents, id)
-  if (!lines.length) return null
-  return <span className="small soft" title="See the working set for more">{lines.join(' · ')}</span>
+  const acts = photoActivity(s.agents, id, serverNow(s.status))
+  const bars = acts.filter(a => a.progress !== undefined)
+  useTick(bars.length > 0)
+  if (!acts.length) return null
+  const plain = acts.filter(a => a.progress === undefined).map(a => a.text)
+  return (
+    <>
+      {bars.map((a, i) => <ProgressBar key={i} label={a.text} fraction={a.progress ?? null} />)}
+      {plain.length > 0 && <span className="small soft" title="See the working set for more">{plain.join(' · ')}</span>}
+    </>
+  )
 }
 
 export function Inspector() {
@@ -296,6 +306,7 @@ export function Inspector() {
             <span>darktable</span><span>{one.edited ? 'edited' : 'not edited'}</span>
             {one.title && <><span>Title</span><span>{one.title}</span></>}
           </div>
+          <LastEdit p={one} />
           <WhereLine id={one.id} />
         </>
       )}

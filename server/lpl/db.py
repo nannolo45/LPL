@@ -131,6 +131,30 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- who edited a photo and what changed (one row per XMP an agent posted, or the scanner found changed); see edits.py
+CREATE TABLE IF NOT EXISTS edit_events (
+    id INTEGER PRIMARY KEY,
+    photo_id INTEGER NOT NULL,
+    ts REAL NOT NULL,
+    source TEXT NOT NULL,          -- agent / outside / import
+    agent_id TEXT,
+    device TEXT,                   -- the agent's name at that time
+    device_os TEXT,
+    modules TEXT NOT NULL,         -- JSON: the modules the edit uses
+    changes TEXT,                  -- JSON: added / removed / switched_on / switched_off / changed; NULL = nothing to compare with
+    first_ts REAL,                 -- saves of one device on one day are one entry: ts is the last save, first_ts the first
+    saves INTEGER DEFAULT 1,
+    before TEXT                    -- JSON: the modules before the first save (what changes compares with); NULL = unknown
+);
+CREATE INDEX IF NOT EXISTS idx_edit_events_photo ON edit_events(photo_id, ts);
+
+-- the darktable modules of the XMP LPL last recorded for each photo, to tell what the next one changed
+CREATE TABLE IF NOT EXISTS edit_baseline (
+    photo_id INTEGER PRIMARY KEY,
+    history TEXT NOT NULL,
+    xmp_mtime REAL
+);
 """
 
 
@@ -149,17 +173,29 @@ def conn() -> sqlite3.Connection:
 def init() -> None:
     config.ensure_dirs()
     with write_lock:
-        c = conn()
-        c.executescript(SCHEMA)
-        # columns added after the first release
-        cols = {r[1] for r in c.execute("PRAGMA table_info(photos)").fetchall()}
-        if "hidden" not in cols:  # photos hidden from the library views (LPL only, not written to XMP)
-            c.execute("ALTER TABLE photos ADD COLUMN hidden INTEGER DEFAULT 0")
-        fcols = {r[1] for r in c.execute("PRAGMA table_info(series_frames)").fetchall()}
-        if "color" not in fcols:  # frame look on the board: fill colour and border style (solid / dashed / none)
-            c.execute("ALTER TABLE series_frames ADD COLUMN color TEXT DEFAULT ''")
-            c.execute("ALTER TABLE series_frames ADD COLUMN border TEXT DEFAULT ''")
-        c.commit()
+        migrate(conn())
+
+
+def migrate(c: sqlite3.Connection) -> None:
+    """Bring a library of any earlier version up to date in place. Only adds tables and columns, never drops
+    or rewrites data; safe to run on every start."""
+    c.executescript(SCHEMA)
+    # columns added after the first release
+    cols = {r[1] for r in c.execute("PRAGMA table_info(photos)").fetchall()}
+    if "hidden" not in cols:  # photos hidden from the library views (LPL only, not written to XMP)
+        c.execute("ALTER TABLE photos ADD COLUMN hidden INTEGER DEFAULT 0")
+    fcols = {r[1] for r in c.execute("PRAGMA table_info(series_frames)").fetchall()}
+    if "color" not in fcols:  # frame look on the board: fill colour and border style (solid / dashed / none)
+        c.execute("ALTER TABLE series_frames ADD COLUMN color TEXT DEFAULT ''")
+        c.execute("ALTER TABLE series_frames ADD COLUMN border TEXT DEFAULT ''")
+    ecols = {r[1] for r in c.execute("PRAGMA table_info(edit_events)").fetchall()}
+    for col, decl in (("first_ts", "REAL"), ("saves", "INTEGER DEFAULT 1"), ("before", "TEXT")):
+        if col not in ecols:  # edit_events as first made on this branch
+            c.execute("ALTER TABLE edit_events ADD COLUMN %s %s" % (col, decl))
+    jcols = {r[1] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
+    if "attempts" not in jcols:  # how often a job was handed out (a taken job is handed out again after a while)
+        c.execute("ALTER TABLE jobs ADD COLUMN attempts INTEGER DEFAULT 0")
+    c.commit()
 
 
 def now() -> float:

@@ -2,7 +2,7 @@
 // The devices LPL hands photos to (its agents: the PC agent, the darktable phone app) and the link that
 // opens the darktable phone app. Plain functions without React, so they can be tested with Node
 // (web/tests/devices.test.ts). See docs/android-handoff.md.
-import type { Agent } from './api'
+import type { Agent, WorkItem } from './api'
 
 /** What each working-set status is called, with its colours (background, text). */
 export const STATUS: Record<string, [string, string, string]> = {
@@ -51,6 +51,49 @@ export function photoWhere(agents: Pick<Agent, 'id' | 'name' | 'os' | 'state'>[]
   for (const a of agents) {
     const w = (a.state?.working_set || []).find(x => x.id === id)
     if (w) out.push(`on ${agentLabel(a, agents)}: ${(STATUS[w.status] || [w.status])[0]}`)
+  }
+  return out
+}
+
+/** The steps a device may report while it copies or syncs a photo (R16), in plain words. */
+export const STEP_WORDS: Record<string, string> = {
+  downloading: 'downloading',
+  'sending edit': 'sending the edit',
+  'rendering preview': 'rendering the preview',
+  'sending preview': 'sending the preview',
+}
+/** As on the server (api.py): a device not heard from for this long is offline. */
+export const AGENT_ONLINE_SECONDS = 15
+
+/** The server's clock now, from the last status answer (server_time, and when it arrived here). */
+export function serverNow(status: { server_time?: number; received_at?: number } | null | undefined, local: number = Date.now() / 1000): number {
+  if (!status?.server_time) return local
+  return status.server_time + Math.max(0, local - (status.received_at ?? local))
+}
+
+/** What a device is doing with a working-set item right now: the step in words and how far (0..1, or null
+ *  when it does not say). null when there is no step, or the device stopped reporting: then the item's plain
+ *  state is shown. now = the server's clock (serverNow), so a bar goes away even when this page stops
+ *  getting answers. */
+export function itemProgress(a: Pick<Agent, 'online' | 'last_seen'>, w: Pick<WorkItem, 'step' | 'progress'>, now?: number): { step: string; fraction: number | null } | null {
+  if (!w.step || !a.online) return null
+  if (now != null && now - (a.last_seen || 0) >= AGENT_ONLINE_SECONDS) return null
+  const p = w.progress
+  const fraction = typeof p === 'number' && Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : null
+  return { step: STEP_WORDS[w.step] || w.step, fraction }
+}
+
+/** photoWhere with progress: one entry per device that has the photo; progress is set (a fraction or null
+ *  for "busy, amount unknown") only while that device downloads or syncs it. */
+export function photoActivity(agents: Pick<Agent, 'id' | 'name' | 'os' | 'state' | 'online' | 'last_seen'>[], id: number, now?: number):
+  { text: string; progress?: number | null }[] {
+  const out: { text: string; progress?: number | null }[] = []
+  for (const a of agents) {
+    const w = (a.state?.working_set || []).find(x => x.id === id)
+    if (!w) continue
+    const pr = itemProgress(a, w, now)
+    out.push(pr ? { text: `on ${agentLabel(a, agents)}: ${pr.step}`, progress: pr.fraction }
+      : { text: `on ${agentLabel(a, agents)}: ${(STATUS[w.status] || [w.status])[0]}` })
   }
   return out
 }
