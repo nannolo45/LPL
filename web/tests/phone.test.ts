@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Tests for the phone app behaviour (src/back.ts, src/install.ts): npm test.
+// Tests for the phone app behaviour (src/back.ts, src/install.ts, src/phonetabs.ts): npm test.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { depthOf, layersToClose } from '../src/back.ts'
 import { installHint } from '../src/install.ts'
+import { phoneSpot } from '../src/phonetabs.ts'
 
 test('back: which layers a history entry stands for', () => {
   assert.equal(depthOf({ lplDepth: 2 }, 3), 2)
@@ -26,4 +27,17 @@ test('install: what Settings offers', () => {
   assert.equal(installHint({ ...base, installed: true }), 'none')
   assert.equal(installHint({ ...base, shell: true, canPrompt: true }), 'none')  // inside the LPL shell: nothing
   assert.equal(installHint({ ...base, shell: true, secure: false }), 'none')
+})
+
+test('tabs on the phone', () => {
+  assert.deepEqual(phoneSpot('grid', null), { tab: 'lib', board: null })
+  assert.deepEqual(phoneSpot('folders', 3), { tab: 'folders', board: null })
+  assert.deepEqual(phoneSpot('work', null), { tab: 'pc', board: null })
+  assert.deepEqual(phoneSpot('board', 4), { tab: 'series', board: 4 })
+  assert.deepEqual(phoneSpot('board', null), { tab: 'series', board: null })
+  assert.equal(phoneSpot('timeline', null).tab, 'lib')
+  assert.match(phoneSpot('timeline', null).note!, /Timeline: shown as the grid/)
+  assert.match(phoneSpot('list', null).note!, /List/)
+  assert.match(phoneSpot('send', null).note!, /Send to NAS/)
+  assert.equal(phoneSpot('grid', null).note, undefined)
 })

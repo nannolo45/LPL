@@ -12,8 +12,10 @@ import { SettingsDialog } from './Shortcuts'
 import { EditOnPhone, useListTitle } from './PhoneEdit'
 import { selectionIds, takeDeepLink } from '../devices'
 import { useBackLayer } from '../back'
+import { phoneSpot } from '../phonetabs'
+import { tabTitle } from './Tabs'
 
-type Tab = 'lib' | 'folders' | 'series' | 'pc'  // 'pc': the devices and their working sets
+type Tab = 'lib' | 'folders' | 'series' | 'pc'  // 'pc': the devices and their working sets (same as PhoneTab)
 
 function Sheet({ onClose, title, children }: { onClose: () => void; title: string; children: React.ReactNode }) {
   useBackLayer(true, onClose)  // Back closes it
@@ -140,9 +142,16 @@ export function MobileApp() {
   const [photo, setPhoto] = useState<number | null>(null)
   const [board, setBoard] = useState<number | null>(null)
   const [settings, setSettings] = useState(false)
+  const [tabsOpen, setTabsOpen] = useState(false)
   const [cameFrom, setCameFrom] = useState<'folders' | 'series' | null>(null)  // a folder or series opened from its overview
   useEffect(() => { if (photo != null && s.sel.length === 1 && s.sel[0] !== photo) setPhoto(s.sel[0]) }, [s.sel])
-  useEffect(() => { if (['folders', 'timeline', 'board', 'work', 'list'].includes(s.view) && tab === 'lib') s.setView('grid') }, [])
+  // show what the open tab shows (also a tab made or changed on the desktop); a view the phone has no
+  // screen for is shown as the grid, without changing the tab
+  useEffect(() => {
+    const st = s.tabs.find(t => t.id === s.activeTab)?.st  // as stored: the live values may not be applied yet
+    const sp = phoneSpot(st?.view ?? s.view, st ? st.boardSeries : s.boardSeries)
+    setTab(sp.tab); setBoard(sp.board); setPhoto(null); setCameFrom(null); setSelecting(false)
+  }, [s.activeTab])
   // the phone's Back steps out of what is open, one thing at a time
   useBackLayer(photo != null, () => setPhoto(null))
   useBackLayer(board != null, () => { setBoard(null); s.setView('grid') })
@@ -162,7 +171,7 @@ export function MobileApp() {
   // "Show in library" (e.g. from the Devices tab): go to the Library, where the grid scrolls to the photo
   useEffect(() => { if (s.revealId != null) { setTab('lib'); setPhoto(null) } }, [s.revealId])
   const openPhoto = (p: Photo) => { s.setSel([p.id]); setPhoto(p.id) }
-  const goTab = (t: Tab) => { setTab(t); setPhoto(null); setBoard(null); setCameFrom(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders') }
+  const goTab = (t: Tab) => { setTab(t); setPhoto(null); setBoard(null); setCameFrom(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders'); if (t === 'pc' && !s.isLocal) s.setView('work') }
   const title = board != null ? (s.series.find(x => x.id === board)?.name || 'Board') : photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : tab === 'series' ? 'Series' : 'Devices'
   const fcount = [s.filters.folder, (s.filters.folders || []).length, s.filters.month, s.filters.tag, s.filters.series, s.filters.edited, (s.filters.lenses || []).length, (s.filters.cameras || []).length, (s.filters.labels || []).length, (s.filters.ratings || []).length].filter(Boolean).length
   return (
@@ -170,6 +179,7 @@ export function MobileApp() {
       <div className="mhead">
         {(photo != null || board != null) && <button className="btn ghost big" onClick={() => { if (photo != null) setPhoto(null); else { setBoard(null); s.setView('grid') } }} aria-label="Back">‹</button>}
         <span className="display">{title}</span>
+        <button className="btn big" style={{ minWidth: 44, fontWeight: 600 }} aria-label={`Tabs: ${s.tabs.length} open`} title="Tabs" onClick={() => setTabsOpen(true)}>{s.tabs.length}</button>
         {photo == null && !(tab === 'lib' && !board) && <button className="btn ghost big" aria-label="Settings" onClick={() => setSettings(true)}>⚙</button>}
         {tab === 'lib' && photo == null && (
           <>
@@ -190,7 +200,7 @@ export function MobileApp() {
           </div>
         </div>
       )}
-      <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div key={s.activeTab} style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {photo != null ? <PhotoPage id={photo} onBack={() => setPhoto(null)} />
           : board != null ? <div className="mboard"><BoardView /></div>
           : tab === 'lib' ? <MobileGrid selecting={selecting} onOpen={openPhoto} />
@@ -213,6 +223,7 @@ export function MobileApp() {
         ))}
       </nav>
       {settings && <SettingsDialog onClose={() => setSettings(false)} />}
+      {tabsOpen && <TabsSheet onClose={() => setTabsOpen(false)} />}
       {sheet === 'sort' && <Sheet title="Sort & filter" onClose={() => setSheet('')}><SortPanel /><div className="hr" /><FilterPanel /></Sheet>}
       {sheet === 'edit' && <Sheet title={`${s.selPhotos.length} photos`} onClose={() => setSheet('')}>
         <RatingLabels photos={s.selPhotos} big />
@@ -221,6 +232,40 @@ export function MobileApp() {
         <HideButton photos={s.selPhotos} big />
       </Sheet>}
     </div>
+  )
+}
+
+/** The desktop's tabs on the phone, like a browser's tab switcher: tap one to switch, + for a new one,
+ *  ✎ to name it, × to close it (never the last one). Same tabs and same rules as the tab strip on the desktop. */
+function TabsSheet({ onClose }: { onClose: () => void }) {
+  const s = useStore()
+  const [editing, setEditing] = useState<string | null>(null)
+  const tabs = s.tabs.map(t => (t.id === s.activeTab ? { ...t, st: s.liveTab() } : t))
+  return (
+    <Sheet title={`${tabs.length} tab${tabs.length > 1 ? 's' : ''}`} onClose={onClose}>
+      <div className="col" style={{ gap: 6 }} role="tablist" aria-label="Tabs">
+        {tabs.map(t => {
+          const title = tabTitle(t, s.series)
+          const on = t.id === s.activeTab
+          const note = phoneSpot(t.st.view, t.st.boardSeries).note
+          return (
+            <div key={t.id} role="tab" aria-selected={on} className="card" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: '8px 10px', border: '1px solid ' + (on ? 'var(--accent)' : 'transparent') }}>
+              {editing === t.id
+                ? <input autoFocus className="input grow" style={{ height: 40, fontSize: 15 }} defaultValue={t.title || title} aria-label="Tab name"
+                    onBlur={e => { s.renameTab(t.id, e.target.value === title && !t.title ? '' : e.target.value); setEditing(null) }}
+                    onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditing(null) }} />
+                : <button className="linkbtn grow col" style={{ gap: 2, minHeight: 40, justifyContent: 'center', alignItems: 'flex-start' }} onClick={() => { s.switchTab(t.id); onClose() }}>
+                    <span className="ellipsis" style={{ fontSize: 15, fontWeight: on ? 600 : 400 }}>{title}</span>
+                    {(on || note) && <span className="tiny muted">{[on ? 'open now' : '', note].filter(Boolean).join(' · ')}</span>}
+                  </button>}
+              {editing !== t.id && <button className="btn ghost big" aria-label={`Name ${title}`} onClick={() => setEditing(t.id)}>✎</button>}
+              {s.tabs.length > 1 && editing !== t.id && <button className="btn ghost big" aria-label={`Close ${title}`} onClick={() => s.closeTab(t.id)}>×</button>}
+            </div>
+          )
+        })}
+      </div>
+      <button className="btn big" onClick={() => { s.newTab(); onClose() }}>+ New tab, showing all photos</button>
+    </Sheet>
   )
 }
 
