@@ -68,6 +68,9 @@ export function TagPanel({ photos }: { photos: Photo[] }) {
   const [exp, setExp] = useState<Record<string, 1>>(() => { try { return JSON.parse(localStorage.getItem('lpl.tagexp') || '{}') } catch { return {} } })
   const [menu, setMenu] = useState<{ x: number; y: number; node: Node } | null>(null)
   useEffect(() => { localStorage.setItem('lpl.tagexp', JSON.stringify(exp)) }, [exp])
+  // the list of all tags folds away (remembered; folded by default on a phone). Searching still shows matches.
+  const [treeOpen, setTreeOpen] = useState<boolean>(() => { const v = localStorage.getItem('lpl.sec.tagtree'); return v == null ? !s.isMobile : v === '1' })
+  const flipTree = () => { localStorage.setItem('lpl.sec.tagtree', treeOpen ? '0' : '1'); setTreeOpen(!treeOpen) }
   const ids = photos.map(p => p.id)
   const idKey = ids.join(',')
   useEffect(() => {
@@ -177,7 +180,12 @@ export function TagPanel({ photos }: { photos: Photo[] }) {
           {sugg.map(t => <button key={t} className="chip" title={t} onClick={() => attach(t)}>+ {leaf(t)}</button>)}
         </div>
       )}
-      <div className="tree">
+      <button className="sechead" aria-expanded={treeOpen} onClick={flipTree}>
+        <span className="chev" style={{ transform: treeOpen ? 'rotate(90deg)' : 'none' }}>›</span>
+        <span className="small soft">All tags</span>
+        <span className="tiny muted">{s.tags.length}{!treeOpen && ql ? ' · showing matches' : ''}</span>
+      </button>
+      {(treeOpen || ql) && <div className="tree">
         {visible.map(n => {
           const m = n.isTag ? mark(n.path) : ''
           const open = !!exp[n.path]
@@ -200,7 +208,7 @@ export function TagPanel({ photos }: { photos: Photo[] }) {
           )
         })}
         {!visible.length && <div className="small muted" style={{ padding: 10 }}>{ql ? 'No match. Press Enter to create it.' : 'No tags yet.'}</div>}
-      </div>
+      </div>}
       {menu && (
         <>
           <div className="backdrop" style={{ background: 'transparent' }} onClick={() => setMenu(null)} />

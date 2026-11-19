@@ -47,6 +47,8 @@ export interface Store {
   /** Open the Library on a photo's folder, scrolled to it and selected. */
   reveal: (id: number) => void
   revealId: number | null; clearReveal: () => void
+  /** Full screen photo view: the photos to page through and where to start. */
+  fullscreen: { list: Photo[]; index: number } | null; setFullscreen: (f: { list: Photo[]; index: number } | null) => void
 }
 
 const Ctx = createContext<Store | null>(null)
@@ -90,6 +92,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [boardSeries, setBoardSeries] = useState<number | null>(null)
   const [sendIds, setSendIds] = useState<number[] | null>(null)
   const [revealId, setRevealId] = useState<number | null>(null)
+  const [fullscreen, setFullscreen] = useState<Store['fullscreen']>(null)
   const [revealTick, setRevealTick] = useState(0)
   const revealRef = useRef<number | null>(null)
   const reqId = useRef(0)
@@ -241,7 +244,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     thumb, setThumb, seed, reshuffle: () => setSeed(s => s + 1), items, total, loading, loadMore, reload,
     sel, setSel, clickSelect, selPhotos, selectAll, mergePhotos, meta, tags, reloadTags, facets, series, reloadSeries,
     agents, status, isLocal: status?.mode === 'local', sendIds, setSendIds, editInDarktable, toast, toastMsg, viewer, setViewer, boardSeries, setBoardSeries,
-    reveal, revealId, clearReveal: () => setRevealId(null),
+    reveal, revealId, clearReveal: () => setRevealId(null), fullscreen, setFullscreen,
   }
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

@@ -67,12 +67,13 @@ export function WorkView() {
                         const st = STATUS[w.status] || [w.status, '#2a2a2e', '#c8c8cc']
                         return (
                           <tr key={w.id}>
-                            <td style={{ width: 70 }}><img src={`/api/preview/${w.id}?s=t&v=${w.synced_ts || 0}`} alt="" style={{ width: 64, height: 42, objectFit: 'cover', borderRadius: 4 }} onError={e => ((e.target as HTMLImageElement).style.visibility = 'hidden')} /></td>
-                            <td>{w.filename}{w.error && <div className="tiny" style={{ color: '#ff8b8e' }}>{w.error}</div>}</td>
+                            <td style={{ width: 70 }}><img src={`/api/preview/${w.id}?s=t&v=${w.synced_ts || 0}`} alt="" title="Show in the library" onClick={() => s.reveal(w.id)} style={{ width: 64, height: 42, objectFit: 'cover', borderRadius: 4, cursor: 'pointer' }} onError={e => ((e.target as HTMLImageElement).style.visibility = 'hidden')} /></td>
+                            <td><button className="linkbtn" title="Show in the library" onClick={() => s.reveal(w.id)}>{w.filename}</button>{w.error && <div className="tiny" style={{ color: '#ff8b8e' }}>{w.error}</div>}</td>
                             <td><span className="status" style={{ background: st[1], color: st[2] }}>{st[0]}</span></td>
                             <td className="muted">{w.checkout_ts ? ago(w.checkout_ts, now) : ''}</td>
                             <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                              <button className="btn" onClick={() => job('open', a.id, [w.id])}>Open</button>{' '}
+                              <button className="btn" title="Its folder in the library, scrolled to it" onClick={() => s.reveal(w.id)}>Show in library</button>{' '}
+                              <button className="btn" title="Open it in darktable on this PC" onClick={() => job('open', a.id, [w.id])}>Open in darktable</button>{' '}
                               <button className="btn" onClick={() => job('sync', a.id, [w.id])}>Sync</button>{' '}
                               <button className="btn" onClick={() => job('release', a.id, [w.id])}>Release</button>
                             </td>

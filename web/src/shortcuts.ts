@@ -21,6 +21,7 @@ export const ACTIONS: Action[] = [
   { id: 'label4', label: 'Toggle purple label', scope: 'photos', keys: ['F5'] },
   { id: 'edit', label: 'Edit in darktable', scope: 'photos', keys: ['E'] },
   { id: 'view', label: 'Open large', scope: 'photos', keys: ['Enter'] },
+  { id: 'fullscreen', label: 'Full screen (and back)', scope: 'photos', keys: ['F'] },
   { id: 'selectAll', label: 'Select all', scope: 'photos', keys: ['Ctrl+A'] },
   { id: 'deselect', label: 'Clear selection', scope: 'photos', keys: ['Escape'] },
   { id: 'undo', label: 'Undo', scope: 'board', keys: ['Ctrl+Z'] },

@@ -4,7 +4,7 @@ import { useStore } from '../store'
 import { exifLine, fmtDay, stars } from '../fields'
 import { FilterPanel, SortPanel } from './Left'
 import { RatingLabels, SeriesPicker, TagPanel } from './Inspector'
-import { Thumb, useGroups } from './Library'
+import { Thumb, useGroups, useReveal } from './Library'
 import { FoldersView } from './Folders'
 import { WorkView } from './Work'
 
@@ -27,6 +27,7 @@ function MobileGrid({ selecting, onOpen }: { selecting: boolean; onOpen: (p: Pho
   const s = useStore()
   const { groups, canGroup } = useGroups(s.items)
   const selSet = new Set(s.sel)
+  useReveal()
   useEffect(() => {
     const el = document.getElementById('m-sentinel')
     if (!el) return
@@ -40,7 +41,7 @@ function MobileGrid({ selecting, onOpen }: { selecting: boolean; onOpen: (p: Pho
           {canGroup && <div className="group-h" style={{ marginBottom: 4 }}><b>{g.label}</b><span className="small muted">{g.items.length}</span></div>}
           <div className="mgrid">
             {g.items.map(p => (
-              <button key={p.id} className={selSet.has(p.id) ? 'sel' : ''} style={{ opacity: p.rating < 0 ? .45 : 1 }} aria-label={p.filename}
+              <button key={p.id} data-pid={p.id} className={selSet.has(p.id) ? 'sel' : ''} style={{ opacity: p.rating < 0 ? .45 : 1 }} aria-label={p.filename}
                 onClick={() => (selecting ? s.setSel(selSet.has(p.id) ? s.sel.filter(x => x !== p.id) : [...s.sel, p.id]) : onOpen(p))}>
                 <Thumb p={p} />
                 {p.rating > 0 && <span className="stars">{stars(p.rating)}</span>}
@@ -63,10 +64,15 @@ function PhotoPage({ id, onBack }: { id: number; onBack: () => void }) {
   const p = idx >= 0 ? s.items[idx] : extra
   if (!p) return null
   const nav = (d: number) => { const n = s.items[idx + d]; if (n) s.setSel([n.id]) }
+  const openFull = () => s.setFullscreen(idx >= 0 ? { list: s.items, index: idx } : { list: [p], index: 0 })
   return (
     <div className="scroll" style={{ padding: 0 }}>
-      <div style={{ background: '#0f0f10', height: '42vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ background: '#0f0f10', height: '42vh', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}
+        onClick={openFull} role="button" aria-label="View full screen">
         <Thumb p={p} size="l" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+        <span className="fs-hint" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
+        </span>
       </div>
       <div className="col" style={{ padding: 16, gap: 14 }}>
         <div className="row">
@@ -117,6 +123,8 @@ export function MobileApp() {
   const [photo, setPhoto] = useState<number | null>(null)
   useEffect(() => { if (photo != null && s.sel.length === 1 && s.sel[0] !== photo) setPhoto(s.sel[0]) }, [s.sel])
   useEffect(() => { if (['folders', 'timeline', 'board', 'work', 'list'].includes(s.view) && tab === 'lib') s.setView('grid') }, [])
+  // "Show in library" (e.g. from the PC tab): go to the Library, where the grid scrolls to the photo
+  useEffect(() => { if (s.revealId != null) { setTab('lib'); setPhoto(null) } }, [s.revealId])
   const openPhoto = (p: Photo) => { s.setSel([p.id]); setPhoto(p.id) }
   const goTab = (t: Tab) => { setTab(t); setPhoto(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders') }
   const title = photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : tab === 'series' ? 'Series' : 'PC'

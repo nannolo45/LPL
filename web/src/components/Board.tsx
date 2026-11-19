@@ -443,6 +443,11 @@ export function BoardView() {
       else if (a === 'zoomReset') { e.preventDefault(); zoomTo(1) }
       else if (a === 'deselect') { setTool('select'); setSelShapes([]) }
       else if (a === 'undo') { e.preventDefault(); undo() }
+      else if (a === 'fullscreen') {  // in reading order, maybe piles after
+        const list = [...order, ...items.filter(it => !pos.has(it.id))]
+        const k = list.findIndex(it => it.id === selPhotosHere[0])
+        if (k >= 0) { e.preventDefault(); s.setFullscreen({ list, index: k }) }
+      }
       else if (a === 'redo') { e.preventDefault(); redo() }
       else if (a === 'boardDelete') {
         if (!selShapes.length && !s.sel.some(id => byPhoto.has(id))) return

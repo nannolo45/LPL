@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, Photo } from '../api'
 import { useStore } from '../store'
-import { actionFor, typingIn } from '../shortcuts'
+import { actionFor, keysOf, typingIn } from '../shortcuts'
 import { exifLine, fmtDay, leaf } from '../fields'
 import { RatingLabels } from './Inspector'
 import { Thumb } from './Library'
@@ -20,7 +20,7 @@ export function Viewer() {
   }
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (id == null || typingIn(e.target)) return  // closed: leave the keys alone
+      if (id == null || s.fullscreen || typingIn(e.target)) return  // closed: leave the keys alone
       const a = actionFor(e, ['viewer'])
       if (a === 'close') s.setViewer(null)
       else if (a === 'next') { e.preventDefault(); go(1) }
@@ -38,6 +38,7 @@ export function Viewer() {
         <div className="grow" />
         <RatingLabels photos={[p]} />
         <button className="btn primary" onClick={() => s.editInDarktable([p.id])}>Edit in darktable</button>
+        <button className="btn" title={'Full screen (' + (keysOf('fullscreen')[0] || '') + ')'} onClick={() => { const k = s.items.findIndex(x => x.id === p.id); s.setFullscreen(k >= 0 ? { list: s.items, index: k } : { list: [p], index: 0 }) }}>Full screen</button>
         <button className="btn" onClick={() => s.setViewer(null)}>Close (Esc)</button>
       </div>
       <div className="vimg">

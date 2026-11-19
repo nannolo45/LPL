@@ -10,6 +10,7 @@ import { WorkView } from './components/Work'
 import { SendView } from './components/Send'
 import { Viewer } from './components/Viewer'
 import { MobileApp } from './components/Mobile'
+import { FullscreenPhoto } from './components/FullscreenPhoto'
 import { ShortcutsDialog } from './components/Shortcuts'
 import { actionFor, typingIn, useShortcutsVersion } from './shortcuts'
 
@@ -58,6 +59,15 @@ function useShortcuts() {
       if (!a) return
       if (s.viewer != null && (a === 'view' || a === 'deselect' || a === 'selectAll')) return  // the large view has its own keys
       if (a === 'selectAll') { if (s.view === 'board') return; e.preventDefault(); s.selectAll(); return }  // the board selects its own things
+      if (a === 'fullscreen') {
+        const id = s.viewer ?? s.sel[0]
+        if (id == null || (s.view === 'board' && s.viewer == null)) return  // the board opens it in board order itself
+        e.preventDefault()
+        const k = s.items.findIndex(p => p.id === id)
+        if (k >= 0) s.setFullscreen({ list: s.items, index: k })
+        else { const sp = s.selPhotos; const j = sp.findIndex(p => p.id === id); if (j >= 0) s.setFullscreen({ list: sp, index: j }) }
+        return
+      }
       if (!s.sel.length) return
       e.preventDefault()
       if (a.startsWith('rate')) s.meta({ rating: +a.slice(4) })
@@ -104,6 +114,7 @@ function Shell() {
   return (
     <>
       {s.isMobile ? <MobileApp /> : <Desktop />}
+      {s.fullscreen && <FullscreenPhoto key={s.fullscreen.list[s.fullscreen.index]?.id} />}
       {s.toastMsg && <div className="toast" role="status">{s.toastMsg}</div>}
     </>
   )

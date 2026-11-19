@@ -67,7 +67,7 @@ export function ContextBar() {
 }
 
 // after “Show in library”: scroll the photo into the middle of the view and make it blink once
-function useReveal() {
+export function useReveal() {
   const s = useStore()
   useEffect(() => {
     if (s.revealId == null) return

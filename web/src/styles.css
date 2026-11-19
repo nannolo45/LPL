@@ -259,3 +259,15 @@ a { color: var(--accent); }
 
 .btools .sep { height: 1px; margin: 3px 4px; background: var(--line2); }
 .btools button:disabled { opacity: .35; cursor: default; background: transparent; }
+
+/* full screen photo */
+.fsphoto { position: fixed; inset: 0; z-index: 80; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: none; user-select: none; }
+.fsphoto img { max-width: 100vw; max-height: 100vh; width: auto; height: auto; object-fit: contain; will-change: transform; }
+.fs-top { position: absolute; left: 0; right: 0; top: 0; display: flex; align-items: center; gap: 12px; padding: calc(10px + env(safe-area-inset-top)) 14px 22px; background: linear-gradient(rgba(0,0,0,.65), transparent); color: #fff; }
+.fs-top button { border: 0; background: rgba(255,255,255,.12); color: #fff; width: 40px; height: 40px; border-radius: 50%; font-size: 17px; flex: 0 0 auto; }
+.fs-nav { position: absolute; top: 50%; transform: translateY(-50%); border: 0; background: rgba(0,0,0,.35); color: #fff; width: 48px; height: 72px; border-radius: 8px; font-size: 26px; }
+.fs-hint { position: absolute; right: 10px; bottom: 10px; width: 34px; height: 34px; border-radius: 50%; background: rgba(0,0,0,.5); color: #fff; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+
+.linkbtn { border: 0; background: none; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.linkbtn:hover { color: var(--accent-text); text-decoration: underline; }
+.mgrid button.flash { animation: lplflash 1.6s ease-out; }
