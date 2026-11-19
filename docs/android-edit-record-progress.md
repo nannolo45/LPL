@@ -28,6 +28,23 @@ the server, darktable was not started. XMPs in the tests are real darktable side
   mirror.gcr.io), so the base images cannot be pulled. What was checked instead: see "Where `module-names.json` goes".
 - **Windows exe: not built** (no Windows here). The same PyInstaller options were run on Linux (below).
 - Module names: no `module-names.json` exists yet; every name shown today is the operation (`colorbalancergb`).
+- **`module-flags.json` must be generated** (shape below) and copied to `server/lpl/resources/`. Without it,
+  only darktable's own presets (exposure, color calibration, sigmoid/filmic, "auto" orientation) are recognised
+  as automatic; raw black/white point, demosaic, white balance, highlights, input/output profile and gamma are
+  then listed in the line of a photo that was only opened.
+- **Automatic modules, what the method gets wrong** (method in "Modules darktable applies by itself"):
+  - after darktable's "compress history", a default module the user changed (e.g. white balance) has one item
+    again; if it still sits in the leading run, it counts as automatic and is left out (test
+    `test_known_limit_compressed_history`). A change of exposure or sigmoid after compressing is found only if
+    darktable renamed the instance (it drops the preset name when the settings no longer match the preset);
+  - a preset of the user's own that darktable applies automatically (not "_builtin_") counts as the user's;
+  - default_enabled comes from a schema extracted with one raw file (mire1.cr2); for JPEGs darktable does not
+    apply raw modules at all, so nothing is lost, but a module whose default depends on the camera could differ;
+  - entries recorded before this round (not on `main`, only on this branch) have no item positions: nothing in
+    them is marked automatic.
+  When `changes` is not null (an earlier XMP to compare with), none of this matters: `changes` is shown.
+- **Time zone in the image not proven**: the Dockerfile now installs `tzdata` (python:3.12-slim may come without
+  it, and then `TZ` is ignored silently); the image build could not be run (see above).
 - Never run: the real Android app, real darktable, real phones (headless Chrome only).
 
 ### Item by item
@@ -48,21 +65,23 @@ the server, darktable was not started. XMPs in the tests are real darktable side
 | R14 header-only check | done (path chosen by me) | `api.py` `auth_token` |
 | Help text names `dt-android-arm64-v8a.apk` | done | `web/public/android-app.html`, `docs/android-handoff.md` |
 | Database change with in-place migration, tested from main's schema | done | `db.py` `migrate` |
+| Owner's round 2: modules darktable applies by itself marked `auto`, left out of the summary ("darktable's default edit"), all modules behind each entry | done (limits above) | `edits.automatic`, `xmp.history` (`first`, `second`), `EditRecord.tsx` `EditEntry` |
+| Owner's round 2: saves of one device on one photo on one day are one entry, changes against the state before the run | done | `edits.record`, `edits.day_of`, `TZ` (`config.tz`), Dockerfile `tzdata` |
 
 ### Tests and results
 ```
 python -m venv venv && venv/bin/pip install -r server/requirements-dev.txt
-cd server && ../venv/bin/python -m pytest -q tests        # 49 passed (13 before this branch)
-cd web && npm ci && npm test && npm run build              # 25 passed (16 before), build passes
+cd server && ../venv/bin/python -m pytest -q tests        # 64 passed (13 before this branch)
+cd web && npm ci && npm test && npm run build              # 27 passed (16 before), build passes
 ```
 Run here with Python 3.13, FastAPI 0.165.0, Starlette 1.10.0, Node 22.23.
 
-**From a fresh clone (as the reviewer checks), commit 0de8126:**
+**From a fresh clone (as the reviewer checks), commit 58a9a7e (the commits after it change only this report):**
 ```
 git clone --branch android-edit-record-progress https://github.com/nannolo45/lpl fresh-lpl && cd fresh-lpl
 python3 -m venv ../fresh-venv && ../fresh-venv/bin/pip install -r server/requirements-dev.txt
-cd server && ../../fresh-venv/bin/python -m pytest -q tests   # 49 passed, 1 warning (Starlette's httpx notice)
-cd ../web && npm ci && npm test && npm run build              # tests 25, pass 25, fail 0; built
+cd server && ../../fresh-venv/bin/python -m pytest -q tests   # 64 passed, 1 warning (Starlette's httpx notice)
+cd ../web && npm ci && npm test && npm run build              # tests 27, pass 27, fail 0; built
 ```
 `git status --short --ignored` in the working clone and in the fresh clone lists only `agent/__pycache__/`,
 `server/.pytest_cache/`, `server/lpl/__pycache__/`, `server/tests/__pycache__/`, `web/dist/`, `web/node_modules/`,
@@ -72,30 +91,37 @@ cd ../web && npm ci && npm test && npm run build              # tests 25, pass 2
 |---|---|---|
 | `server/tests/test_edit_record.py` | 20 | history of real XMPs: default pipeline, one module added, `history_end` before the last item, the same instance twice (last counts), five exposure and two color balance instances, no history, darktable 5 sidecar with preset instance names, changed settings, switched on/off; module-names file present, missing, entry missing, unreadable; events from posts (device and its name then, changes, summary, `last_edit`), PC then phone, old agent without `agent=`, unknown agent id, XMP without history, scanner "outside", rating-only change is no edit, outside change found at the next post, first scan only remembers; the names file and the fixtures are not ignored by git or `.dockerignore` |
 | `server/tests/test_jobs_auth_progress.py` | 13 | R13: handed out again only after the time, only to the agent that took it, never when done or failed, at most 3 times, off with 0, jobs taken before the update left alone; R14: header right / wrong / missing, cookie alone refused, rest of the API unchanged, no password; R16: step/progress kept, cleaned, old items unchanged, dropped when the device is offline |
-| `server/tests/test_migration.py` | 2 | migration of main's schema with 20 000 photos (every old row unchanged, new tables and column, runs twice, integrity check); the real start-up on that library in its own process |
+| `server/tests/test_edit_merge_auto.py` | 14 | automatic modules with real XMPs: only opened (darktable's default pipeline; darktable 5 with its workflow presets) = "darktable's default edit", the user's module after the defaults, a rotated photo (flip's second item), multi-instance file, no flags file, the compressed-history limit, `auto` in the API with every module kept, old entries; merging: three exposure steps = one "exposure" against the state before the run, switched off and on again = "no module changed", another device in between, outside in between, a new day in Pacific/Auckland splits what is one UTC day, the same two saves in UTC are one entry, an unknown zone falls back |
+| `server/tests/test_migration.py` | 3 | migration of main's schema with 20 000 photos (every old row unchanged, new tables and column, runs twice, integrity check); the real start-up on that library in its own process; `edit_events` as first made on this branch gets the new columns, rows kept |
 | `server/tests/test_pc_agent.py` | 1 | the real `lpl_agent.py` against the server over HTTP: `downloading` 0 → 1, `sending preview`, `sending edit`, no step after; the event names the agent and its name; a step left in the state file is dropped on restart |
-| `web/tests/edits.test.ts` | 9 | the last-edit line (device, time, summary; outside / import / local / unknown; same names told apart), the list's lines, the bar appearing, going away when the step ends, when the device is offline, after 15 s by the server's clock when the page stops getting answers; old agents |
+| `web/tests/edits.test.ts` | 11 | the last-edit line (device, time, summary; outside / import / local / unknown; same names told apart; "darktable's default edit"), the list's lines, automatic modules left out and listed under "all modules", several saves as one entry ("today 11:00–14:05 · 5 saves"), the bar appearing, going away when the step ends, when the device is offline, after 15 s by the server's clock when the page stops getting answers; old agents |
 
 Rendered check in headless Chrome (optional, needs the Python package `playwright` and Google Chrome; not in
 `npm test`): `python web/tests/browser-check.py <python with server requirements> <screenshot folder>` after
 `npm run build`. Result here: OK on desktop (1400 x 900) and phone (390 x 844, Android Chrome user agent):
-line, list with 3 edits, bars in the inspector, on the phone's photo page and in Devices; after the phone's
+line ("· exposure" for three saves of the desktop), the list with 2 entries (the desktop's 3 saves as one entry;
+the phone's opening as "darktable's default edit", its 8 modules under "all modules" marked automatic), a photo
+only opened showing "darktable's default edit", bars in the inspector, on the phone's photo page and in Devices; after the phone's
 heartbeats stopped the bar went away (14 s after the check began waiting) and "on Phone: copying from the NAS"
 was shown instead.
 
 ### Screenshots (`docs/shots/edit-record-progress/`)
 - `desktop-last-edit-and-progress.png`: inspector with the line, the open list and the phone's download bar
 - `desktop-devices-progress.png`: Devices (Working set) with "sending the edit" (busy bar) and "downloading · 43%"
-- `phone-last-edit-and-progress.png`, `phone-list-of-edits.png`: the phone's photo page
+- `desktop-only-opened.png`: a photo that was only opened in darktable: "darktable's default edit"
+- `phone-last-edit-and-progress.png`, `phone-list-of-edits.png`: the phone's photo page (the list with
+  "3 saves" and "all modules" opened)
 - `phone-after-device-stopped.png`, `desktop-after-device-stopped.png`: the bar gone, the plain state back
 
-The test photos are flat colours and the edits come from darktable's test files (different images), so the
-third edit in the screenshots changes many modules; a real session changes a few.
+The browser check runs without `module-names.json`, so operation names (`rawprepare`) are shown, and with the
+generated `module-flags.json` placed in a copy of the server.
 
 ### Database migration
 - New tables `edit_events` (one row per edit) and `edit_baseline` (the modules of the XMP LPL last recorded
   per photo), new index `idx_edit_events_photo`, new column `jobs.attempts` (default 0).
-- Only `CREATE TABLE IF NOT EXISTS` and one `ALTER TABLE ADD COLUMN`; nothing is dropped or rewritten. It runs
+- `edit_events` has `first_ts`, `saves`, `before` (merging); an `edit_events` table as first made on this
+  branch gets them by `ALTER TABLE ADD COLUMN` (tested), its rows kept as they are.
+- Only `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ADD COLUMN`; nothing is dropped or rewritten. It runs
   at every start (`db.migrate`, called by `db.init`) and does nothing the second time.
 - Tested from main's schema: `server/tests/fixtures/schema-main-0f1139c.sql` was made by running main's
   `db.init()` on an empty folder and listing `sqlite_master`. A library of 20 000 photos with labels, tags,
@@ -115,19 +141,27 @@ naming the device only if exactly one device has the photo in its working set. A
 ```json
 {"id": 12, "photo_id": 3, "time": 1795070000.5, "source": "agent",
  "agent_id": "android-3f6c…", "device": "Phone", "device_os": "android",
- "modules": [{"operation": "exposure", "name": "exposure", "instance": "", "priority": 0, "enabled": true, "label": "exposure"}],
+ "modules": [{"operation": "exposure", "name": "exposure", "instance": "", "priority": 0, "enabled": true, "label": "exposure", "auto": false}],
  "changes": {"added": [], "removed": [], "switched_on": [], "switched_off": [], "changed": [ …modules… ]},
- "summary": "exposure, color balance rgb"}
+ "summary": "exposure, color balance rgb",
+ "first_time": 1795068000.0, "saves": 3}
 ```
+New in round 2, optional for clients (a client that knows only the other fields keeps working):
+`modules[].auto` (darktable applied it by itself and nobody changed it; only in `modules`, not in `changes`),
+`first_time` (the first save of the entry; equals `time` for one save) and `saves` (how many saves the entry holds).
 - `source`: `agent` (a post), `outside` (the scanner found the XMP changed; also when a post finds the file it
   replaces changed since LPL's last record), `import` (sent from a PC's local library), `local` (darktable on
   the PC of a local library). `device`/`device_os`: the agent's name and os when the edit came; null when unknown.
 - `modules`: the module instances of the edit, most recently changed first; `name` from `module-names.json`,
   else the operation; `label` = name plus the instance name (darktable's `_builtin_` prefix left out).
-- `changes`: against the XMP LPL had before; `null` when there was nothing to compare with. `changed` = settings
+- One entry per run: consecutive saves on one photo with the same `source` and `agent_id` (outside counts as its
+  own source) on the same calendar day of the server (time zone `TZ`) are one entry; `time` and `id` stay the
+  entry's (`time` moves to the last save). Another device or source in between, or a new day, starts a new entry.
+- `changes`: against the XMP LPL had before the entry's first save; `null` when there was nothing to compare with. `changed` = settings
   (`params`, `blendop_params`, `modversion`) or the instance name differ; settings are never decoded.
-- `summary`: what the one-line display shows after the time: the changed modules (at most 4 names, "and N more"),
-  or the modules that are on when there is nothing to compare with, "no module changed", "no darktable edit".
+- `summary`: what the one-line display shows after the time: the changed modules (at most 4 names, "and N more");
+  when there is nothing to compare with, the modules that are on and not `auto`, or "darktable's default edit"
+  when there are none; "no module changed"; "no darktable edit" (no history).
   The web UI shows `last edited on <device> · <time> · <summary>`.
 
 **Heartbeat (R16)**: a `working_set` item may add `"step": "downloading" | "sending edit" | "rendering preview" |
@@ -164,6 +198,37 @@ unreadable or without an entry: the operation is shown.
   program finds it under its unpack folder (`…/_MEI…/lpl/resources/module-names.json`) and answers
   "color balance rgb"; without the file the build still succeeds and shows the operation.
 
+### Modules darktable applies by itself (`module-flags.json`)
+Method (`edits.automatic`, documented in the code). When darktable first opens a photo it writes, at the start
+of the history and before anything the user does, one item for each module that is on by default, its internal
+modules, and one per preset it applies automatically, which it names after the preset with the prefix
+`_builtin_` (found in the darktable 5 test sidecar: `channelmixerrgb`, `exposure`, `sigmoid`
+"_builtin_scene-referred default", `flip` "_builtin_auto"). So the leading run of the history whose items are
+each such a module, and where no instance appears a second time, is darktable's own; it ends at the first item
+of any other module or at any instance's second item. An instance whose only item lies in that run is
+`auto`. Internal modules (gamma, mask manager) are always `auto`. Derived from the XMP plus generated data,
+no hand-written module list; `xmp.history` now keeps each instance's first and second item number for this.
+
+`server/lpl/resources/module-flags.json` (next to `module-names.json`; same rules for git, Docker and the exe,
+see below), a JSON object, operation → flags:
+```json
+{"rawprepare": {"default_enabled": true, "hidden": false}, "gamma": {"default_enabled": false, "hidden": true}, "exposure": {"default_enabled": false, "hidden": false}}
+```
+Generated from the darktable-android repository's `schema/ui-schema.json`: `default_enabled` = the module's
+`default_enabled` is `true`; `hidden` = its `status` is `"hidden"`. The command is in
+`server/tests/fixtures/xmp/SOURCE.md`; `server/tests/fixtures/module-flags.json` is its output for schema
+commit 37b8f27 (14 operations flagged: colorin, colorout, demosaic, demosaicscale, finalscale, flip, gamma,
+highlights, mask_manager, overexposed, rawoverexposed, rawprepare, rotatepixels, temperature). LPL re-reads it
+when it changes. Missing or unreadable: only single-item `_builtin_` instances are `auto` (logged once).
+`hide_enable_button` was not needed: every module with it also has `default_enabled`.
+
+### Time zone (merging by day)
+The container's day follows `TZ` (`config.tz`, read with Python's `zoneinfo`; unset: the system's local time,
+which in Docker is UTC, so an evening's saves after 00:00 UTC would split; unknown zone: local time and one
+warning in the log). `docker-compose.yml` already had a `TZ=` line; it is now marked (4) and explained, and the
+README's install step lists it. The Dockerfile installs `tzdata`, because a slim image may come without time-zone
+data and would then ignore `TZ` without a word.
+
 ### R13: the time chosen
 30 minutes (`JOB_RETRY_SECONDS=1800`; 0 = never, as before). The PC agent reports an `edit` job only after all
 its photos are copied; 100 RAW files of 30 MB over a 20 Mbit/s remote link take about 20 minutes, so a shorter
@@ -179,15 +244,17 @@ time it is opened after that. At most 3 hand-outs, so a job that always kills th
 3. Optional: `JOB_RETRY_SECONDS=…` in `docker-compose.yml` to change the 30 minutes.
 4. Optional: a full rescan (Devices → Full rescan) to give every photo a record, so that the first edit made
    outside LPL is reported too.
+5. Time zone: check that the Compose configuration of the `lightphotolibrary` project on the NAS has a line
+   `- TZ=<Area/City>` with his own zone under `environment:` (the repository's file has had one; if his project
+   was made from an older copy, add it). Then pull the new image (it brings the time-zone data). Without it,
+   days in the list of edits end at midnight UTC.
+6. The reviewer copies the generated `module-names.json` and `module-flags.json` into `server/lpl/resources/`.
 
 ### Open questions
 1. R14 path `GET /api/auth/token`: fine for the app, or should `/api/auth` answer instead?
 2. Event JSON field names (above): to be checked against the app's client.
-3. Should LPL hide darktable's always-applied modules (raw black/white point, demosaic, input/output color
-   profile…) in "modules in use" when there is nothing to compare with? Today they are listed; nothing tells
-   them apart in the XMP, a list would have to come with `module-names.json`.
-4. Many events per photo: the PC agent syncs a few seconds after every darktable write, so one session can
-   record several events. Keep all (now), or merge events of the same device within some minutes?
+(Decided by the owner and done: darktable's own modules are left out of the line; saves of one device on one
+day are one entry.)
 
 ## Log
 - 2026-11-19: branch from `main` 0f1139c. Baseline: server 13 tests pass, web tests and build pass.
@@ -213,3 +280,7 @@ time it is opened after that. At most 3 hand-outs, so a job that always kills th
   `server/tests/fixtures/` and `server/lpl/resources/`, ignore rules unchanged, test against it added; exe build
   collects lpl's data files. Fresh clone: 49 server tests and 25 web tests pass, build passes. Docker image not
   built (Docker Hub blocked); context and COPY checked with a scratch build.
+- 2026-11-19: owner's round 2: modules darktable applies by itself marked `auto` (leading run of default /
+  internal / `_builtin_` preset items, from generated `module-flags.json`), "darktable's default edit"; saves of
+  one device on one photo on one day merged, changes against the state before the run, day in `TZ`; tzdata in
+  the image. Fresh clone at 58a9a7e: 64 server tests, 27 web tests pass, build passes; browser check OK.
