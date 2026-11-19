@@ -9,6 +9,10 @@ WEB_DIR        folder with the built web UI (served at /)
 LPL_MODE       "nas" (default: one photo folder, PHOTO_ROOT) or "local" (a PC's own library: several folders
                added in the web app, darktable opened directly, "Send to NAS")
 EXIFTOOL       path of the exiftool program (default: "exiftool" on the PATH)
+JOB_RETRY_SECONDS  a job an agent took but never reported done is handed to that agent again after this many
+               seconds (default 1800 = 30 min; 0 = never, as before). Long enough for the longest normal job
+               (an "edit" of many RAW files over a slow remote link, which the PC agent reports only when all are
+               copied), short enough that a phone app that died with a job gets it back the next time it is opened.
 
 Local mode only (set by the PC agent, which hosts the local library):
 LPL_DARKTABLE  darktable program, LPL_DT_LIBRARY its library file, LPL_BRIDGE_DIR the bridge folder
@@ -31,6 +35,7 @@ class Config:
         self.write_series_tags = os.environ.get("WRITE_SERIES_TAGS", "1") != "0"
         self.mode = os.environ.get("LPL_MODE", "nas")
         self.exiftool = os.environ.get("EXIFTOOL", "exiftool")
+        self.job_retry_seconds = int(os.environ.get("JOB_RETRY_SECONDS", "1800"))
         self.darktable = os.environ.get("LPL_DARKTABLE", "")
         self.dt_library = os.environ.get("LPL_DT_LIBRARY", "")
         self.bridge_dir = Path(os.environ.get("LPL_BRIDGE_DIR", str(self.data_dir / "bridge")))

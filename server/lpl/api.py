@@ -13,12 +13,13 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import db, media, query, scanner, xmp
+from . import db, edits, media, query, scanner, xmp
 from .config import config
 
 log = logging.getLogger("lpl.api")
 app = FastAPI(title="LightPhotoLibrary", version="0.1.0")
 AGENT_ONLINE_SECONDS = 15
+JOB_MAX_HANDOUTS = 3  # a job that was never reported done is handed out at most this often (see config.job_retry_seconds)
 
 
 # ---------------------------------------------------------------- auth
@@ -33,7 +34,7 @@ def _token() -> str:
 @app.middleware("http")
 async def auth_mw(request: Request, call_next):
     path = request.url.path
-    if config.password and path.startswith("/api/") and path not in ("/api/login", "/api/auth"):
+    if config.password and path.startswith("/api/") and path not in ("/api/login", "/api/auth", "/api/auth/token"):
         tok = request.cookies.get("lpl_token") or request.headers.get("x-lpl-token")
         if tok not in (_token(), config.password):
             return JSONResponse({"detail": "login required"}, status_code=401)
@@ -45,6 +46,18 @@ def auth_status(request: Request):
     if not config.password:
         return {"required": False, "ok": True}
     return {"required": True, "ok": request.cookies.get("lpl_token") == _token()}
+
+
+@app.get("/api/auth/token")
+def auth_token(request: Request):
+    """Is the x-lpl-token header right? Only the header counts (not the login cookie), so an app can check a
+    password before it uses it. 200 {"ok": true, "required": ...} or 401 like every other call."""
+    if not config.password:
+        return {"required": False, "ok": True}
+    tok = request.headers.get("x-lpl-token") or ""
+    if any(secrets.compare_digest(tok.encode(), t.encode()) for t in (_token(), config.password)):
+        return {"required": True, "ok": True}
+    return JSONResponse({"detail": "login required"}, status_code=401)
 
 
 @app.post("/api/login")
@@ -175,7 +188,15 @@ def photo_detail(pid: int):
     d = items[0]
     d["series"] = [dict(r) for r in db.conn().execute(
         "SELECT s.id, s.name FROM series_items si JOIN series s ON s.id=si.series_id WHERE si.photo_id=?", (pid,)).fetchall()]
+    d["last_edit"] = edits.last(pid)
     return d
+
+
+@app.get("/api/photos/{pid}/edits")
+def photo_edits(pid: int, limit: int = 200):
+    """Who edited the photo and what changed, newest first (see edits.py)."""
+    photo_row(pid)
+    return {"edits": edits.events(pid, max(1, min(limit, 1000)))}
 
 
 @app.get("/api/preview/{pid}")
@@ -856,8 +877,34 @@ def list_agents() -> List[dict]:
         d = dict(r)
         d["state"] = json.loads(d["state"] or "{}")
         d["online"] = (t - (d["last_seen"] or 0)) < AGENT_ONLINE_SECONDS
+        if not d["online"]:  # a device that stopped reporting is not downloading or syncing anything any more
+            for it in d["state"].get("working_set") or []:
+                if isinstance(it, dict):
+                    it.pop("step", None)
+                    it.pop("progress", None)
         out.append(d)
     return out
+
+
+def _clean_progress(ws) -> None:
+    """Working-set items may carry step ("downloading", "sending edit", "rendering preview", "sending preview")
+    and progress (0 to 1) while a device copies or syncs a photo. Kept with the item as sent; a progress that is
+    not a number is dropped, one outside 0..1 is clamped. Items without them are left as they are."""
+    if not isinstance(ws, list):
+        return
+    for it in ws:
+        if not isinstance(it, dict):
+            continue
+        if "step" in it and not (isinstance(it["step"], str) and it["step"].strip()):
+            it.pop("step")
+        elif "step" in it:
+            it["step"] = it["step"].strip()[:40]
+        if "progress" in it:
+            p = it["progress"]
+            if isinstance(p, bool) or not isinstance(p, (int, float)) or p != p:
+                it.pop("progress")
+            else:
+                it["progress"] = max(0.0, min(1.0, float(p)))
 
 
 @app.get("/api/agents")
@@ -878,17 +925,27 @@ def heartbeat(body: Dict[str, Any] = Body(...)):
     aid = str(body.get("id") or "")[:80]
     if not aid:
         raise HTTPException(400, "agent id required")
+    state = body.get("state") or {}
+    if isinstance(state, dict):
+        _clean_progress(state.get("working_set"))
     with db.write_lock:
         c = db.conn()
         c.execute("INSERT INTO agents(id,name,os,last_seen,state) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
                   "name=excluded.name, os=excluded.os, last_seen=excluded.last_seen, state=excluded.state",
-                  (aid, body.get("name"), body.get("os"), time.time(), json.dumps(body.get("state") or {})))
+                  (aid, body.get("name"), body.get("os"), time.time(), json.dumps(state)))
         # an Android agent (the darktable phone app) only takes jobs addressed to it, never ones meant for any PC
         anyone = "" if body.get("os") == "android" else " OR agent_id IS NULL"
+        now = time.time()
         jobs = c.execute("SELECT * FROM jobs WHERE status='queued' AND (agent_id=?%s) ORDER BY id" % anyone, (aid,)).fetchall()
+        if config.job_retry_seconds > 0:
+            # taken by this agent long ago and never reported done (the app died, or the report got lost): again
+            # (attempts is 0 for jobs taken before LPL counted them: those are left alone, they may be weeks old)
+            jobs += c.execute("SELECT * FROM jobs WHERE status='taken' AND agent_id=? AND taken<? AND attempts BETWEEN 1 AND ? ORDER BY id",
+                              (aid, now - config.job_retry_seconds, JOB_MAX_HANDOUTS - 1)).fetchall()
         out = []
         for j in jobs:
-            c.execute("UPDATE jobs SET status='taken', taken=?, agent_id=? WHERE id=?", (time.time(), aid, j["id"]))
+            c.execute("UPDATE jobs SET status='taken', taken=?, agent_id=?, attempts=COALESCE(attempts,0)+1 WHERE id=?",
+                      (now, aid, j["id"]))
             out.append({"id": j["id"], "kind": j["kind"], "payload": json.loads(j["payload"] or "{}")})
         c.commit()
     return {"jobs": out, "server_time": time.time()}
@@ -962,10 +1019,39 @@ def get_xmp(pid: int):
     return Response(data, media_type="application/rdf+xml")
 
 
+def _posting_agent(pid: int, agent: str) -> Optional[str]:
+    """The agent that posted an XMP: the one it names (agent=<id>), else, for agents that do not send it yet,
+    the only device that has the photo in its working set; None when that is not exactly one."""
+    if agent:
+        return agent[:80]
+    having = [a["id"] for a in list_agents()
+              if any(isinstance(w, dict) and w.get("id") == pid for w in (a["state"].get("working_set") or []))]
+    return having[0] if len(having) == 1 else None
+
+
+def _record_post(pid: int, sc: Path, new_hist: list, source: str, agent_id: Optional[str]) -> None:
+    """Before the posted XMP replaces sc: record it as an edit event, compared with the file it replaces.
+    If that file had changed since LPL last recorded it (darktable on a PC that wrote to the NAS directly),
+    that change is recorded first, as edited outside LPL. Caller holds db.write_lock."""
+    old = None
+    if sc.is_file():
+        try:
+            old = xmp.parse(sc.read_bytes())["history"]
+            old_mtime = sc.stat().st_mtime
+        except Exception:
+            old = None
+    base = edits.baseline(pid)
+    if old is not None and base is not None and old_mtime > base["mtime"] + 0.001 \
+            and edits.signature(old) != edits.signature(base["history"]):
+        edits.record(pid, old, base["history"], "outside", ts=old_mtime, mtime=old_mtime)
+    prev = old if old is not None else (base["history"] if base else None)
+    edits.record(pid, new_hist, prev, source, agent_id=agent_id)
+
+
 @app.post("/api/photos/{pid}/xmp")
-async def put_xmp(pid: int, request: Request, checkout_ts: float = 0):
+async def put_xmp(pid: int, request: Request, checkout_ts: float = 0, agent: str = ""):
     """Sync-back from the agent. darktable's edit always wins; for rating/labels/tags the LPL values win
-    if they were changed in LPL after the checkout."""
+    if they were changed in LPL after the checkout. agent = the posting agent's id (recorded as who edited)."""
     data = await request.body()
     try:
         xmp.parse(data)
@@ -980,11 +1066,21 @@ async def put_xmp(pid: int, request: Request, checkout_ts: float = 0):
                               category_tags=category_tags())
         merged = True
     sc = xmp.sidecar_path(scanner.abs_of(r["relpath"]))
+    agent_id = _posting_agent(pid, agent)
     with db.write_lock:
-        xmp.atomic_write(sc, data, config.backup_dir, r["relpath"])
         x = xmp.parse(data)
+        try:
+            _record_post(pid, sc, x["history"], "agent", agent_id)
+        except Exception:  # the record must never cost the edit
+            log.exception("could not record the edit of photo %s", pid)
+        try:
+            xmp.atomic_write(sc, data, config.backup_dir, r["relpath"])
+        except Exception:
+            db.conn().rollback()  # no record of an edit that was not stored
+            raise
         x["mtime"] = sc.stat().st_mtime
         scanner.apply_xmp_to_db(pid, x, touch=False)
+        edits.set_baseline(pid, x["history"], x["mtime"])
         db.conn().commit()
     return Response(data, media_type="application/rdf+xml", headers={"X-LPL-Merged": "1" if merged else "0"})
 
@@ -1093,11 +1189,25 @@ async def import_xmp(request: Request, dest: str):
     sc = xmp.sidecar_path(img)
     sc.parent.mkdir(parents=True, exist_ok=True)
     with db.write_lock:
-        xmp.atomic_write(sc, data, config.backup_dir, scanner.rel_of(img))
         row = db.conn().execute("SELECT id FROM photos WHERE relpath=?", (scanner.rel_of(img),)).fetchone()
+        if row:
+            try:  # an edit sent from a PC's local library: recorded when its modules differ from what was here
+                old = xmp.parse(sc.read_bytes())["history"] if sc.is_file() else None
+                base = edits.baseline(row["id"])
+                prev = old if old is not None else (base["history"] if base else None)
+                if prev is not None and edits.signature(prev) != edits.signature(x["history"]):
+                    edits.record(row["id"], x["history"], prev, "import")
+            except Exception:
+                log.exception("could not record the edit of %s", dest)
+        try:
+            xmp.atomic_write(sc, data, config.backup_dir, scanner.rel_of(img))
+        except Exception:
+            db.conn().rollback()
+            raise
         if row:
             x["mtime"] = sc.stat().st_mtime
             scanner.apply_xmp_to_db(row["id"], x, touch=False)
+            edits.set_baseline(row["id"], x["history"], x["mtime"])
             db.conn().commit()
     return {"ok": True}
 

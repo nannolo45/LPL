@@ -8,7 +8,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import db, media, xmp
+from . import db, edits, media, xmp
 from .config import SKIP_DIRS, SUPPORTED_EXTS, config
 
 log = logging.getLogger("lpl.scan")
@@ -139,6 +139,7 @@ def _index(changed, known, progress=False):
                 x = xmp.read_for_image(path)
                 if x:
                     apply_xmp_to_db(pid, x)
+                    edits.observe_scan(pid, x)
             c.commit()
         if progress:
             status["done"] = min(len(changed), i + batch)
@@ -217,6 +218,7 @@ def scan(full: bool = False) -> None:
             with db.write_lock:
                 for pid, x in xmp_changed:
                     apply_xmp_to_db(pid, x)
+                    edits.observe_scan(pid, x)  # a changed darktable edit that no agent posted: "edited outside LPL"
                 db.conn().commit()
         # photos in a folder that is currently unplugged (e.g. external drive) are kept as they are
         missing = [r["id"] for rel, r in known.items() if rel not in seen and not r["missing"] and not (offline and rel.startswith(offline))]

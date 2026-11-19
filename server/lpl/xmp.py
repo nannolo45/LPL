@@ -12,6 +12,7 @@ darktable stores, in <file>.<ext>.xmp:
 LPL only rewrites rating, labels, tags (and optionally title/description).
 Everything else in the file is preserved. darktable's internal "darktable|..." tags are kept as they are.
 """
+import hashlib
 import os
 import shutil
 import tempfile
@@ -120,6 +121,56 @@ def dt_timestamp(v) -> Optional[float]:
     return float(n)
 
 
+def _item_value(li, name):
+    """A history item's field: darktable writes them as attributes of the rdf:li; older writers as child elements."""
+    v = li.get(q("darktable", name))
+    if v is None:
+        el = li.find(q("darktable", name))
+        if el is not None:
+            v = (el.text or "").strip()
+    return v
+
+
+def _int(v, default=0):
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return default
+
+
+def history(desc) -> list:
+    """The darktable modules the XMP's edit uses, one entry per module instance.
+
+    darktable keeps the edit as a list of history items (darktable:history, rdf:Seq). Each item names a module
+    (darktable:operation), its instance (darktable:multi_priority, and the instance's name darktable:multi_name),
+    whether it is on (darktable:enabled) and its settings (darktable:params, darktable:blendop_params).
+    darktable:history_end says how far the edit goes: items whose darktable:num is history_end or more were
+    undone in the history stack and are not part of the edit. When several items name the same instance,
+    the last one counts. Settings are not decoded: only a fingerprint is kept, to see whether they changed.
+
+    Returns [{"operation", "instance", "priority", "enabled", "params", "num"}], most recently changed first."""
+    el = desc.find(q("darktable", "history"))
+    if el is None:
+        return []
+    items = list(el.iter(q("rdf", "li")))
+    end = _get_attr_or_child(desc, "darktable", "history_end")
+    end = _int(end, len(items)) if end is not None else None
+    state = {}
+    for pos, li in enumerate(items):
+        op = _item_value(li, "operation")
+        if not op:
+            continue
+        num = _int(_item_value(li, "num"), pos)
+        if end is not None and num >= end:
+            continue
+        prio = _int(_item_value(li, "multi_priority"), 0)
+        fp = hashlib.sha1(("%s\0%s\0%s" % (_item_value(li, "modversion") or "", _item_value(li, "params") or "",
+                                           _item_value(li, "blendop_params") or "")).encode()).hexdigest()[:16]
+        state[(op, prio)] = {"operation": op, "instance": _item_value(li, "multi_name") or "", "priority": prio,
+                             "enabled": _item_value(li, "enabled") not in ("0", "false", "False"), "params": fp, "num": num}
+    return sorted(state.values(), key=lambda m: (-m["num"], m["operation"], m["priority"]))
+
+
 def parse(data: bytes) -> dict:
     tree = _parse_bytes(data)
     desc = _description(tree)
@@ -161,6 +212,7 @@ def parse(data: bytes) -> dict:
         "change_ts": dt_timestamp(_get_attr_or_child(desc, "darktable", "change_timestamp")),
         "export_ts": dt_timestamp(_get_attr_or_child(desc, "darktable", "export_timestamp")),
         "print_ts": dt_timestamp(_get_attr_or_child(desc, "darktable", "print_timestamp")),
+        "history": history(desc),
     }
 
 
