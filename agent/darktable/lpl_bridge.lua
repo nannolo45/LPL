@@ -97,19 +97,23 @@ local function in_working_set(img)
   return false
 end
 
+-- Photos this script has handled, by path. darktable's import returns the existing image when the file
+-- is already in the library, so there is no need to walk the whole library (with tens of thousands of
+-- images that took minutes and froze darktable).
+local known = {}
+
 local function find_image(path)
-  local target = norm(path)
-  for _, img in ipairs(dt.database) do
-    if norm(image_path(img)) == target then return img end
-  end
-  return nil
+  return known[norm(path)]
 end
 
 local function import(path)
-  local img = find_image(path)
+  local img = known[norm(path)]
   if img then return img, false end
   local ok, res = pcall(dt.database.import, path)
-  if ok then return res, true end
+  if ok and res then
+    known[norm(path)] = res
+    return res, true
+  end
   log("import failed: " .. tostring(res))
   return nil, false
 end
@@ -134,7 +138,14 @@ end
 
 local function forget(path)
   local img = find_image(path)
-  if not img then return end
+  if not img then
+    local f = io.open(path, "rb")  -- only look it up if the file is still there
+    if not f then return end
+    f:close()
+    img = import(path)
+    if not img then return end
+  end
+  known[norm(path)] = nil
   local ok = pcall(function() dt.database.remove(img) end)
   if not ok then pcall(function() dt.database.delete(img) end) end
 end
@@ -184,14 +195,14 @@ local function handle_file(request_file)
     if cmd == "open" or cmd == "import" then
       local img, fresh = import(path)
       if img then
-        status((fresh and "imported " or "already in library: ") .. short(path))
-        if not fresh then reload_sidecar(img) end
+        status("imported " .. short(path))
+        reload_sidecar(img)
         if cmd == "open" and not first then first = img end
       else
         status("could not import " .. short(path) .. " (see darktable log)")
       end
     elseif cmd == "reload" then
-      local img = find_image(path)
+      local img = import(path)
       if img then reload_sidecar(img) end
     elseif cmd == "forget" then
       forget(path)
@@ -213,8 +224,10 @@ end
 
 local busy = false
 local last_tick = 0
+local rearm = nil  -- set by the loop below
 local function tick(from_activity)
   local now = os.time()
+  if from_activity and rearm then pcall(rearm) end
   if from_activity and now - last_tick < 1 then return end  -- mouse events fire very often
   if busy then return end
   busy = true
@@ -236,42 +249,59 @@ local ok_ev, err_ev = pcall(function()
     local img = args[#args]
     if current and img and current ~= img then export_done(current) end
     current = img
-    tick()
+    tick(true)
   end)
   dt.register_event(MODULE .. "_view", "view-changed", function(event, old_view, new_view)
     if old_view == dt.gui.views.darkroom and current then
       export_done(current)
       current = nil
     end
-    tick()
+    tick(true)
   end)
 end)
 if not ok_ev then status("could not register darkroom events: " .. tostring(err_ev)) end
 
 -- main loop: check for requests every second in the background.
--- It is a chain of short background jobs (each one sleeps, checks, and schedules the next)
--- rather than one endless job, and it reports its first rounds so a stalled loop is visible.
+-- A chain of short background jobs (each one checks, sleeps, and schedules the next). If the chain stalls,
+-- any activity in darktable starts a new one (see rearm below); an older chain stops when a newer one exists.
 local rounds = 0
-local function round()
-  if dt.control.ending or stopping then return end
+local chain = 0
+local last_round = 0
+local function round(my_chain)
+  if dt.control.ending or stopping or my_chain ~= chain then return end
+  last_round = os.time()
+  rounds = rounds + 1
+  if rounds <= 2 then status("background loop running (round " .. rounds .. ")") end
   local ok, err = pcall(function()
-    dt.control.sleep(1000)
-    rounds = rounds + 1
-    if rounds == 1 or rounds == 3 then status("background loop running (round " .. rounds .. ")") end
     tick(false)
+    dt.control.sleep(1000)
   end)
   if not ok then status("background loop error: " .. tostring(err)) end
-  if not dt.control.ending and not stopping then
-    local ok2, err2 = pcall(dt.control.dispatch, round)
+  if not dt.control.ending and not stopping and my_chain == chain then
+    local ok2, err2 = pcall(dt.control.dispatch, round, my_chain)
     if not ok2 then status("background loop stopped: " .. tostring(err2)) end
   end
 end
-local ok_bg, err_bg = pcall(dt.control.dispatch, round)
-if ok_bg then
-  status("background loop scheduled")
-else
-  status("no background loop (" .. tostring(err_bg) .. ")")
+
+local last_rearm = 0
+local function start_loop(why)
+  chain = chain + 1
+  last_round = os.time()
+  last_rearm = os.time()
+  local ok, err = pcall(dt.control.dispatch, round, chain)
+  if ok then status("background loop scheduled" .. (why and (" (" .. why .. ")") or ""))
+  else status("no background loop (" .. tostring(err) .. ")") end
 end
+
+-- called on darktable activity: restart the loop if it hasn't run for a while
+rearm = function()
+  local now = os.time()
+  if now - last_round > 5 and now - last_rearm > 10 then
+    start_loop("restarted: it had stopped")
+  end
+end
+
+start_loop()
 
 -- backup: also check whenever you use darktable (hover, select, change collection), in case the loop stalls
 for _, ev in ipairs({ "mouse-over-image-changed", "selection-changed", "collection-changed" }) do
