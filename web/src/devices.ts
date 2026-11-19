@@ -36,9 +36,26 @@ export function agentLabel(a: Pick<Agent, 'id' | 'name' | 'os'>, all: Pick<Agent
 }
 
 /** The device "Edit in darktable" suggests: the one used last on this browser if it still exists,
- *  otherwise a PC agent (one that is online first), otherwise the first one. */
-export function defaultAgent<A extends Pick<Agent, 'id' | 'os' | 'online'>>(agents: A[], last: string | null): A | null {
-  return agents.find(a => a.id === last) || agents.find(a => !isPhoneAgent(a) && a.online) || agents.find(a => !isPhoneAgent(a)) || agents[0] || null
+ *  otherwise a PC agent (one that is online first), otherwise any device; among equals the one heard from last.
+ *  (The list itself comes in a stable order by name, so recency is applied here.) */
+export function defaultAgent<A extends Pick<Agent, 'id' | 'os' | 'online'> & { last_seen?: number }>(agents: A[], last: string | null): A | null {
+  const recent = [...agents].sort((a, b) => (b.last_seen || 0) - (a.last_seen || 0))
+  return recent.find(a => a.id === last) || recent.find(a => !isPhoneAgent(a) && a.online) || recent.find(a => !isPhoneAgent(a)) || recent[0] || null
+}
+
+/** The state shown on a device's card, as pills ([ok, words]). A PC agent reports its darktable and the Lua
+ *  bridge; the darktable phone app heartbeats only while it is open on the screen, reports in darktable_running
+ *  whether a photo is open in its darkroom, and always sends bridge_alive true (it has no bridge), so its card
+ *  says that instead. seen: how long ago, in words, for offline devices. */
+export function devicePills(a: Pick<Agent, 'os' | 'online' | 'state'>, seen: string): [boolean, string][] {
+  if (isPhoneAgent(a)) {
+    if (!a.online) return [[false, `app not open · seen ${seen}`]]
+    return [[true, 'online · app open'], [!!a.state?.darktable_running, a.state?.darktable_running ? 'photo open in the darkroom' : 'no photo open']]
+  }
+  if (!a.online) return [[false, `offline · seen ${seen}`]]
+  const out: [boolean, string][] = [[true, 'online'], [!!a.state?.darktable_running, `darktable ${a.state?.darktable_running ? 'running' : 'not running'}`]]
+  if (a.state?.darktable_running) out.push([!!a.state?.bridge_alive, `bridge script ${a.state?.bridge_alive ? 'active' : 'not seen'}`])
+  return out
 }
 
 /** "Edit in darktable" asks which device when there is a choice, or when the only device is a phone

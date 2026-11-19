@@ -2,7 +2,7 @@
 // Tests for src/devices.ts with Node's own test runner, no extra packages: npm test (Node 22.6 or newer).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { agentLabel, defaultAgent, inShell, isAndroidBrowser, needsDeviceChoice, parseDeepLink, phoneEditLink, photoWhere, selectionIds } from '../src/devices.ts'
+import { agentLabel, defaultAgent, devicePills, inShell, isAndroidBrowser, needsDeviceChoice, parseDeepLink, phoneEditLink, photoWhere, selectionIds } from '../src/devices.ts'
 
 const origin = 'http://192.0.2.10:8080'  // documentation address (RFC 5737)
 const tail = '#Intent;scheme=lpldt;package=app.dtandroid;S.browser_fallback_url=http%3A%2F%2F192.0.2.10%3A8080%2Fandroid-app.html;end'
@@ -117,4 +117,30 @@ test('deep links', () => {
   assert.deepEqual(parseDeepLink('?photo=abc'), { photo: 0, series: undefined })
   assert.equal(parseDeepLink(''), null)
   assert.equal(parseDeepLink('?x=1'), null)
+})
+
+test('default device: recency decides among equals, not the order of the list', () => {
+  const pc = (id: string, online: boolean, last_seen: number) => ({ id, os: 'windows', online, last_seen })
+  const older = pc('pc-a', false, 100), newer = pc('pc-b', false, 200)
+  assert.equal(defaultAgent([older, newer], null)?.id, 'pc-b')   // the PC heard from last, wherever it is in the list
+  assert.equal(defaultAgent([newer, older], null)?.id, 'pc-b')
+  const on1 = pc('pc-c', true, 300), on2 = pc('pc-d', true, 310)
+  assert.equal(defaultAgent([on1, on2], null)?.id, 'pc-d')
+  assert.equal(defaultAgent([on2, on1], null)?.id, 'pc-d')
+})
+
+test('device card: a phone is described as a phone', () => {
+  const phone = (online: boolean, darkroom: boolean) => ({ os: 'android', online, state: { darktable_running: darkroom, bridge_alive: true } })
+  assert.deepEqual(devicePills(phone(true, false), '1 min ago'), [[true, 'online · app open'], [false, 'no photo open']])
+  assert.deepEqual(devicePills(phone(true, true), '1 min ago'), [[true, 'online · app open'], [true, 'photo open in the darkroom']])
+  assert.deepEqual(devicePills(phone(false, true), '3 min ago'), [[false, 'app not open · seen 3 min ago']])
+  assert.ok(!devicePills(phone(true, true), '').some(([, t]) => /bridge|darktable running/.test(t)))
+})
+
+test('device card: a PC as before', () => {
+  const pc = (online: boolean, dt: boolean, bridge: boolean) => ({ os: 'windows', online, state: { darktable_running: dt, bridge_alive: bridge } })
+  assert.deepEqual(devicePills(pc(true, true, true), ''), [[true, 'online'], [true, 'darktable running'], [true, 'bridge script active']])
+  assert.deepEqual(devicePills(pc(true, false, false), ''), [[true, 'online'], [false, 'darktable not running']])
+  assert.deepEqual(devicePills(pc(true, true, false), ''), [[true, 'online'], [true, 'darktable running'], [false, 'bridge script not seen']])
+  assert.deepEqual(devicePills(pc(false, true, true), '5s ago'), [[false, 'offline · seen 5s ago']])
 })

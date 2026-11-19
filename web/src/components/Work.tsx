@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useStore } from '../store'
-import { agentLabel, itemProgress, serverNow, STATUS } from '../devices'
+import { agentLabel, devicePills, isPhoneAgent, itemProgress, serverNow, STATUS } from '../devices'
 import { ProgressBar, useTick } from './EditRecord'
 
 
@@ -43,15 +43,14 @@ export function WorkView() {
               <div className="row wrap">
                 <span className="display" style={{ fontSize: 18 }}>{a.name || a.id}</span>
                 <span className="small muted">{a.os}</span>
-                {a.online ? <span className="pill-ok"><i />online</span> : <span className="pill-off"><i />offline · seen {ago(a.last_seen, now)}</span>}
-                {a.online && <span className={a.state?.darktable_running ? 'pill-ok' : 'pill-off'}><i />darktable {a.state?.darktable_running ? 'running' : 'not running'}</span>}
-                {a.online && a.state?.darktable_running && <span className={a.state?.bridge_alive ? 'pill-ok' : 'pill-off'}><i />bridge script {a.state?.bridge_alive ? 'active' : 'not seen'}</span>}
+                {devicePills(a, ago(a.last_seen, now)).map(([ok, text]) => <span key={text} className={ok ? 'pill-ok' : 'pill-off'}><i />{text}</span>)}
                 <div className="grow" />
-                {!a.online && <button className="btn ghost" onClick={() => window.confirm(`Remove “${name}” from this list? It comes back if its agent connects again.`) && fetch(`/api/agents/${encodeURIComponent(a.id)}`, { method: 'DELETE' }).then(() => s.toast('Removed'))}>Remove</button>}
+                {!a.online && <button className="btn ghost" onClick={() => window.confirm(`Remove “${name}” from this list? It comes back if it connects again.`) && fetch(`/api/agents/${encodeURIComponent(a.id)}`, { method: 'DELETE' }).then(() => s.toast('Removed'))}>Remove</button>}
                 <button className="btn primary" disabled={!dirty.length} title="Copy the edits of every changed photo back to the NAS" onClick={() => job('sync', a.id, dirty)}>Save {dirty.length || ''} edited to NAS</button>
                 <button className="btn danger" disabled={!ws.some(w => w.status === 'synced')} title={`Delete the working copies on ${name} whose edits are already on the NAS`} onClick={() => job('release', a.id, ws.filter(w => w.status === 'synced').map(w => w.id))}>Remove saved copies from {name}</button>
               </div>
               {a.state?.message && <div className="small soft">{a.state.message}</div>}
+              {isPhoneAgent(a) && !a.online && <div className="small muted">The darktable app reports only while it is open on {name}: what you start here waits until it is opened there.</div>}
               {a.online && a.state?.local_url && <span className="small soft">{name} also has a local library: on {name}, open <a href={a.state.local_url} target="_blank" rel="noreferrer">{a.state.local_url}</a></span>}
               {a.online && a.state?.local_error && <span className="small muted">{a.state.local_error}</span>}
               {a.online && a.state?.bridge_status && <pre className="tiny muted" style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, Consolas, monospace' }}>{'darktable bridge:\n' + a.state.bridge_status}</pre>}
@@ -67,7 +66,10 @@ export function WorkView() {
                           <tr key={w.id}>
                             <td style={{ width: 70 }}><img src={`/api/preview/${w.id}?s=t&v=${w.synced_ts || 0}`} alt="" title="Show in the library" onClick={() => s.reveal(w.id)} style={{ width: 64, height: 42, objectFit: 'cover', borderRadius: 4, cursor: 'pointer' }} onError={e => ((e.target as HTMLImageElement).style.visibility = 'hidden')} /></td>
                             <td><button className="linkbtn" title="Show in the library" onClick={() => s.reveal(w.id)}>{w.filename}</button>{w.error && <div className="tiny" style={{ color: '#ff8b8e' }}>{w.error}</div>}</td>
-                            <td>{pr ? <ProgressBar label={pr.step} fraction={pr.fraction} /> : <span className="status" style={{ background: st[1], color: st[2] }}>{st[0]}</span>}</td>
+                            <td><div className="col" style={{ gap: 6, alignItems: 'flex-start' }}>
+                              <span className="status" style={{ background: st[1], color: st[2] }}>{st[0]}</span>
+                              {pr && <ProgressBar label={pr.step} fraction={pr.fraction} />}
+                            </div></td>
                             <td className="muted">{w.checkout_ts ? ago(w.checkout_ts, now) : ''}</td>
                             <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                               <button className="btn" title="Find it in LightPhotoLibrary: its folder, scrolled to it" onClick={() => s.reveal(w.id)}>Show in library</button>{' '}
@@ -81,7 +83,7 @@ export function WorkView() {
                     </tbody>
                   </table>
                 </div>
-              ) : <div className="small muted">Nothing checked out on {name}.</div>}
+              ) : <div className="small muted">{isPhoneAgent(a) ? `No photos on ${name}.` : `Nothing checked out on ${name}.`}</div>}
             </div>
           )
         })}

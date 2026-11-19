@@ -871,9 +871,12 @@ def series_add_matching(sid: int, body: Dict[str, Any] = Body(...)):
 
 # ---------------------------------------------------------------- agents + jobs (hand-off to darktable)
 def list_agents() -> List[dict]:
+    """Every agent, in a stable order that does not change with heartbeats: by name (case-insensitive), then id.
+    (Ordered by last_seen, two devices swapped places on every refresh.)"""
     out = []
     t = time.time()
-    for r in db.conn().execute("SELECT * FROM agents ORDER BY last_seen DESC").fetchall():
+    rows = db.conn().execute("SELECT * FROM agents").fetchall()
+    for r in sorted(rows, key=lambda r: ((r["name"] or r["id"] or "").casefold(), r["id"])):
         d = dict(r)
         d["state"] = json.loads(d["state"] or "{}")
         d["online"] = (t - (d["last_seen"] or 0)) < AGENT_ONLINE_SECONDS

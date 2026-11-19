@@ -27,7 +27,7 @@ export function DevicePicker() {
             <label key={a.id} className="row" style={{ gap: 8, cursor: 'pointer' }}>
               <input type="radio" name="device" checked={pick === a.id} onChange={() => setPick(a.id)} />
               <span className="grow">{agentLabel(a, s.agents)}</span>
-              {a.online ? <span className="pill-ok"><i />online</span> : <span className="pill-off"><i />offline</span>}
+              {a.online ? <span className="pill-ok"><i />{isPhoneAgent(a) ? 'app open' : 'online'}</span> : <span className="pill-off"><i />{isPhoneAgent(a) ? 'app not open' : 'offline'}</span>}
             </label>
           ))}
         </div>
