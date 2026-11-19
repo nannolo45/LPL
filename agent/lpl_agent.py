@@ -183,7 +183,7 @@ def bridge_status(running: bool) -> str:
     p = BRIDGE / "status.txt"
     try:
         lines = p.read_text(encoding="utf-8", errors="replace").strip().splitlines()
-        return "\n".join(lines[-6:])
+        return "\n".join(lines[-10:])
     except OSError:
         if running:
             return ("No status from the bridge script: darktable did not start it. In darktable: lighttable > "
@@ -191,7 +191,16 @@ def bridge_status(running: bool) -> str:
         return ""
 
 
-def launch_darktable(cfg: dict, image: Path) -> None:
+_last_launch = [0.0]
+
+
+def launch_darktable(cfg: dict, image: Path, guard: bool = True) -> bool:
+    """Start darktable with this photo. Never twice within a minute (darktable takes a while to show up,
+    and a second copy would open another window). Returns False if it didn't start one."""
+    if guard and time.time() - _last_launch[0] < 60:
+        log.info("darktable was just started; not starting another one")
+        return False
+    _last_launch[0] = time.time()
     lib = ":memory:" if cfg.get("library") == "memory" else str(data_dir() / "darktable-working-set.db")
     cmd = darktable_cmd(cfg) + ["--library", lib, str(image)]
     log.info("starting darktable: %s", cmd)
@@ -201,6 +210,7 @@ def launch_darktable(cfg: dict, image: Path) -> None:
     else:
         kw["start_new_session"] = True
     subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True, **kw)
+    return True
 
 
 class BridgeQueue:
@@ -211,8 +221,14 @@ class BridgeQueue:
         self.lock = threading.Lock()
 
     def add(self, cmd: str, path: Path):
+        """Queue a command. Only the latest 'open' stays an open (earlier ones become imports),
+        and repeated commands for the same file are merged, so a backlog doesn't open a pile of photos."""
+        line = "%s\t%s" % (cmd, path)
         with self.lock:
-            self.pending.append("%s\t%s" % (cmd, path))
+            if cmd == "open":
+                self.pending = [("import\t" + l.split("\t", 1)[1]) if l.startswith("open\t") else l for l in self.pending]
+            self.pending = [l for l in self.pending if l.split("\t", 1)[1] != str(path) or l.split("\t", 1)[0] not in ("open", "import", cmd)]
+            self.pending.append(line)
 
     def flush(self):
         req = BRIDGE / "request.txt"
@@ -413,7 +429,7 @@ class Agent:
     def open_paths(self, paths):
         if not paths:
             return
-        running = darktable_running()
+        running = darktable_running() or (time.sleep(0.5) is None and darktable_running())
         if running and bridge_alive():
             self.bridge.add("open", paths[0])
             for p in paths[1:]:
@@ -421,17 +437,19 @@ class Agent:
             self.bridge.flush()
         elif running and not IS_WIN:
             # Linux: a second 'darktable <file>' hands the file to the running instance over D-Bus
-            launch_darktable(self.cfg, paths[0])
+            launch_darktable(self.cfg, paths[0], guard=False)
             for p in paths[1:]:
                 self.bridge.add("import", p)
         elif running:
-            self.message = ("darktable is open but the LightPhotoLibrary bridge script is not active. "
-                            "Run the agent with --install-bridge, then restart darktable.")
+            self.message = ("darktable is open but its LightPhotoLibrary script hasn't answered in the last few seconds. "
+                            "The photo opens as soon as it does (moving the mouse over darktable's thumbnails also wakes it). "
+                            "If it never does: in darktable, lighttable > scripts > lightphotolibrary > stop and start lpl_bridge.")
             for p in paths:
                 self.bridge.add("import", p)
             self.bridge.add("open", paths[0])
         else:
-            launch_darktable(self.cfg, paths[0])
+            if not launch_darktable(self.cfg, paths[0]):
+                self.bridge.add("open", paths[0])  # darktable is starting: the bridge picks it up once it's ready
             for p in paths[1:]:
                 self.bridge.add("import", p)
         with self.lock:
