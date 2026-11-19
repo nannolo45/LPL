@@ -3,10 +3,15 @@
 import { useEffect, useState } from 'react'
 import { api } from './api'
 
-export type Scope = 'photos' | 'board' | 'viewer'
+export type Scope = 'tabs' | 'photos' | 'board' | 'viewer'
 export interface Action { id: string; label: string; scope: Scope; keys: string[] }
 
 export const ACTIONS: Action[] = [
+  { id: 'newTab', label: 'New tab', scope: 'tabs', keys: ['Alt+N'] },
+  { id: 'closeTab', label: 'Close tab', scope: 'tabs', keys: ['Alt+W'] },
+  { id: 'nextTab', label: 'Next tab', scope: 'tabs', keys: ['Alt+]'] },
+  { id: 'prevTab', label: 'Previous tab', scope: 'tabs', keys: ['Alt+['] },
+  ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => ({ id: 'tab' + n, label: 'Go to tab ' + n, scope: 'tabs' as Scope, keys: ['Alt+' + n] })),
   { id: 'rate0', label: 'Rating: none', scope: 'photos', keys: ['0'] },
   { id: 'rate1', label: 'Rating: ★1', scope: 'photos', keys: ['1'] },
   { id: 'rate2', label: 'Rating: ★2', scope: 'photos', keys: ['2'] },
@@ -38,7 +43,7 @@ export const ACTIONS: Action[] = [
   { id: 'prev', label: 'Previous photo', scope: 'viewer', keys: ['ArrowLeft'] },
   { id: 'close', label: 'Close', scope: 'viewer', keys: ['Escape'] },
 ]
-export const SCOPES: [Scope, string][] = [['photos', 'Photos (Grid, List, Board)'], ['board', 'Board'], ['viewer', 'Large view']]
+export const SCOPES: [Scope, string][] = [['tabs', 'Tabs'], ['photos', 'Photos (Grid, List, Board)'], ['board', 'Board'], ['viewer', 'Large view']]
 
 const NAMES: Record<string, string> = { ' ': 'Space', Esc: 'Escape', Del: 'Delete', '+': '=' }
 

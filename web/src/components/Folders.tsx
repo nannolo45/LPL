@@ -29,7 +29,8 @@ export function FoldersView() {
   const [picked, setPicked] = useState<string[]>([])
   const [picking, setPicking] = useState(false)   // "Select" mode (for touch screens)
   const lastPick = useRef<string | null>(null)
-  const [cur, setCur] = useState<string>(() => localStorage.getItem('lpl.folder') || '')
+  const fkey = 'lpl.folder.' + s.activeTab  // each tab remembers where it is in the folders
+  const [cur, setCur] = useState<string>(() => localStorage.getItem(fkey) ?? localStorage.getItem('lpl.folder') ?? '')
   const [mode, setMode] = useState<string>(() => localStorage.getItem('lpl.folderSort') || 'custom')
   const [drag, setDrag] = useState<string | null>(null)
   const [over, setOver] = useState<string | null>(null)
@@ -57,7 +58,7 @@ export function FoldersView() {
     if (ex && !window.confirm(`Leave “${name}” out of LightPhotoLibrary?\n\nIts photos disappear from LPL (ratings and tags stay in the XMP files) and it is no longer scanned. Nothing is deleted from the NAS. You can take it back in later.`)) return
     api.folderExclude(path, ex).then(r => { s.toast(ex ? `Left out “${name}” (${r.removed} photos)` : `Taking “${name}” back in; it's being scanned`); setExcluded(r.excluded); if (!r.excluded.length) setShowExcluded(false); s.reload(); load() }).catch(e => s.toast(e.message))
   }
-  useEffect(() => { localStorage.setItem('lpl.folder', cur) }, [cur])
+  useEffect(() => { localStorage.setItem(fkey, cur) }, [cur])
   useEffect(() => { localStorage.setItem('lpl.folderSort', mode) }, [mode])
 
   const here = all.find(f => f.path === cur)

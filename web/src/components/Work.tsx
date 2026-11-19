@@ -51,8 +51,8 @@ export function WorkView() {
                 {a.online && a.state?.darktable_running && <span className={a.state?.bridge_alive ? 'pill-ok' : 'pill-off'}><i />bridge script {a.state?.bridge_alive ? 'active' : 'not seen'}</span>}
                 <div className="grow" />
                 {!a.online && <button className="btn ghost" onClick={() => window.confirm(`Remove “${a.name}” from this list? It comes back if its agent connects again.`) && fetch(`/api/agents/${encodeURIComponent(a.id)}`, { method: 'DELETE' }).then(() => s.toast('Removed'))}>Remove</button>}
-                <button className="btn primary" disabled={!dirty.length} onClick={() => job('sync', a.id, dirty)}>Sync {dirty.length || ''} back to NAS</button>
-                <button className="btn" disabled={!ws.some(w => w.status === 'synced')} onClick={() => job('release', a.id, ws.filter(w => w.status === 'synced').map(w => w.id))}>Free synced copies</button>
+                <button className="btn primary" disabled={!dirty.length} title="Copy the edits of every changed photo back to the NAS" onClick={() => job('sync', a.id, dirty)}>Save {dirty.length || ''} edited to NAS</button>
+                <button className="btn danger" disabled={!ws.some(w => w.status === 'synced')} title={`Delete the working copies on ${a.name} whose edits are already on the NAS`} onClick={() => job('release', a.id, ws.filter(w => w.status === 'synced').map(w => w.id))}>Remove saved copies from PC</button>
               </div>
               {a.state?.message && <div className="small soft">{a.state.message}</div>}
               {a.online && a.state?.local_url && <span className="small soft">This PC also has a local library: on that PC, open <a href={a.state.local_url} target="_blank" rel="noreferrer">{a.state.local_url}</a></span>}
@@ -72,10 +72,10 @@ export function WorkView() {
                             <td><span className="status" style={{ background: st[1], color: st[2] }}>{st[0]}</span></td>
                             <td className="muted">{w.checkout_ts ? ago(w.checkout_ts, now) : ''}</td>
                             <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                              <button className="btn" title="Its folder in the library, scrolled to it" onClick={() => s.reveal(w.id)}>Show in library</button>{' '}
-                              <button className="btn" title="Open it in darktable on this PC" onClick={() => job('open', a.id, [w.id])}>Open in darktable</button>{' '}
-                              <button className="btn" onClick={() => job('sync', a.id, [w.id])}>Sync</button>{' '}
-                              <button className="btn" onClick={() => job('release', a.id, [w.id])}>Release</button>
+                              <button className="btn" title="Find it in LightPhotoLibrary: its folder, scrolled to it" onClick={() => s.reveal(w.id)}>Show in library</button>{' '}
+                              <button className="btn" title={`Open the copy on ${a.name} in darktable's darkroom`} onClick={() => job('open', a.id, [w.id])}>Open in darktable</button>{' '}
+                              <button className="btn" title={`Copy the edits (XMP) from ${a.name} back to the NAS now. The photo stays on ${a.name} so you can keep editing.`} onClick={() => job('sync', a.id, [w.id])}>Save edits to NAS</button>{' '}
+                              <button className="btn danger" title={`Done with it: save the edits to the NAS, close it in darktable and delete the working copy on ${a.name}. The original on the NAS is never touched.`} onClick={() => job('release', a.id, [w.id])}>Done · remove from PC</button>
                             </td>
                           </tr>
                         )

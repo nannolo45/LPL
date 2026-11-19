@@ -4,6 +4,11 @@ import { Agent, api, Filters, Photo, SeriesInfo, SortLevel, Tag } from './api'
 export type View = 'grid' | 'list' | 'folders' | 'timeline' | 'board' | 'work' | 'send'
 export type Gran = 'day' | 'month' | 'year'
 
+/** A tab: its own view, filters, sort and board, so several ways into the library can stay open side by side. */
+export interface TabState { view: View; sort: SortLevel[]; group: boolean; gran: Gran; filters: Filters; boardSeries: number | null }
+export interface WTab { id: string; title?: string; st: TabState }
+const newTabId = () => 't' + Math.random().toString(36).slice(2, 9)
+
 interface Saved { view: View; sort: SortLevel[]; group: boolean; gran: Gran; filters: Filters; thumb: number }
 const DEFAULTS: Saved = {
   view: 'grid',
@@ -23,6 +28,13 @@ function loadSaved(): Saved {
 
 export interface Store {
   isMobile: boolean
+  tabs: WTab[]; activeTab: string
+  switchTab: (id: string) => void
+  newTab: (st?: Partial<TabState>, title?: string) => void
+  closeTab: (id: string) => void
+  renameTab: (id: string, title: string) => void
+  moveTab: (id: string, toIndex: number) => void
+  liveTab: () => TabState
   view: View; setView: (v: View) => void
   sort: SortLevel[]; setSort: (s: SortLevel[]) => void
   group: boolean; setGroup: (g: boolean) => void
@@ -239,8 +251,57 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const patchFilters = useCallback((p: Partial<Filters>) => setFilters(f => ({ ...f, ...p })), [])
   const clearFilters = useCallback(() => setFilters(DEFAULTS.filters), [])
 
+  // ---- tabs
+  const liveTab = (): TabState => ({ view, sort, group, gran, filters, boardSeries })
+  const [tabs, setTabs] = useState<WTab[]>(() => {
+    try {
+      const t = JSON.parse(localStorage.getItem('lpl.tabs') || 'null')
+      if (t && Array.isArray(t.tabs) && t.tabs.length) return t.tabs
+    } catch { /* ignore */ }
+    return [{ id: newTabId(), st: { view: saved.view, sort: saved.sort, group: saved.group, gran: saved.gran, filters: saved.filters, boardSeries: null } }]
+  })
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    try { const t = JSON.parse(localStorage.getItem('lpl.tabs') || 'null'); if (t?.active && t.tabs?.some((x: WTab) => x.id === t.active)) return t.active } catch { /* ignore */ }
+    return tabs[0].id
+  })
+  // the open tab's state lives in the normal variables; keep its copy in the list current and remembered
+  useEffect(() => {
+    const live = liveTab()
+    const all = tabs.map(t => (t.id === activeTab ? { ...t, st: live } : t))
+    try { localStorage.setItem('lpl.tabs', JSON.stringify({ tabs: all, active: activeTab })) } catch { /* ignore */ }
+  }, [tabs, activeTab, view, sort, group, gran, filters, boardSeries])
+  const applyTab = (st: TabState) => {
+    setView(st.view); setSort(st.sort); setGroup(st.group); setGran(st.gran)
+    setFilters({ ...DEFAULTS.filters, ...st.filters }); setBoardSeries(st.boardSeries ?? null); setSel([])
+  }
+  const switchTab = (id: string) => {
+    if (id === activeTab) return
+    const target = tabs.find(t => t.id === id)
+    if (!target) return
+    const live = liveTab()
+    setTabs(ts => ts.map(t => (t.id === activeTab ? { ...t, st: live } : t)))
+    setActiveTab(id); applyTab(target.st)
+  }
+  const newTab = (st: Partial<TabState> = {}, title?: string) => {
+    const live = liveTab()
+    const tab: WTab = { id: newTabId(), title, st: { view: 'grid', sort: DEFAULTS.sort, group: true, gran: 'day', filters: DEFAULTS.filters, boardSeries: null, ...st } }
+    setTabs(ts => { const i = ts.findIndex(t => t.id === activeTab); const n = ts.map(t => (t.id === activeTab ? { ...t, st: live } : t)); n.splice(i + 1, 0, tab); return n })
+    setActiveTab(tab.id); applyTab(tab.st)
+  }
+  const closeTab = (id: string) => {
+    if (tabs.length <= 1) return
+    const i = tabs.findIndex(t => t.id === id)
+    const rest = tabs.filter(t => t.id !== id)
+    try { localStorage.removeItem('lpl.folder.' + id) } catch { /* ignore */ }
+    if (id === activeTab) { const next = rest[Math.min(i, rest.length - 1)]; setTabs(rest); setActiveTab(next.id); applyTab(next.st) }
+    else setTabs(rest)
+  }
+  const renameTab = (id: string, title: string) => setTabs(ts => ts.map(t => (t.id === id ? { ...t, title: title.trim() || undefined } : t)))
+  const moveTab = (id: string, to: number) => setTabs(ts => { const n = ts.filter(t => t.id !== id); const t = ts.find(x => x.id === id)!; n.splice(Math.max(0, Math.min(to, n.length)), 0, t); return n })
+  useEffect(() => { const t = tabs.find(x => x.id === activeTab); if (t) applyTab(t.st) }, [])  // reopen where you were
+
   const value: Store = {
-    isMobile, view, setView, sort, setSort, group, setGroup, gran, setGran, filters, patchFilters, clearFilters,
+    isMobile, tabs, activeTab, switchTab, newTab, closeTab, renameTab, moveTab, liveTab, view, setView, sort, setSort, group, setGroup, gran, setGran, filters, patchFilters, clearFilters,
     thumb, setThumb, seed, reshuffle: () => setSeed(s => s + 1), items, total, loading, loadMore, reload,
     sel, setSel, clickSelect, selPhotos, selectAll, mergePhotos, meta, tags, reloadTags, facets, series, reloadSeries,
     agents, status, isLocal: status?.mode === 'local', sendIds, setSendIds, editInDarktable, toast, toastMsg, viewer, setViewer, boardSeries, setBoardSeries,
