@@ -19,11 +19,16 @@ the server, darktable was not started. XMPs in the tests are real darktable side
 - **The first change outside LPL after the update is not reported** for a photo LPL has no record of: the
   scanner only remembers its state (it cannot know what changed, and the change may be a rating only). Every
   later outside change is reported. A full rescan records the state of every photo at once.
-- **Windows agent's local library** (`build-windows-exe.ps1`, PyInstaller) does not bundle
-  `module-names.json`, so the PC's local library shows operation names. Adding
-  `--add-data "..\server\lpl\data;lpl\data"` works once the file is in the repository (it would fail now).
+- **Fixed after review (commit 0de8126):** the test data was first under `server/tests/data/`, and `.gitignore`
+  ignores every folder named `data/`, so it never reached the branch (19 of 48 tests failed in a fresh clone);
+  the module-names place `server/lpl/data/` was ignored too. Now `server/tests/fixtures/` and
+  `server/lpl/resources/`. `.gitignore` and `.dockerignore` are unchanged. A test
+  (`test_files_this_needs_are_not_ignored`) fails if git or `.dockerignore` would leave these paths out.
+- **Docker image build: never run.** Docker runs in the workspace, but the proxy blocks Docker Hub (and
+  mirror.gcr.io), so the base images cannot be pulled. What was checked instead: see "Where `module-names.json` goes".
+- **Windows exe: not built** (no Windows here). The same PyInstaller options were run on Linux (below).
 - Module names: no `module-names.json` exists yet; every name shown today is the operation (`colorbalancergb`).
-- Never run: the real Android app, real darktable, the Docker image build, real phones (headless Chrome only).
+- Never run: the real Android app, real darktable, real phones (headless Chrome only).
 
 ### Item by item
 | Item | State | Where |
@@ -47,14 +52,25 @@ the server, darktable was not started. XMPs in the tests are real darktable side
 ### Tests and results
 ```
 python -m venv venv && venv/bin/pip install -r server/requirements-dev.txt
-cd server && ../venv/bin/python -m pytest -q tests        # 48 passed (13 before this branch)
+cd server && ../venv/bin/python -m pytest -q tests        # 49 passed (13 before this branch)
 cd web && npm ci && npm test && npm run build              # 25 passed (16 before), build passes
 ```
 Run here with Python 3.13, FastAPI 0.165.0, Starlette 1.10.0, Node 22.23.
 
+**From a fresh clone (as the reviewer checks), commit 0de8126:**
+```
+git clone --branch android-edit-record-progress https://github.com/nannolo45/lpl fresh-lpl && cd fresh-lpl
+python3 -m venv ../fresh-venv && ../fresh-venv/bin/pip install -r server/requirements-dev.txt
+cd server && ../../fresh-venv/bin/python -m pytest -q tests   # 49 passed, 1 warning (Starlette's httpx notice)
+cd ../web && npm ci && npm test && npm run build              # tests 25, pass 25, fail 0; built
+```
+`git status --short --ignored` in the working clone and in the fresh clone lists only `agent/__pycache__/`,
+`server/.pytest_cache/`, `server/lpl/__pycache__/`, `server/tests/__pycache__/`, `web/dist/`, `web/node_modules/`,
+`web/tsconfig.tsbuildinfo`: caches and build output, nothing the branch needs.
+
 | File | Tests | What |
 |---|---|---|
-| `server/tests/test_edit_record.py` | 19 | history of real XMPs: default pipeline, one module added, `history_end` before the last item, the same instance twice (last counts), five exposure and two color balance instances, no history, darktable 5 sidecar with preset instance names, changed settings, switched on/off; module-names file present, missing, entry missing, unreadable; events from posts (device and its name then, changes, summary, `last_edit`), PC then phone, old agent without `agent=`, unknown agent id, XMP without history, scanner "outside", rating-only change is no edit, outside change found at the next post, first scan only remembers |
+| `server/tests/test_edit_record.py` | 20 | history of real XMPs: default pipeline, one module added, `history_end` before the last item, the same instance twice (last counts), five exposure and two color balance instances, no history, darktable 5 sidecar with preset instance names, changed settings, switched on/off; module-names file present, missing, entry missing, unreadable; events from posts (device and its name then, changes, summary, `last_edit`), PC then phone, old agent without `agent=`, unknown agent id, XMP without history, scanner "outside", rating-only change is no edit, outside change found at the next post, first scan only remembers; the names file and the fixtures are not ignored by git or `.dockerignore` |
 | `server/tests/test_jobs_auth_progress.py` | 13 | R13: handed out again only after the time, only to the agent that took it, never when done or failed, at most 3 times, off with 0, jobs taken before the update left alone; R14: header right / wrong / missing, cookie alone refused, rest of the API unchanged, no password; R16: step/progress kept, cleaned, old items unchanged, dropped when the device is offline |
 | `server/tests/test_migration.py` | 2 | migration of main's schema with 20 000 photos (every old row unchanged, new tables and column, runs twice, integrity check); the real start-up on that library in its own process |
 | `server/tests/test_pc_agent.py` | 1 | the real `lpl_agent.py` against the server over HTTP: `downloading` 0 → 1, `sending preview`, `sending edit`, no step after; the event names the agent and its name; a step left in the state file is dropped on restart |
@@ -81,7 +97,7 @@ third edit in the screenshots changes many modules; a real session changes a few
   per photo), new index `idx_edit_events_photo`, new column `jobs.attempts` (default 0).
 - Only `CREATE TABLE IF NOT EXISTS` and one `ALTER TABLE ADD COLUMN`; nothing is dropped or rewritten. It runs
   at every start (`db.migrate`, called by `db.init`) and does nothing the second time.
-- Tested from main's schema: `server/tests/data/schema-main-0f1139c.sql` was made by running main's
+- Tested from main's schema: `server/tests/fixtures/schema-main-0f1139c.sql` was made by running main's
   `db.init()` on an empty folder and listing `sqlite_master`. A library of 20 000 photos with labels, tags,
   series, frames, shapes, agents, jobs, sent records and settings is migrated in 0.007 s; every row of every
   table main has is compared before and after; then the real server starts on it in a separate process.
@@ -131,9 +147,22 @@ password → 200 `{"required": false, "ok": true}`. The login cookie is not look
 **PC agent**: sends `agent=` with every XMP post and step/progress as above. Agents from before keep working.
 
 ### Where `module-names.json` goes
-`server/lpl/data/module-names.json` (folder to create), a JSON object `{"<operation>": "<English name>"}`, as
-generated by the Android repository at `schema/module-names.json`. The Docker image copies `server/lpl`, so it
-is included. LPL re-reads it when it changes; missing, unreadable or without an entry: the operation is shown.
+`server/lpl/resources/module-names.json` (folder to create), a JSON object `{"<operation>": "<English name>"}`,
+as generated by the Android repository at `schema/module-names.json`. LPL re-reads it when it changes; missing,
+unreadable or without an entry: the operation is shown.
+- **git**: not ignored (`git check-ignore --no-index` prints nothing; the old place `server/lpl/data/` was ignored).
+- **Docker image**: the Dockerfile's `COPY server/lpl ./lpl` puts it at `/app/lpl/resources/module-names.json`;
+  `.dockerignore`'s `data` only matches the top-level folder. Checked with Docker itself (the full image could
+  not be built, see above): a `FROM scratch` build with the same `COPY server/lpl ./lpl`, from a clean export of
+  the branch with a test file placed at the new location, exported with `--output type=local`, has
+  `app/lpl/resources/module-names.json`; LPL's lookup run on that exported folder answers "color balance rgb" for
+  `colorbalancergb` and "sigmoid" (not in the file) for `sigmoid`.
+- **Windows exe**: `build-windows-exe.ps1` and the workflow `agent-windows.yml` now pass `--collect-data lpl` and
+  set `PYTHONPATH` to `..\server` while building (without it PyInstaller says "skipping data collection for module
+  'lpl' as it is not a package" and leaves the file out). Checked on Linux with PyInstaller 6.22.3, `--onefile
+  --paths server --collect-submodules lpl --collect-data lpl` and a probe script: with the file placed, the frozen
+  program finds it under its unpack folder (`…/_MEI…/lpl/resources/module-names.json`) and answers
+  "color balance rgb"; without the file the build still succeeds and shows the operation.
 
 ### R13: the time chosen
 30 minutes (`JOB_RETRY_SECONDS=1800`; 0 = never, as before). The PC agent reports an `edit` job only after all
@@ -165,7 +194,7 @@ time it is opened after that. At most 3 hand-outs, so a job that always kills th
 - 2026-11-19: done: server side of R15 (history read from the XMP, `edit_events` and `edit_baseline` tables,
   `agent=` on XMP posts, `GET /api/photos/{id}/edits`, `last_edit` in the photo's detail, scanner records
   "outside" edits), R16 server part (step/progress cleaned, dropped for offline devices), R13 (`JOB_RETRY_SECONDS`),
-  R14 (`GET /api/auth/token`). Test XMPs from darktable's integration tests in `server/tests/data/xmp`.
+  R14 (`GET /api/auth/token`). Test XMPs from darktable's integration tests in `server/tests/data/xmp` (moved to `server/tests/fixtures/xmp` later, see below).
   Found: darktable's `num` has gaps and the `mask_manager` pseudo-module is a history item (always off).
   Next: tests for R13, R14, R16 and the migration; PC agent; web UI.
 - 2026-11-19: done: PC agent sends `agent=<id>` with XMP posts and `step`/`progress` (downloading with progress,
@@ -179,3 +208,8 @@ time it is opened after that. At most 3 hand-outs, so a job that always kills th
   headless browser, the report.
 - 2026-11-19: done: rendered check in headless Chrome (`web/tests/browser-check.py`), screenshots committed,
   `docs/android-handoff.md` updated (jobs are handed out again). Report written above.
+- 2026-11-19: review: `server/tests/data/` was never committed (`.gitignore` ignores every `data/` folder), so
+  19 of 48 tests failed in a fresh clone; `server/lpl/data/` (module names) was ignored too. Moved to
+  `server/tests/fixtures/` and `server/lpl/resources/`, ignore rules unchanged, test against it added; exe build
+  collects lpl's data files. Fresh clone: 49 server tests and 25 web tests pass, build passes. Docker image not
+  built (Docker Hub blocked); context and COPY checked with a scratch build.
