@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useStore } from '../store'
-import { agentLabel, STATUS } from '../devices'
+import { agentLabel, itemProgress, serverNow, STATUS } from '../devices'
+import { ProgressBar, useTick } from './EditRecord'
 
 
 const ago = (t: number, now: number) => { const s = Math.max(0, Math.round(now - t)); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago` }
@@ -13,7 +14,9 @@ export function WorkView() {
     const t = () => api.jobs().then(r => setJobs(r.jobs)).catch(() => {})
     t(); const i = window.setInterval(t, 4000); return () => window.clearInterval(i)
   }, [])
-  const now = s.status?.server_time || Date.now() / 1000
+  const now = serverNow(s.status)
+  // while a device downloads or syncs: tick, so its bar goes away when it stops reporting
+  useTick(s.agents.some(a => a.online && (a.state?.working_set || []).some(w => w.step)))
   const label = (id: string) => { const a = s.agents.find(x => x.id === id); return a ? agentLabel(a, s.agents) : id }
   const job = (kind: string, agent: string, ids?: number[]) =>
     api.job(kind, ids ? { ids } : { all: true }, agent).then(() => s.toast(`Sent to ${label(agent)}`)).catch(e => s.toast(e.message))
@@ -59,11 +62,12 @@ export function WorkView() {
                     <tbody>
                       {ws.map(w => {
                         const st = STATUS[w.status] || [w.status, '#2a2a2e', '#c8c8cc']
+                        const pr = itemProgress(a, w, now)
                         return (
                           <tr key={w.id}>
                             <td style={{ width: 70 }}><img src={`/api/preview/${w.id}?s=t&v=${w.synced_ts || 0}`} alt="" title="Show in the library" onClick={() => s.reveal(w.id)} style={{ width: 64, height: 42, objectFit: 'cover', borderRadius: 4, cursor: 'pointer' }} onError={e => ((e.target as HTMLImageElement).style.visibility = 'hidden')} /></td>
                             <td><button className="linkbtn" title="Show in the library" onClick={() => s.reveal(w.id)}>{w.filename}</button>{w.error && <div className="tiny" style={{ color: '#ff8b8e' }}>{w.error}</div>}</td>
-                            <td><span className="status" style={{ background: st[1], color: st[2] }}>{st[0]}</span></td>
+                            <td>{pr ? <ProgressBar label={pr.step} fraction={pr.fraction} /> : <span className="status" style={{ background: st[1], color: st[2] }}>{st[0]}</span>}</td>
                             <td className="muted">{w.checkout_ts ? ago(w.checkout_ts, now) : ''}</td>
                             <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                               <button className="btn" title="Find it in LightPhotoLibrary: its folder, scrolled to it" onClick={() => s.reveal(w.id)}>Show in library</button>{' '}

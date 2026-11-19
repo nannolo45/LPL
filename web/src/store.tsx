@@ -174,7 +174,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let alive = true
-    const tick = () => api.status().then(s => { if (alive) { setStatus(s); setAgents(s.agents) } }).catch(() => {})
+    // received_at: when the answer arrived, so the server's clock can be followed between answers (serverNow)
+    const tick = () => api.status().then(s => { if (alive) { setStatus({ ...s, received_at: Date.now() / 1000 }); setAgents(s.agents) } }).catch(() => {})
     tick()
     const t = window.setInterval(tick, 4000)
     return () => { alive = false; window.clearInterval(t) }

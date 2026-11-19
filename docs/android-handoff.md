@@ -48,7 +48,8 @@ Which the app receives as `lpldt://edit?server=http%3A%2F%2F192.0.2.10%3A8080&id
 ### When the app is not installed
 - Chrome follows `S.browser_fallback_url` to `web/public/android-app.html` (served at `/android-app.html`),
   a static page in LPL's look that says it is shown because the darktable app did not open, and links to
-  the app's releases (https://github.com/nannolo45/darktable-android/releases, newest "dt-android" APK).
+  the app's releases (https://github.com/nannolo45/darktable-android/releases: the file `dt-android-arm64-v8a.apk` of the newest
+  release titled "dt-android …").
 - Firefox for Android opens `intent://` through an "open in another app" prompt and does not reliably
   follow the fallback URL (Mozilla bugs 1859052, 1882137). So after the tap LPL waits 1.8 s; if the page is
   still visible (`document.hidden` false, no `visibilitychange` to hidden in between) a small note appears

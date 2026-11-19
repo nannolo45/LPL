@@ -14,3 +14,8 @@ Branch `android-edit-record-progress`. Report: not written yet (work in progress
   sending preview, sending edit); test runs the real agent code against the server over HTTP. Migration test
   from main's schema with 20 000 photos (0.01 s). Server: 48 tests pass. Next: web UI (last-edit line, list of
   edits, progress bar), APK name in the help page, screenshots, report.
+- 2026-11-19: done: web UI: last-edit line with the list of edits behind it (`components/EditRecord.tsx`, logic in
+  `src/edits.ts`), progress bar on the photo (WhereLine) and in Devices (`Work.tsx`), hidden when the step ends or
+  the device stops reporting (also by the server's clock followed from the last answer). Help page names
+  `dt-android-arm64-v8a.apk`. Web: 25 tests pass, build passes. Next: rendered check and screenshots in a
+  headless browser, the report.

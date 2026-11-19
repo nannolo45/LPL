@@ -4,6 +4,7 @@ import { useStore } from '../store'
 import { exifLine, fmtDay, stars } from '../fields'
 import { FilterPanel, SortPanel } from './Left'
 import { HideButton, RatingLabels, SeriesPicker, TagPanel, WhereLine } from './Inspector'
+import { LastEdit } from './EditRecord'
 import { Thumb, useGroups, useReveal } from './Library'
 import { FoldersView } from './Folders'
 import { WorkView } from './Work'
@@ -95,6 +96,7 @@ function PhotoPage({ id, onBack }: { id: number; onBack: () => void }) {
           <button className="btn big" disabled={idx < 0 || idx >= s.items.length - 1} onClick={() => nav(1)} aria-label="Next">›</button>
         </div>
         <RatingLabels photos={[p]} big />
+        <LastEdit p={p} />
         <WhereLine id={p.id} />
         <button className="btn primary big" onClick={() => s.editInDarktable([p.id])}>Edit in darktable</button>
         <EditOnPhone ids={idx >= 0 ? s.items.map(x => x.id) : [p.id]} start={p.id} series={list.series} title={list.title} />

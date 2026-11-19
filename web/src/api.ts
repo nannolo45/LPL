@@ -34,6 +34,21 @@ export interface Photo {
   y?: number
   ord?: number | null
   series?: { id: number; name: string }[]
+  // photo detail only (GET /api/photos/{id})
+  last_edit?: EditEvent | null
+}
+
+/** A darktable module instance in an edit: operation, its English name (from module-names.json on the
+ *  server, else the operation), the instance's name, on or off; label = name + instance name. */
+export interface EditModule { operation: string; name: string; instance: string; priority: number; enabled: boolean; label: string }
+export interface EditChanges { added: EditModule[]; removed: EditModule[]; switched_on: EditModule[]; switched_off: EditModule[]; changed: EditModule[] }
+/** Who edited a photo and what changed (GET /api/photos/{id}/edits). source: agent = posted by a device,
+ *  outside = found changed on the NAS, import = sent from a PC's local library, local = darktable on this PC.
+ *  changes null: nothing earlier to compare with. */
+export interface EditEvent {
+  id: number; photo_id: number; time: number; source: 'agent' | 'outside' | 'import' | 'local' | string
+  agent_id: string | null; device: string | null; device_os: string | null
+  modules: EditModule[]; changes: EditChanges | null; summary: string
 }
 
 export interface SortLevel { f: string; d: 'asc' | 'desc' }
@@ -78,7 +93,8 @@ export interface FoldersResult { folders: Folder[]; excluded: string[]; previews
 export interface Tag { path: string; synonyms: string; category: number; private: number; n: number }
 export interface SeriesInfo { id: number; name: string; count: number; covers: { id: number; v: number }[] }
 export interface Frame { id?: number; label: string; x: number; y: number; w: number; h: number; maybe: number; color?: string; border?: string }
-export interface WorkItem { id: number; filename: string; status: string; local_path?: string; error?: string; checkout_ts?: number; synced_ts?: number }
+/** step and progress (0..1): what a device is doing with the photo right now, if it says (R16). */
+export interface WorkItem { id: number; filename: string; status: string; local_path?: string; error?: string; checkout_ts?: number; synced_ts?: number; step?: string; progress?: number }
 export interface Agent { id: string; name: string; os: string; last_seen: number; online: boolean; state: { working_set?: WorkItem[]; darktable_running?: boolean; bridge_alive?: boolean; bridge_status?: string; version?: string; message?: string; local_url?: string; local_error?: string } }
 
 export interface SendFolder { folder: string; n: number; sent: number; changed: number; first: string | null; last: string | null; descriptor: string }
@@ -123,6 +139,7 @@ export const api = {
   position: (sort: SortLevel[], filters: Filters, seed: number, id: number) => call<{ index: number }>('POST', '/api/photos/position', { sort, filters, seed, id }),
   get: (ids: number[]) => call<{ items: Photo[] }>('POST', '/api/photos/get', { ids }),
   photo: (id: number) => call<Photo>('GET', `/api/photos/${id}`),
+  edits: (id: number) => call<{ edits: EditEvent[] }>('GET', `/api/photos/${id}/edits`),
   meta: (body: Record<string, unknown>) => call<{ items: Photo[]; errors: string[] }>('POST', '/api/meta', body),
   facets: () => call<{ lenses: { v: string; n: number }[]; cameras: { v: string; n: number }[]; hidden_photos?: number }>('GET', '/api/facets'),
   hide: (ids: number[], hidden: boolean) => call<{ changed: number; hidden_photos: number }>('POST', '/api/photos/hide', { ids, hidden }),
