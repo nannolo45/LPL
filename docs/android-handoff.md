@@ -18,8 +18,8 @@ views, including the LPL shell) and LPL is not in local mode. Places (phone layo
 | Where | `ids` | `start` | `series`, `title` |
 |---|---|---|---|
 | Photo page (`Mobile.tsx`, `PhotoPage`), under "Edit in darktable" | the library list as loaded, in display order (series order when a series is open with "Photos in order"); just the photo when it was opened by a deep link and is not in the list | the photo shown | the open series (id and name); otherwise no `series` and `title` = folder name or tag, if one is open |
-| Selection bar in the library (`MobileApp`), button "This phone" | same list | the first selected photo in display order | as above |
-| Board on the phone (`Board.tsx`, selection bar), when photos are selected | the board's reading order, then the photos not in it (the same list the full-screen view pages through) | the first selected photo in that order | the board's series id and name |
+| Selection bar in the library (`MobileApp`), button "This phone" | only the selected photos, in display order; selected photos not in the loaded list come after them | the first of those `ids` | as above |
+| Board on the phone (`Board.tsx`, selection bar), when photos are selected | only the selected photos, in the board's own order (reading order, then the photos not in it: the order the full-screen view pages through) | the first of those `ids` | the board's series id and name |
 
 It is a normal `<a href>` the user taps (Android only opens another app on a user gesture). No job is
 created. The link never contains the password or the login cookie.
@@ -33,7 +33,9 @@ intent://edit?server=<encodeURIComponent(location.origin)>&ids=<comma separated 
 - `ids`: at most 200. A longer list is cut to the 200 around `start` (100 before it where possible,
   shifted at the ends so it is always 200). If `start` is not in the list it is put first.
 - `series` and `title` only when known. `title` is the series name, else the folder's last part, else the tag.
-- Built by `phoneEditLink()` in `web/src/devices.ts`.
+- Built by `phoneEditLink()` in `web/src/devices.ts`; the selection bars choose their `ids` with `selectionIds()`.
+- Later, not done: Android tablets use the desktop layout and get no such button; an "Edit on this device"
+  in the inspector would cover them.
 
 Example (made-up ids, documentation address 192.0.2.10):
 
@@ -45,9 +47,8 @@ Which the app receives as `lpldt://edit?server=http%3A%2F%2F192.0.2.10%3A8080&id
 
 ### When the app is not installed
 - Chrome follows `S.browser_fallback_url` to `web/public/android-app.html` (served at `/android-app.html`),
-  a static page in LPL's look that says the darktable app is not on this phone. **Where to get it is a
-  placeholder** (`data-placeholder="android-app-download"` in that file): fill it in once a download
-  location exists.
+  a static page in LPL's look that says it is shown because the darktable app did not open, and links to
+  the app's releases (https://github.com/nannolo45/darktable-android/releases, newest "dt-android" APK).
 - Firefox for Android opens `intent://` through an "open in another app" prompt and does not reliably
   follow the fallback URL (Mozilla bugs 1859052, 1882137). So after the tap LPL waits 1.8 s; if the page is
   still visible (`document.hidden` false, no `visibilitychange` to hidden in between) a small note appears
@@ -232,7 +233,7 @@ plain http address and adds ` LPLShell/<version>` to the user agent.
 | server/requirements.txt | | `starlette>=1.0` |
 | server/requirements-dev.txt | new | pytest, httpx |
 | server/tests/ | new | `conftest.py` (generated photos, fresh data folder), `test_android_handoff.py` |
-| web/src/devices.ts | new | `STATUS` (moved from Work.tsx), `isPhoneAgent`, `isAndroidBrowser`, `inShell`, `agentLabel`, `defaultAgent`, `needsDeviceChoice`, `photoWhere`, `phoneEditLink`, `parseDeepLink`, `takeDeepLink` |
+| web/src/devices.ts | new | `STATUS` (moved from Work.tsx), `isPhoneAgent`, `isAndroidBrowser`, `inShell`, `agentLabel`, `defaultAgent`, `needsDeviceChoice`, `photoWhere`, `selectionIds`, `phoneEditLink`, `parseDeepLink`, `takeDeepLink` |
 | web/src/components/PhoneEdit.tsx | new | `EditOnPhone` link + "didn't open" note, `useListTitle` |
 | web/src/components/DevicePicker.tsx | new | the device picker |
 | web/src/store.tsx | `editInDarktable`, new `editOn`, `devicePick` | picker, names in toasts |
@@ -241,7 +242,7 @@ plain http address and adds ` LPLShell/<version>` to the user agent.
 | web/src/components/Board.tsx | selection bar | link on the phone |
 | web/src/components/Inspector.tsx | new `WhereLine`, `Inspector` | where line |
 | web/src/components/Work.tsx | `WorkView` | names instead of "PC", `STATUS` import |
-| web/public/android-app.html | new | "app not installed" page (download location is a placeholder) |
+| web/public/android-app.html | new | "app did not open" page with the link to the releases |
 | web/tests/devices.test.ts, web/package.json `test` | new | Node's built-in test runner, no new packages |
 
 ## 10. Tests

@@ -57,6 +57,15 @@ export function photoWhere(agents: Pick<Agent, 'id' | 'name' | 'os' | 'state'>[]
 
 export const PHONE_LINK_MAX = 200
 
+/** The photos a selection bar hands to the phone app: the selected ones in display order, then any selected
+ *  ones not in the shown list (in the order they were selected). The first of them is the one to open. */
+export function selectionIds(list: number[], sel: number[]): number[] {
+  const chosen = new Set(sel)
+  const shown = list.filter(id => chosen.has(id))
+  const known = new Set(shown)
+  return [...shown, ...sel.filter((id, i) => !known.has(id) && sel.indexOf(id) === i)]
+}
+
 /** The link that opens the darktable phone app on these photos ("Edit on this phone").
  *  ids: the list in display order; start: the photo to open first. More than PHONE_LINK_MAX photos:
  *  the ones around start. Never carries the password or the login cookie. */

@@ -2,7 +2,7 @@
 // Tests for src/devices.ts with Node's own test runner, no extra packages: npm test (Node 22.6 or newer).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { agentLabel, defaultAgent, inShell, isAndroidBrowser, needsDeviceChoice, parseDeepLink, phoneEditLink, photoWhere } from '../src/devices.ts'
+import { agentLabel, defaultAgent, inShell, isAndroidBrowser, needsDeviceChoice, parseDeepLink, phoneEditLink, photoWhere, selectionIds } from '../src/devices.ts'
 
 const origin = 'http://192.0.2.10:8080'  // documentation address (RFC 5737)
 const tail = '#Intent;scheme=lpldt;package=app.dtandroid;S.browser_fallback_url=http%3A%2F%2F192.0.2.10%3A8080%2Fandroid-app.html;end'
@@ -37,6 +37,18 @@ test('link: start not in the list is put first', () => {
 test('link: no password or cookie', () => {
   const l = phoneEditLink({ origin, ids: [1], start: 1 })
   assert.ok(!/password|token|cookie/i.test(l))
+})
+
+test('selection: only the selected photos, in display order', () => {
+  assert.deepEqual(selectionIds([5, 3, 9, 1, 7], [1, 3]), [3, 1])
+  assert.deepEqual(selectionIds([5, 3, 9], [9, 42, 5, 17]), [5, 9, 42, 17])   // not in the loaded list: after the known ones
+  assert.deepEqual(selectionIds([5, 3], [3, 3]), [3])
+  assert.deepEqual(selectionIds([], []), [])
+  const all = Array.from({ length: 1000 }, (_, i) => i + 1)
+  const sel = selectionIds(all, all.slice(0, 300).reverse())
+  assert.equal(sel.length, 300); assert.equal(sel[0], 1)
+  const ids = idsOf(phoneEditLink({ origin, ids: sel, start: sel[0] }))       // more than 200: the existing rule
+  assert.equal(ids.length, 200); assert.equal(ids[0], 1); assert.equal(ids[199], 200)
 })
 
 test('Android browsers', () => {

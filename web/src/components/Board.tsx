@@ -6,6 +6,7 @@ import { actionFor, comboOf, keysOf, typingIn, useShortcutsVersion } from '../sh
 import { getSettings, setSetting, Settings, useSettings } from '../settings'
 import { LABELS } from '../fields'
 import { EditOnPhone } from './PhoneEdit'
+import { selectionIds } from '../devices'
 
 type Item = Photo & { x: number; y: number }
 type Tool = 'select' | 'note' | 'arrow' | 'frame'
@@ -976,9 +977,9 @@ export function BoardView() {
                   <span className="small soft">{[selPhotosHere.length ? `${selPhotosHere.length} photo${selPhotosHere.length > 1 ? 's' : ''}` : '', nSh ? `${nSh} note${nSh > 1 ? 's' : ''} or arrow${nSh > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ')}</span>
                   {selNotes.length > 0 && NOTE_COLORS.map(c => <button key={c} className="swatch" style={{ background: c }} aria-label="Note color" onClick={() => colorNotes(c)} />)}
                   {selPhotosHere.length > 0 && <button className="btn" onClick={() => s.editInDarktable(selPhotosHere)}>Edit in darktable</button>}
-                  {selPhotosHere.length > 0 && s.isMobile && (() => {  // the board's own order, as the full screen view pages through it
-                    const ids = [...order, ...shown.filter(it => !pos.has(it.id))].map(it => it.id)
-                    return <EditOnPhone ids={ids} start={ids.find(id => selSet.has(id)) ?? selPhotosHere[0]} series={sid} title={name} className="btn" />
+                  {selPhotosHere.length > 0 && s.isMobile && (() => {  // the selected photos in the board's own order (as the full screen view pages through it)
+                    const ids = selectionIds([...order, ...shown.filter(it => !pos.has(it.id))].map(it => it.id), selPhotosHere)
+                    return <EditOnPhone ids={ids} start={ids[0]} series={sid} title={name} className="btn" />
                   })()}
                   {selPhotosHere.length > 0 && <button className="btn" title={`Hide from the library and the board (${keysOf('hide')[0] || 'no key'})`} onClick={() => toggleHidden()}>{selPhotosHere.every(id => byPhoto.get(id)?.hidden) ? 'Unhide' : 'Hide'}</button>}
                   <button className="btn" onClick={removeSel} title={keysOf('boardDelete').join(', ')}>{selPhotosHere.length ? 'Remove from board' : 'Delete'}</button>

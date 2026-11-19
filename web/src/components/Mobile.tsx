@@ -10,7 +10,7 @@ import { WorkView } from './Work'
 import { BoardView } from './Board'
 import { SettingsDialog } from './Shortcuts'
 import { EditOnPhone, useListTitle } from './PhoneEdit'
-import { takeDeepLink } from '../devices'
+import { selectionIds, takeDeepLink } from '../devices'
 
 type Tab = 'lib' | 'folders' | 'series' | 'pc'  // 'pc': the devices and their working sets
 
@@ -196,8 +196,8 @@ export function MobileApp() {
           <span className="grow">{s.sel.length} selected</span>
           <button className="btn primary big" onClick={() => setSheet('edit')}>Rate & tag</button>
           <button className="btn big" onClick={() => s.editInDarktable(s.sel)}>darktable</button>
-          {(() => { const ids = s.items.map(x => x.id); const start = ids.find(id => s.sel.includes(id)) ?? s.sel[0]
-            return <EditOnPhone ids={ids} start={start} series={list.series} title={list.title} label="This phone" /> })()}
+          {(() => { const ids = selectionIds(s.items.map(x => x.id), s.sel)  // only the selected photos
+            return <EditOnPhone ids={ids} start={ids[0]} series={list.series} title={list.title} label="This phone" /> })()}
         </div>
       )}
       <nav className="mtabs">
