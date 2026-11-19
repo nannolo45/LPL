@@ -375,9 +375,10 @@ def timeline(body: Dict[str, Any] = Body(default={})):
                      "GROUP BY m ORDER BY m DESC" % (join, where), args).fetchall()
     out = []
     for r in rows:
-        cov = c.execute("SELECT p.id, p.preview_ver FROM photos p%s WHERE %s AND substr(p.taken,1,7)=? ORDER BY p.rating DESC, p.taken LIMIT 12" % (join, where),
+        cov = c.execute("SELECT p.id, p.preview_ver FROM photos p%s WHERE %s AND substr(p.taken,1,7)=? ORDER BY p.rating DESC, p.taken LIMIT 30" % (join, where),
                         args + [r["m"]]).fetchall()
-        out.append({"month": r["m"], "count": r["n"], "folders": sorted({x.split("/")[-1] for x in (r["folders"] or "").split(",") if x}),
+        paths = sorted({x for x in (r["folders"] or "").split(",") if x}, key=lambda x: x.split("/")[-1].lower())
+        out.append({"month": r["m"], "count": r["n"], "folders": [x.split("/")[-1] for x in paths], "paths": paths,
                     "covers": [{"id": x["id"], "v": x["preview_ver"]} for x in cov]})
     return {"months": out}
 

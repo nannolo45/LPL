@@ -113,9 +113,19 @@ a { color: var(--accent); }
 .tmenu button:hover { background: #33333a; }
 
 /* timeline */
-.month { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid #26262a; }
-.month .strip { flex: 1 1 300px; min-width: 0; display: flex; gap: 6px; overflow: hidden; }
-.month .strip img { flex: 0 0 auto; height: 60px; border-radius: 4px; }
+.month { display: flex; flex-direction: column; gap: 8px; padding: 16px 0 18px; border-bottom: 1px solid #26262a; min-width: 0; }
+.month .mo-head { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.month .mtitle { border: 0; background: none; padding: 0; color: var(--text); font-size: 19px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.month .mtitle:hover { color: var(--accent-text); }
+.month .mfolders { display: flex; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; mask-image: linear-gradient(to right, #000 92%, transparent); }
+.month .mfolders.open { flex-wrap: wrap; white-space: normal; mask-image: none; }
+.month .mf { flex: 0 0 auto; padding: 2px 8px; border: 1px solid var(--line2); border-radius: 10px; background: transparent; color: var(--soft); font-size: 11px; cursor: pointer; }
+.month .mf:hover { border-color: var(--accent-line); color: var(--accent-text); }
+.month .mf-toggle { flex: 0 0 auto; width: 22px; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.month .strip { display: flex; gap: 6px; overflow: hidden; height: 96px; }
+.month .mcover { flex: 0 0 auto; padding: 0; border: 0; background: #222226; border-radius: 4px; overflow: hidden; cursor: pointer; height: 96px; }
+.month .mcover img { height: 96px; width: auto; display: block; }
+.month .mcover:hover { outline: 2px solid var(--accent); }
 
 /* inspector / tags */
 .preview { width: 100%; border-radius: 6px; background: #111; display: block; max-height: 240px; object-fit: contain; }
@@ -214,6 +224,7 @@ a { color: var(--accent); }
   .group-h { padding-left: 14px; padding-right: 14px; top: -8px; }
   .ftiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 0 14px; }
   .month { padding: 12px 14px; }
+  .month .strip, .month .mcover, .month .mcover img { height: 72px; }
 }
 
 .sechead { background: none; border: 0; padding: 2px 0; color: inherit; display: flex; align-items: center; gap: 6px; cursor: pointer; font: inherit; }

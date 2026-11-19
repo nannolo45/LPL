@@ -217,21 +217,36 @@ export function FoldersView() {
 
 export function TimelineView() {
   const s = useStore()
-  const [months, setMonths] = useState<{ month: string; count: number; folders: string[]; covers: { id: number; v: number }[] }[]>([])
+  const [months, setMonths] = useState<{ month: string; count: number; folders: string[]; paths?: string[]; covers: { id: number; v: number }[] }[]>([])
+  const [open, setOpen] = useState<Set<string>>(new Set())  // months whose folder list is unfolded
   useEffect(() => { api.timeline(s.filters).then(r => setMonths(r.months)).catch(e => s.toast(e.message)) }, [s.filters])
-  const open = (m: string) => { s.patchFilters({ month: m }); s.setView('grid') }
+  const show = (m: string) => { s.patchFilters({ month: m }); s.setView('grid') }
+  const showFolder = (path: string) => { s.patchFilters({ folder: path, folders: [], month: null }); s.setView('grid') }
   return (
     <div className="scroll">
-      {months.map(m => (
-        <div className="month" key={m.month}>
-          <div className="col" style={{ flex: '0 0 170px', gap: 2 }}>
-            <span className="display" style={{ fontSize: 17, fontWeight: 500 }}>{fmtMonth(m.month + '-01')}</span>
-            <span className="small muted ellipsis">{m.count} photos · {m.folders.join(', ')}</span>
+      {months.map(m => {
+        const paths = m.paths || m.folders
+        const unfolded = open.has(m.month)
+        return (
+          <div className="month" key={m.month}>
+            <div className="mo-head">
+              <button className="mtitle display" onClick={() => show(m.month)}>{fmtMonth(m.month + '-01')}</button>
+              <span className="small muted">{m.count.toLocaleString()} photos · {paths.length} folder{paths.length === 1 ? '' : 's'}</span>
+              <div className="grow" />
+              <button className="btn" onClick={() => show(m.month)}>Show {m.count.toLocaleString()} photos</button>
+            </div>
+            <div className={'mfolders' + (unfolded ? ' open' : '')}>
+              {paths.length > 3 && (
+                <button className="mf-toggle" aria-expanded={unfolded} title={unfolded ? 'Fewer' : 'All folders'} onClick={() => setOpen(o => { const n = new Set(o); n.has(m.month) ? n.delete(m.month) : n.add(m.month); return n })}>{unfolded ? '▾' : '▸'}</button>
+              )}
+              {paths.map(p => <button key={p} className="mf" title={`Open ${p}`} onClick={() => showFolder(p)}>{p.split('/').pop()}</button>)}
+            </div>
+            <div className="strip">
+              {m.covers.map(c => <button key={c.id} className="mcover" onClick={() => show(m.month)} title={`Show ${fmtMonth(m.month + '-01')}`}><RetryImg src={coverUrl(c)} /></button>)}
+            </div>
           </div>
-          <div className="strip">{m.covers.map(c => <RetryImg key={c.id} src={coverUrl(c)} />)}</div>
-          <button className="btn" onClick={() => open(m.month)}>Show</button>
-        </div>
-      ))}
+        )
+      })}
       {!months.length && <div className="muted" style={{ padding: 30 }}>Nothing yet. Photos without a capture date don't appear here.</div>}
     </div>
   )
