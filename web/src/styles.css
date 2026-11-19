@@ -347,3 +347,10 @@ a { color: var(--accent); }
 .bt-pop { position: relative; }
 .bt-menu { position: absolute; left: 44px; top: 0; min-width: 190px; max-height: 60vh; overflow: auto; display: flex; flex-direction: column; padding: 6px; background: #26262b; border: 1px solid var(--line2); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.5); z-index: 30; }
 .btools .bt-menu button { width: auto; height: auto; text-align: left; padding: 7px 10px; font-size: 13px; color: var(--text); border-radius: 6px; }
+
+/* frames: picked, colours, drawing a new one */
+.frame.fsel { box-shadow: 0 0 0 2px var(--accent); }
+.swatch.none { border: 1px dashed #8a8a92; background: transparent; position: relative; }
+.swatch.none::after { content: ''; position: absolute; left: 2px; right: 2px; top: 50%; height: 1px; background: #8a8a92; transform: rotate(-45deg); }
+.marquee.fdraw { border: 2px dashed var(--accent); background: rgba(232,163,61,.06); border-radius: 10px; }
+.bzoom .zpct { min-width: 48px; border: 0; background: transparent; color: var(--muted); font-size: 12px; text-align: center; }

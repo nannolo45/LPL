@@ -41,7 +41,7 @@ export const ACTIONS: Action[] = [
   { id: 'fitSel', label: 'Zoom to the selection', scope: 'board', keys: ['Shift+2'] },
   { id: 'nextFrame', label: 'Go to the next frame', scope: 'board', keys: [']'] },
   { id: 'prevFrame', label: 'Go to the previous frame', scope: 'board', keys: ['['] },
-  { id: 'newFrame', label: 'New frame', scope: 'board', keys: ['Shift+F'] },
+  { id: 'newFrame', label: 'Frame tool (drag to draw a frame)', scope: 'board', keys: ['Shift+F'] },
   { id: 'zoomIn', label: 'Zoom in', scope: 'board', keys: ['Ctrl+='] },
   { id: 'zoomOut', label: 'Zoom out', scope: 'board', keys: ['Ctrl+-'] },
   { id: 'zoomReset', label: 'Zoom to 100%', scope: 'board', keys: ['Ctrl+0'] },

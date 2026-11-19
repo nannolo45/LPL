@@ -602,7 +602,7 @@ def series_delete(sid: int):
 def series_board(sid: int):
     s = _series(sid)
     c = db.conn()
-    frames = [dict(r) for r in c.execute("SELECT id,label,x,y,w,h,maybe FROM series_frames WHERE series_id=? ORDER BY id", (sid,)).fetchall()]
+    frames = [dict(r) for r in c.execute("SELECT id,label,x,y,w,h,maybe,color,border FROM series_frames WHERE series_id=? ORDER BY id", (sid,)).fetchall()]
     pos = {r["photo_id"]: r for r in c.execute("SELECT photo_id,x,y,ord FROM series_items WHERE series_id=?", (sid,)).fetchall()}
     items = photo_dicts(list(pos.keys()))
     for it in items:
@@ -682,14 +682,15 @@ def series_save(sid: int, body: Dict[str, Any] = Body(...)):
         if "frames" in body:
             keep = []
             for f in body["frames"]:
-                vals = (f.get("label") or "", float(f["x"]), float(f["y"]), float(f["w"]), float(f["h"]), int(bool(f.get("maybe"))))
+                vals = (f.get("label") or "", float(f["x"]), float(f["y"]), float(f["w"]), float(f["h"]), int(bool(f.get("maybe"))),
+                        str(f.get("color") or "")[:20], str(f.get("border") or "")[:10])
                 cur = None
                 if f.get("id"):
-                    cur = c.execute("UPDATE series_frames SET label=?,x=?,y=?,w=?,h=?,maybe=? WHERE id=? AND series_id=?", vals + (int(f["id"]), sid))
+                    cur = c.execute("UPDATE series_frames SET label=?,x=?,y=?,w=?,h=?,maybe=?,color=?,border=? WHERE id=? AND series_id=?", vals + (int(f["id"]), sid))
                 if cur is not None and cur.rowcount:
                     keep.append(int(f["id"]))
                 else:  # new, or brought back by undo after it was deleted
-                    cur = c.execute("INSERT INTO series_frames(label,x,y,w,h,maybe,series_id) VALUES(?,?,?,?,?,?,?)", vals + (sid,))
+                    cur = c.execute("INSERT INTO series_frames(label,x,y,w,h,maybe,color,border,series_id) VALUES(?,?,?,?,?,?,?,?,?)", vals + (sid,))
                     keep.append(cur.lastrowid)
             if keep:
                 c.execute("DELETE FROM series_frames WHERE series_id=? AND id NOT IN (%s)" % ",".join(str(k) for k in keep), (sid,))
@@ -762,7 +763,7 @@ def series_add_matching(sid: int, body: Dict[str, Any] = Body(...)):
         return {"added": 0}
     with db.write_lock:
         c = db.conn()
-        frames = [dict(r) for r in c.execute("SELECT id,label,x,y,w,h,maybe FROM series_frames WHERE series_id=? ORDER BY id", (sid,)).fetchall()]
+        frames = [dict(r) for r in c.execute("SELECT id,label,x,y,w,h,maybe,color,border FROM series_frames WHERE series_id=? ORDER BY id", (sid,)).fetchall()]
         items = [dict(r) for r in c.execute(
             "SELECT si.photo_id id, si.x, si.y, p.width, p.height, p.orientation FROM series_items si JOIN photos p ON p.id=si.photo_id "
             "WHERE si.series_id=?", (sid,)).fetchall()]
@@ -1111,8 +1112,9 @@ def import_index(body: Dict[str, Any] = Body(...)):
             if created:
                 sid = c.execute("INSERT INTO series(name, created) VALUES(?,?)", (name, time.time())).lastrowid
                 for f in se.get("frames") or []:
-                    c.execute("INSERT INTO series_frames(series_id,label,x,y,w,h,maybe) VALUES(?,?,?,?,?,?,?)",
-                              (sid, f.get("label") or "", float(f["x"]), float(f["y"]), float(f["w"]), float(f["h"]), int(bool(f.get("maybe")))))
+                    c.execute("INSERT INTO series_frames(series_id,label,x,y,w,h,maybe,color,border) VALUES(?,?,?,?,?,?,?,?,?)",
+                              (sid, f.get("label") or "", float(f["x"]), float(f["y"]), float(f["w"]), float(f["h"]), int(bool(f.get("maybe"))),
+                               str(f.get("color") or "")[:20], str(f.get("border") or "")[:10]))
             else:
                 sid = r["id"]
             new_ids = []

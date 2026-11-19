@@ -196,7 +196,7 @@ def _series_payload(dest_by_id: Dict[int, str]) -> list:
         mine = [i for i in items if i["photo_id"] in dest_by_id]
         if not mine:
             continue
-        frames = [dict(f) for f in c.execute("SELECT label,x,y,w,h,maybe FROM series_frames WHERE series_id=?", (s["id"],)).fetchall()]
+        frames = [dict(f) for f in c.execute("SELECT label,x,y,w,h,maybe,color,border FROM series_frames WHERE series_id=?", (s["id"],)).fetchall()]
         out.append({"name": s["name"], "frames": frames, "shapes": _shapes_payload(s["id"], dest_by_id),
                     "items": [{"dest": dest_by_id[i["photo_id"]], "x": i["x"], "y": i["y"], "ord": i["ord"]} for i in mine]})
     return out

@@ -18,6 +18,8 @@ export interface Settings {
   boardSnap: boolean
   /** colour of a new note */
   boardNoteColor: string
+  /** colour of a new frame ('' = none) */
+  boardFrameColor: string
   /** the zoom a board opens at (100 = 100%); the phone uses its own */
   boardZoom: number
   boardZoomPhone: number
@@ -29,7 +31,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   boardPan: 'both', boardWheel: 'scroll', boardTouch: 'pan', boardPhotoDouble: 'darktable',
-  boardNumbers: true, boardSnap: false, boardNoteColor: '#f5d76e', boardZoom: 100, boardZoomPhone: 50,
+  boardNumbers: true, boardSnap: false, boardNoteColor: '#f5d76e', boardFrameColor: '', boardZoom: 100, boardZoomPhone: 50,
   boardStrip: true, boardStripSort: 'reading', boardStripDesc: false,
 }
 

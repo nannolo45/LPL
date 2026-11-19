@@ -7,7 +7,7 @@ import { getSettings, setSetting, Settings, useSettings } from '../settings'
 import { LABELS } from '../fields'
 
 type Item = Photo & { x: number; y: number }
-type Tool = 'select' | 'note' | 'arrow'
+type Tool = 'select' | 'note' | 'arrow' | 'frame'
 type Rect = { x: number; y: number; w: number; h: number }
 type Pt = { x: number; y: number }
 
@@ -21,6 +21,17 @@ const TOOL_ICONS = {
   frames: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="8" height="7" rx="1" /><rect x="13" y="4" width="8" height="7" rx="1" /><rect x="3" y="13" width="8" height="7" rx="1" /><path d="M15 16.5h5M17.5 14v5" /></svg>,
   undo: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 010 11H11" /></svg>,
   redo: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 14l5-5-5-5" /><path d="M20 9H9.5a5.5 5.5 0 000 11H13" /></svg>,
+}
+
+// frame looks: a soft fill and a matching border in the chosen colour
+export const FRAME_COLORS: [string, string][] = [['', 'None'], ['#8a8a92', 'Grey'], ['#e5c547', 'Yellow'], ['#f0a35a', 'Orange'], ['#e5636a', 'Red'], ['#e07bb0', 'Pink'], ['#a07be0', 'Purple'], ['#5b9be6', 'Blue'], ['#5cc08a', 'Green']]
+const hexA = (hex: string, a: number) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})` }
+function frameLook(f: Frame): React.CSSProperties {
+  const st: React.CSSProperties = {}
+  if (f.color) { st.background = hexA(f.color, .13); st.borderColor = hexA(f.color, .8) }
+  if (f.border === 'dashed') st.borderStyle = 'dashed'
+  if (f.border === 'none') st.borderColor = 'transparent'
+  return st
 }
 
 export const NOTE_COLORS = ['#f5d76e', '#f6b26b', '#f4a6c0', '#b9a6f0', '#9cc8f0', '#a8dba0', '#d8d8dc']
@@ -71,7 +82,8 @@ const snapSig = (x: Snap) => JSON.stringify([x.items.map(i => [i.id, Math.round(
 type MoveOrig = { photos: Map<number, Pt>; notes: Map<string, Pt>; ends: { key: string; end: 'a' | 'b'; x: number; y: number }[] }
 type Drag =
   | ({ kind: 'move'; sx: number; sy: number; moved: boolean; click?: { photo?: number; shape?: string } } & MoveOrig)
-  | ({ kind: 'frame'; fi: number; sx: number; sy: number; of: Frame } & MoveOrig)
+  | ({ kind: 'frame'; fi: number; sx: number; sy: number; of: Frame; inner: Map<number, Frame>; shift: boolean } & MoveOrig)
+  | { kind: 'frameDraw'; x0: number; y0: number }
   | { kind: 'resize'; fi: number; sx: number; sy: number; of: Frame }
   | { kind: 'note-resize'; key: string; sx: number; sy: number; ow: number; oh: number }
   | { kind: 'marquee'; x0: number; y0: number; basePhotos: number[]; baseShapes: string[]; last: string }
@@ -100,7 +112,8 @@ export function BoardView() {
   const drag = useRef<Drag | null>(null)
   // while dragging, the moving things are shifted with a CSS variable instead of redrawing the whole board
   // on every mouse move (that made photos trail far behind the pointer on a big board); saved on release
-  const [moving, setMoving] = useState<{ photos: Set<number>; notes: Set<string>; frame: number } | null>(null)
+  const [moving, setMoving] = useState<{ photos: Set<number>; notes: Set<string>; frames: Set<number> } | null>(null)
+  const [selFrames, setSelFrames] = useState<number[]>([])  // frames picked by clicking their name bar
   const live = useRef({ dx: 0, dy: 0 })
   const saveTimer = useRef<number>()
   const shapesTimer = useRef<number>()
@@ -142,6 +155,7 @@ export function BoardView() {
     setItems(to.items); setFrames(to.frames); setShapes(() => to.shapes)
     cur.current = to
     setEditing(null); setSelShapes(sel => sel.filter(k => to.shapes.some(x => x.key === k)))
+    setSelFrames([])
     s.setSel(s.sel.filter(id => want.has(id)))
     try {
       if (gone.length) await api.seriesRemove(sid, gone)
@@ -173,7 +187,7 @@ export function BoardView() {
       return { items: its, frames: r.frames }
     }).catch(e => { s.toast(e.message); return null })
   }, [sid])
-  useEffect(() => { needInitialScroll.current = true; origin.current = null; setAdding(false); setSelShapes([]); setEditing(null); undoStack.current = []; redoStack.current = []; setHist(h => h + 1); load() }, [load])
+  useEffect(() => { needInitialScroll.current = true; origin.current = null; setAdding(false); setSelShapes([]); setSelFrames([]); setEditing(null); undoStack.current = []; redoStack.current = []; setHist(h => h + 1); load() }, [load])
 
   // photos hidden from the library: off the board too (they stay in the series and keep their place),
   // unless "Show hidden" is on; even then they're dimmed and don't count in the reading order
@@ -310,6 +324,7 @@ export function BoardView() {
     if (editing) stopEditing(editing)
     if (tool === 'arrow') { startArrow(e); return }
     if (tool === 'note') { addNote(toBoard(e)); setTool('select'); return }  // a note goes on top of whatever is there
+    if (tool === 'frame') { startFrameDraw(e); return }  // a frame can be drawn over photos and notes
     let photos = s.sel.filter(id => byPhoto.has(id)), sh = selShapes
     const isSel = obj.photo != null ? photos.includes(obj.photo) : sh.includes(obj.shape!)
     if (e.ctrlKey || e.metaKey || e.shiftKey) {
@@ -336,9 +351,10 @@ export function BoardView() {
     if (editing) { stopEditing(editing); return }
     const p = toBoard(e)
     if (tool === 'note') { addNote(p); setTool('select'); return }
+    if (tool === 'frame') { startFrameDraw(e); return }
     if (tool === 'arrow') { startArrow(e); return }
     const add = e.shiftKey || e.ctrlKey || e.metaKey
-    if (!add) { s.setSel([]); setSelShapes([]) }
+    if (!add) { s.setSel([]); setSelShapes([]); setSelFrames([]) }
     drag.current = { kind: 'marquee', x0: p.x, y0: p.y, basePhotos: add ? s.sel.filter(id => byPhoto.has(id)) : [], baseShapes: add ? selShapes : [], last: '' }
     capture(e)
   }
@@ -350,12 +366,21 @@ export function BoardView() {
     capture(e)
   }
 
+  const startFrameDraw = (e: React.PointerEvent) => {
+    const p = toBoard(e)
+    drag.current = { kind: 'frameDraw', x0: p.x, y0: p.y }
+    capture(e)
+  }
   const onFrameDown = (e: React.PointerEvent, fi: number, kind: 'frame' | 'resize') => {
     e.stopPropagation()
     if (panWanted(e)) { startPan(e); return }
     e.preventDefault()
+    if (tool === 'frame') { startFrameDraw(e); return }
+    if (tool !== 'select') setTool('select')
     const f = frames[fi]
     if (kind === 'resize') { drag.current = { kind, fi, sx: e.clientX, sy: e.clientY, of: { ...f } }; capture(e); return }
+    // frames lying inside this one move with it (and so do their photos and notes, which are inside this one too)
+    const innerFrames = new Map(frames.map((g, j) => [j, g] as [number, Frame]).filter(([j, g]) => j !== fi && g.x >= f.x && g.y >= f.y && g.x + g.w <= f.x + f.w && g.y + g.h <= f.y + f.h).map(([j, g]) => [j, { ...g }]))
     const photos = items.filter(it => centerIn(itemRect(it), f)).map(i => i.id)
     const ns = notes.filter(n => centerIn(n, f)).map(n => n.key)
     const o = moveOrig(photos, ns, [])
@@ -363,7 +388,7 @@ export function BoardView() {
       const p = a[end]
       if (p.photo == null && !p.note && ptIn(p, f)) o.ends.push({ key: a.key, end, x: p.x, y: p.y })
     }
-    drag.current = { kind: 'frame', fi, sx: e.clientX, sy: e.clientY, of: { ...f }, ...o }
+    drag.current = { kind: 'frame', fi, sx: e.clientX, sy: e.clientY, of: { ...f }, inner: innerFrames, shift: e.shiftKey || e.ctrlKey || e.metaKey, ...o }
     capture(e)
   }
 
@@ -386,6 +411,11 @@ export function BoardView() {
     if (d.kind === 'pinch') return
     if (d.kind === 'pan') { const w = wrap.current!; w.scrollLeft = d.sl - (e.clientX - d.sx); w.scrollTop = d.st - (e.clientY - d.sy); return }
     if (d.kind === 'arrow') { const b = toBoard(e); setGhost(g => (g ? { ...g, b } : g)); return }
+    if (d.kind === 'frameDraw') {
+      const p = toBoard(e)
+      setMarquee({ x: Math.min(d.x0, p.x), y: Math.min(d.y0, p.y), w: Math.abs(p.x - d.x0), h: Math.abs(p.y - d.y0) })
+      return
+    }
     if (d.kind === 'marquee') {
       const p = toBoard(e)
       const r = { x: Math.min(d.x0, p.x), y: Math.min(d.y0, p.y), w: Math.abs(p.x - d.x0), h: Math.abs(p.y - d.y0) }
@@ -408,7 +438,7 @@ export function BoardView() {
         dragCp.current = true
         checkpoint()
         if (d.kind === 'move') d.moved = true
-        setMoving({ photos: new Set(d.photos.keys()), notes: new Set(d.notes.keys()), frame: d.kind === 'frame' ? d.fi : -1 })
+        setMoving({ photos: new Set(d.photos.keys()), notes: new Set(d.notes.keys()), frames: d.kind === 'frame' ? new Set([d.fi, ...d.inner.keys()]) : new Set() })
       }
       // the whole group moves by the same amount, snapped on the first thing
       const pts = [...d.photos.values(), ...d.notes.values(), ...(d.kind === 'frame' ? [d.of] : [])]
@@ -434,6 +464,15 @@ export function BoardView() {
     dragCp.current = false
     if (d.kind === 'pan' || d.kind === 'pinch') return
     if (d.kind === 'marquee') { setMarquee(null); return }
+    if (d.kind === 'frameDraw') {
+      setMarquee(null)
+      const p = toBoard(e)
+      let r = { x: Math.min(d.x0, p.x), y: Math.min(d.y0, p.y), w: Math.abs(p.x - d.x0), h: Math.abs(p.y - d.y0) }
+      if (r.w < 40 || r.h < 40) r = { x: d.x0 - 450, y: d.y0 - 150, w: 900, h: 300 }  // a click: a frame of the usual size there
+      addFrame({ x: Math.round(sn(r.x)), y: Math.round(sn(r.y)), w: Math.round(sn(r.w)), h: Math.round(sn(r.h)) })
+      setTool('select')
+      return
+    }
     if (d.kind === 'arrow') {
       setGhost(null)
       const b = hitAt(toBoard(e))
@@ -452,8 +491,12 @@ export function BoardView() {
       inner.current?.style.removeProperty('--mdx'); inner.current?.style.removeProperty('--mdy')
       setMoving(null)
       applyMove(d, dx, dy)
-      if (d.kind === 'frame') setFrames(prev => prev.map((f, i) => (i === d.fi ? { ...f, x: d.of.x + dx, y: d.of.y + dy } : f)))
-    } else if (d.kind === 'frame') return  // a click on the frame's name without moving
+      if (d.kind === 'frame') setFrames(prev => prev.map((f, i) => (i === d.fi ? { ...f, x: d.of.x + dx, y: d.of.y + dy } : d.inner.has(i) ? { ...f, x: d.inner.get(i)!.x + dx, y: d.inner.get(i)!.y + dy } : f)))
+    } else if (d.kind === 'frame') {  // a click on the frame's name: pick the frame (Shift/Ctrl adds)
+      setSelFrames(sf => (d.shift ? (sf.includes(d.fi) ? sf.filter(x => x !== d.fi) : [...sf, d.fi]) : [d.fi]))
+      if (!d.shift) { s.setSel([]); setSelShapes([]) }
+      return
+    }
     if (d.kind === 'move' && !d.moved) {
       if (d.click) { s.setSel(d.click.photo != null ? [d.click.photo] : []); setSelShapes(d.click.shape ? [d.click.shape] : []) }
       return
@@ -517,13 +560,13 @@ export function BoardView() {
       else if (a === 'zoomIn') { e.preventDefault(); zoomTo(zoomRef.current + .1) }
       else if (a === 'zoomOut') { e.preventDefault(); zoomTo(zoomRef.current - .1) }
       else if (a === 'zoomReset') { e.preventDefault(); zoomTo(1) }
-      else if (a === 'deselect') { setTool('select'); setSelShapes([]) }
+      else if (a === 'deselect') { setTool('select'); setSelShapes([]); setSelFrames([]) }
       else if (a === 'undo') { e.preventDefault(); undo() }
       else if (a === 'fitAll') { e.preventDefault(); fitAll() }
       else if (a === 'fitSel') { e.preventDefault(); fitSelection() }
       else if (a === 'nextFrame') { e.preventDefault(); frameStep(1) }
       else if (a === 'prevFrame') { e.preventDefault(); frameStep(-1) }
-      else if (a === 'newFrame') { e.preventDefault(); addFrame() }
+      else if (a === 'newFrame') { e.preventDefault(); setTool(t => (t === 'frame' ? 'select' : 'frame')) }
       else if (a === 'fullscreen') {  // in reading order, maybe piles after
         const list = [...order, ...shown.filter(it => !pos.has(it.id))]
         const k = list.findIndex(it => it.id === selPhotosHere[0])
@@ -532,7 +575,7 @@ export function BoardView() {
       else if (a === 'redo') { e.preventDefault(); redo() }
       else if (a === 'hide') { e.preventDefault(); toggleHidden() }
       else if (a === 'boardDelete') {
-        if (!selShapes.length && !s.sel.some(id => byPhoto.has(id))) return
+        if (!selShapes.length && !selFrames.length && !s.sel.some(id => byPhoto.has(id))) return
         e.preventDefault(); removeSel()
       }
     }
@@ -625,13 +668,26 @@ export function BoardView() {
   const [editFrame, setEditFrame] = useState<number | null>(null)
 
   // a new frame goes in the middle of what you're looking at, named at once
-  const addFrame = () => {
+  const addFrame = (r?: Rect) => {
     const w = wrap.current
     const cx = w ? (w.scrollLeft + w.clientWidth / 2) / zoom + ox : 490, cy = w ? (w.scrollTop + w.clientHeight / 2) / zoom + oy : 190
     const nums = frames.map(f => parseInt(f.label, 10)).filter(n => !isNaN(n))
     const label = String((nums.length ? Math.max(...nums) : 0) + 1).padStart(2, '0')
-    const nf = [...frames, { label, x: Math.round(sn(cx - 450)), y: Math.round(sn(cy - 150)), w: 900, h: 300, maybe: 0 }]
-    checkpoint(); setFrames(nf); save(items, nf, true); setEditFrame(nf.length - 1)
+    const rect = r || { x: Math.round(sn(cx - 450)), y: Math.round(sn(cy - 150)), w: 900, h: 300 }
+    const nf = [...frames, { label, ...rect, maybe: 0, color: getSettings().boardFrameColor || '' }]
+    checkpoint(); setFrames(nf); save(items, nf, true); setEditFrame(nf.length - 1); setSelFrames([nf.length - 1])
+  }
+  const styleFrames = (p: Partial<Frame>) => {
+    if (!selFrames.length) return
+    checkpoint()
+    const nf = frames.map((f, i) => (selFrames.includes(i) ? { ...f, ...p } : f)); setFrames(nf); save(items, nf, true)
+  }
+  const deleteFrames = (idx: number[]) => {
+    if (!idx.length) return
+    checkpoint()
+    const names = idx.map(i => frames[i]?.label).filter(Boolean)
+    const nf = frames.filter((_, i) => !idx.includes(i)); setFrames(nf); save(items, nf, true); setSelFrames([])
+    s.toast(`${names.length > 1 ? names.length + ' frames' : 'Frame “' + names[0] + '”'} removed; the photos stay on the board (${keysOf('undo')[0] || 'Undo'} brings it back)`)
   }
   const renameFrame = (fi: number, v: string) => {
     setEditFrame(null)
@@ -640,11 +696,7 @@ export function BoardView() {
     checkpoint()
     const nf = frames.map((x, i) => (i === fi ? { ...x, label: v.trim() } : x)); setFrames(nf); save(items, nf, true)
   }
-  const deleteFrame = (fi: number) => {
-    checkpoint()
-    const nf = frames.filter((_, i) => i !== fi); setFrames(nf); save(items, nf, true)
-    s.toast(`Frame “${frames[fi].label}” removed; its photos stay on the board (${keysOf('undo')[0] || 'Undo'} brings it back)`)
-  }
+  const deleteFrame = (fi: number) => deleteFrames([fi])
   const selPhotosHere = s.sel.filter(id => byPhoto.has(id))
   const photoDouble = (id: number) => {
     const how = opt.boardPhotoDouble
@@ -664,6 +716,7 @@ export function BoardView() {
     window.setTimeout(() => setItems(its => { setFrames(frs => { save(its, frs, false); return frs }); return its }), 0)  // new reading order
   }
   const removeSel = async () => {
+    if (selFrames.length && !selShapes.length && !selPhotosHere.length) { deleteFrames(selFrames); return }
     if (!selShapes.length && !selPhotosHere.length) return
     checkpoint()
     if (selShapes.length) deleteShapes(selShapes, false)
@@ -782,7 +835,8 @@ export function BoardView() {
                   onDoubleClick={e => { if (tool === 'select' && (e.target as HTMLElement).dataset?.bg) addNote(toBoard(e)) }}>
                   <div ref={inner} data-bg="1" style={{ transform: `scale(${zoom}) translate(${-ox}px, ${-oy}px)`, transformOrigin: '0 0', width: W, height: H, position: 'absolute', left: 0, top: 0 }}>
                     {frames.map((f, i) => (
-                      <div key={f.id ?? 'n' + i} data-bg="1" className={'frame' + (f.maybe ? ' maybe' : '') + (moving?.frame === i ? ' moving' : '')} style={{ left: f.x, top: f.y, width: f.w, height: f.h }}>
+                      <div key={f.id ?? 'n' + i} data-bg="1" className={'frame' + (f.maybe ? ' maybe' : '') + (moving?.frames.has(i) ? ' moving' : '') + (selFrames.includes(i) ? ' fsel' : '')}
+                        style={{ left: f.x, top: f.y, width: f.w, height: f.h, ...frameLook(f) }}>
                         {(['l', 'r', 'b'] as const).map(side => <span key={side} className={'fedge ' + side} onPointerDown={e => onFrameDown(e, i, 'frame')} />)}
                         {editFrame === i
                           ? <input className="fl fl-in" autoFocus defaultValue={f.label} aria-label="Frame name" onPointerDown={e => e.stopPropagation()} onFocus={e => e.target.select()}
@@ -840,7 +894,7 @@ export function BoardView() {
                           onPointerDown={e => onObjDown(e, { shape: a.key })} onDoubleClick={e => { e.stopPropagation(); labelArrow(a) }}>{a.text}</span>
                       )
                     })}
-                    {marquee && <div className="marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />}
+                    {marquee && <div className={'marquee' + (tool === 'frame' ? ' fdraw' : '')} style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />}
                   </div>
                 </div>
               </div>
@@ -849,7 +903,7 @@ export function BoardView() {
                   const title = `${label} (${keysOf(act).join(', ') || 'no key'})`
                   return <button key={t} className={tool === t ? 'on' : ''} title={title} aria-label={title} aria-pressed={tool === t} onClick={() => setTool(t)}>{TOOL_ICONS[t]}</button>
                 })}
-                <button title={`New frame in the middle of the view (${keysOf('newFrame').join(', ') || 'no key'})`} aria-label="New frame" onClick={addFrame}>{TOOL_ICONS.frame}</button>
+                <button className={tool === 'frame' ? 'on' : ''} aria-pressed={tool === 'frame'} title={`Frame: drag to draw one (around photos and notes to put them in it), or click for the usual size (${keysOf('newFrame').join(', ') || 'no key'})`} aria-label="Frame tool" onClick={() => setTool(t => (t === 'frame' ? 'select' : 'frame'))}>{TOOL_ICONS.frame}</button>
                 <span className="sep" />
                 <button title={`Fit everything on screen (${keysOf('fitAll').join(', ') || 'no key'})`} aria-label="Fit everything" onClick={fitAll}>{TOOL_ICONS.fit}</button>
                 <div className="bt-pop">
@@ -870,6 +924,22 @@ export function BoardView() {
                 <button disabled={!undoStack.current.length} title={`Undo (${keysOf('undo').join(', ') || 'no key'})`} aria-label="Undo" onClick={undo}>{TOOL_ICONS.undo}</button>
                 <button disabled={!redoStack.current.length} title={`Redo (${keysOf('redo').join(', ') || 'no key'})`} aria-label="Redo" onClick={redo}>{TOOL_ICONS.redo}</button>
               </div>
+              {selFrames.length > 0 && !selPhotosHere.length && !nSh && (
+                <div className="bselbar">
+                  <span className="small soft">{selFrames.length > 1 ? `${selFrames.length} frames` : `Frame “${frames[selFrames[0]]?.label}”`}</span>
+                  {FRAME_COLORS.map(([c, n]) => (
+                    <button key={n} className={'swatch' + (c ? '' : ' none') + ((frames[selFrames[0]]?.color || '') === c ? ' on' : '')} style={{ background: c || 'transparent' }} title={n} aria-label={`Frame colour: ${n}`} onClick={() => styleFrames({ color: c })} />
+                  ))}
+                  <div className="seg">
+                    {([['', 'Solid'], ['dashed', 'Dashed'], ['none', 'No border']] as const).map(([b, l]) => (
+                      <button key={l} className={(frames[selFrames[0]]?.border || '') === b ? 'on' : ''} onClick={() => styleFrames({ border: b })}>{l}</button>
+                    ))}
+                  </div>
+                  {selFrames.length === 1 && <button className="btn" onClick={() => setEditFrame(selFrames[0])}>Rename</button>}
+                  <button className="btn" onClick={() => { const r = frames[selFrames[0]]; if (r) showRect(r) }}>Go to</button>
+                  <button className="btn" onClick={() => deleteFrames(selFrames)} title={keysOf('boardDelete').join(', ')}>Delete frame{selFrames.length > 1 ? 's' : ''}</button>
+                </div>
+              )}
               {(selPhotosHere.length > 0 || nSh > 0) && (
                 <div className="bselbar">
                   <span className="small soft">{[selPhotosHere.length ? `${selPhotosHere.length} photo${selPhotosHere.length > 1 ? 's' : ''}` : '', nSh ? `${nSh} note${nSh > 1 ? 's' : ''} or arrow${nSh > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ')}</span>

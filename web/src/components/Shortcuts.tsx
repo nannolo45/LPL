@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ACTIONS, comboOf, isCustom, keysOf, resetAll, SCOPES, setKeys, useShortcutsVersion } from '../shortcuts'
 import { DEFAULT_SETTINGS, resetSettings, setSetting, Settings, useSettings } from '../settings'
-import { NOTE_COLORS } from './Board'
+import { FRAME_COLORS, NOTE_COLORS } from './Board'
 import { useStore } from '../store'
 
 const pretty = (k: string) => k.replace('ArrowRight', '→').replace('ArrowLeft', '←').replace('ArrowUp', '↑').replace('ArrowDown', '↓')
@@ -94,6 +94,12 @@ function BoardSettings({ phone }: { phone: boolean }) {
         <span className="small">Colour of new notes</span>
         <div className="row" style={{ gap: 6 }}>
           {NOTE_COLORS.map(c => <button key={c} className={'swatch' + (st.boardNoteColor === c ? ' on' : '')} style={{ background: c }} aria-label={`Note colour ${c}`} aria-pressed={st.boardNoteColor === c} onClick={() => setSetting('boardNoteColor', c)} />)}
+        </div>
+      </div>
+      <div className="setrow">
+        <span className="small">Colour of new frames</span>
+        <div className="row" style={{ gap: 6 }}>
+          {FRAME_COLORS.map(([c, n]) => <button key={n} className={'swatch' + (c ? '' : ' none') + (st.boardFrameColor === c ? ' on' : '')} style={{ background: c || 'transparent' }} title={n} aria-label={`Frame colour ${n}`} aria-pressed={st.boardFrameColor === c} onClick={() => setSetting('boardFrameColor', c)} />)}
         </div>
       </div>
       <div className="setrow">

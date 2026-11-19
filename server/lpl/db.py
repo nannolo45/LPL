@@ -155,6 +155,10 @@ def init() -> None:
         cols = {r[1] for r in c.execute("PRAGMA table_info(photos)").fetchall()}
         if "hidden" not in cols:  # photos hidden from the library views (LPL only, not written to XMP)
             c.execute("ALTER TABLE photos ADD COLUMN hidden INTEGER DEFAULT 0")
+        fcols = {r[1] for r in c.execute("PRAGMA table_info(series_frames)").fetchall()}
+        if "color" not in fcols:  # frame look on the board: fill colour and border style (solid / dashed / none)
+            c.execute("ALTER TABLE series_frames ADD COLUMN color TEXT DEFAULT ''")
+            c.execute("ALTER TABLE series_frames ADD COLUMN border TEXT DEFAULT ''")
         c.commit()
 
 
