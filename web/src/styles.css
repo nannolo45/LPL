@@ -221,3 +221,26 @@ a { color: var(--accent); }
 .addp-foot { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; flex-wrap: wrap; }
 .addp-strip { display: flex; gap: 3px; }
 .addp-strip img { width: 34px; height: 26px; object-fit: cover; border-radius: 3px; background: var(--panel2); display: block; }
+
+/* board: area, tools, notes, arrows, selection box */
+.board-area { flex: 1 1 auto; min-height: 0; position: relative; display: flex; }
+.btools { position: absolute; left: 12px; top: 12px; display: flex; flex-direction: column; gap: 2px; padding: 4px; background: #26262b; border: 1px solid var(--line2); border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 10; }
+.btools button { width: 34px; height: 34px; border: 0; border-radius: 7px; background: transparent; color: var(--soft); font-size: 17px; line-height: 1; }
+.btools button:hover { background: #303036; }
+.btools button.on { background: var(--accent-bg); color: var(--accent); }
+.bzoom { position: absolute; right: 14px; bottom: 12px; display: flex; align-items: center; gap: 6px; padding: 3px 6px; background: #26262b; border: 1px solid var(--line2); border-radius: 8px; z-index: 10; }
+.bzoom button { width: 26px; height: 26px; border: 0; background: transparent; color: var(--text); border-radius: 5px; font-size: 15px; }
+.bzoom button:hover { background: #303036; }
+.bselbar { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; background: #26262b; border: 1px solid var(--line2); border-radius: 10px; box-shadow: 0 4px 14px rgba(0,0,0,.4); z-index: 10; white-space: nowrap; }
+.swatch { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(0,0,0,.3); padding: 0; }
+.bnote { position: absolute; border-radius: 3px; padding: 10px 12px; color: #1d1d1f; font-size: 14px; line-height: 1.35; box-shadow: 0 3px 8px rgba(0,0,0,.4); z-index: 6; touch-action: none; }
+.bnote.sel { box-shadow: 0 0 0 2px #212124, 0 0 0 4px var(--accent); }
+.bnote-t { width: 100%; height: 100%; overflow: hidden; white-space: pre-wrap; word-break: break-word; user-select: none; }
+.bnote textarea { width: 100%; height: 100%; border: 0; outline: none; resize: none; background: transparent; color: #1d1d1f; font: inherit; padding: 0; }
+.bnote textarea::placeholder { color: rgba(0,0,0,.45); }
+.bnote .nrs { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; border-right: 2px solid rgba(0,0,0,.35); border-bottom: 2px solid rgba(0,0,0,.35); }
+.barrows { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; z-index: 7; }
+.barrows .hit { stroke: transparent; stroke-width: 14; pointer-events: stroke; }
+.alabel { position: absolute; transform: translate(-50%, -50%); padding: 2px 7px; border-radius: 5px; background: #2c2c31; border: 1px solid var(--line2); color: var(--text); font-size: 12px; white-space: nowrap; z-index: 8; cursor: pointer; user-select: none; }
+.alabel.sel { border-color: var(--accent); color: var(--accent-text); }
+.marquee { position: absolute; border: 1px solid var(--accent); background: rgba(232,163,61,.08); z-index: 9; pointer-events: none; }

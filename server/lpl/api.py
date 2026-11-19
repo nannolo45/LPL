@@ -539,6 +539,7 @@ def series_delete(sid: int):
         c.execute("DELETE FROM series_frames WHERE series_id=?", (sid,))
         c.execute("DELETE FROM series WHERE id=?", (sid,))
         c.execute("DELETE FROM settings WHERE key=?", (_add_criteria_key(sid),))
+        c.execute("DELETE FROM series_shapes WHERE series_id=?", (sid,))
         c.execute("DELETE FROM tags WHERE path=? AND id NOT IN (SELECT tag_id FROM photo_tags)", (SERIES_TAG + s["name"],))
         c.commit()
     return {"ok": True}
@@ -558,7 +559,29 @@ def series_board(sid: int):
         last_add = json.loads(db.get_setting(_add_criteria_key(sid)) or "null")
     except ValueError:
         last_add = None
-    return {"series": {"id": s["id"], "name": s["name"]}, "frames": frames, "items": items, "last_add": last_add}
+    r = c.execute("SELECT data FROM series_shapes WHERE series_id=?", (sid,)).fetchone()
+    try:
+        shapes = json.loads(r["data"]) if r else []
+    except ValueError:
+        shapes = []
+    return {"series": {"id": s["id"], "name": s["name"]}, "frames": frames, "items": items, "last_add": last_add, "shapes": shapes}
+
+
+@app.put("/api/series/{sid}/shapes")
+def series_shapes_save(sid: int, body: Dict[str, Any] = Body(...)):
+    """Notes and arrows on the board, saved as a whole list."""
+    _series(sid)
+    shapes = body.get("shapes")
+    if not isinstance(shapes, list):
+        raise HTTPException(400, "shapes must be a list")
+    data = json.dumps(shapes[:5000], ensure_ascii=False)
+    if len(data) > 5_000_000:
+        raise HTTPException(413, "too much on this board")
+    with db.write_lock:
+        c = db.conn()
+        c.execute("INSERT INTO series_shapes(series_id,data) VALUES(?,?) ON CONFLICT(series_id) DO UPDATE SET data=excluded.data", (sid, data))
+        c.commit()
+    return {"ok": True, "n": len(shapes)}
 
 
 @app.post("/api/series/{sid}/items")
@@ -1046,6 +1069,18 @@ def import_index(body: Dict[str, Any] = Body(...)):
                                 (sid, pid, float(it.get("x") or 0), float(it.get("y") or 0), it.get("ord")))
                 if cur.rowcount:
                     new_ids.append(pid)
+            shapes = se.get("shapes") or []
+            has = c.execute("SELECT data FROM series_shapes WHERE series_id=?", (sid,)).fetchone()
+            if shapes and (created or not has or has["data"] in ("", "[]")):
+                for sh in shapes:
+                    for end in ("a", "b"):
+                        e = sh.get(end)
+                        if isinstance(e, dict) and e.get("dest"):
+                            pid = by_dest.get(e.pop("dest"))
+                            if pid:
+                                e["photo"] = pid
+                c.execute("INSERT INTO series_shapes(series_id,data) VALUES(?,?) ON CONFLICT(series_id) DO UPDATE SET data=excluded.data",
+                          (sid, json.dumps(shapes, ensure_ascii=False)))
             c.commit()
         if new_ids and config.write_series_tags:
             set_meta({"ids": new_ids, "attach": [SERIES_TAG + name]})

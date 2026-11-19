@@ -19,6 +19,9 @@ export function Viewer() {
   }
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      if (id == null) return  // closed: leave the keys alone (Space used to be swallowed everywhere, even while typing)
+      const t = e.target as HTMLElement
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return
       if (e.key === 'Escape') s.setViewer(null)
       else if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); go(1) }
       else if (e.key === 'ArrowLeft') go(-1)

@@ -81,7 +81,15 @@ export function FoldersView() {
   const crumbs = cur ? cur.split('/') : []
   const open = (path: string) => { s.patchFilters({ folder: path || null, folders: [], month: null }); s.setView('grid') }
   const openPicked = () => { s.patchFilters({ folder: null, folders: picked, month: null }); setPicked([]); setPicking(false); s.setView('grid') }
+  // Desktop: a click selects (Ctrl adds, Shift picks a range), a double-click opens.
+  // Phone: a tap opens, unless “Select” is on.
+  const openTile = (f: Folder, hasKids: boolean) => { setPicked([]); hasKids ? setCur(f.path) : open(f.path) }
   const clickTile = (e: React.MouseEvent, f: Folder, hasKids: boolean) => {
+    if (!s.isMobile && !picking && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      lastPick.current = f.path
+      setPicked([f.path])
+      return
+    }
     if (picking || e.ctrlKey || e.metaKey || e.shiftKey) {
       if (e.shiftKey && lastPick.current) {
         const ps = children.map(c => c.path)
@@ -96,7 +104,7 @@ export function FoldersView() {
       setPicked(prev => (prev.includes(f.path) ? prev.filter(x => x !== f.path) : [...prev, f.path]))
       return
     }
-    hasKids ? setCur(f.path) : open(f.path)
+    openTile(f, hasKids)
   }
   const pickedCount = all.filter(f => picked.includes(f.path)).reduce((n, f) => n + f.count, 0)
   const drop = (target: string) => {
@@ -147,13 +155,14 @@ export function FoldersView() {
       </div>
       {picked.length > 0 && (
         <div className="row wrap pickbar">
-          <b>{picked.length} folders</b><span className="small soft">{pickedCount.toLocaleString()} photos</span>
+          <b>{picked.length === 1 ? picked[0].split('/').pop() : `${picked.length} folders`}</b><span className="small soft">{pickedCount.toLocaleString()} photos</span>
           <div className="grow" />
           <button className="btn" onClick={() => setPicked([])}>Clear</button>
-          <button className="btn primary" onClick={openPicked}>Show their photos</button>
+          {picked.length === 1 && all.some(x => parentOf(x.path) === picked[0] && x.path !== picked[0]) && <button className="btn" onClick={() => { const p = picked[0]; setPicked([]); setCur(p) }}>Open folder</button>}
+          <button className="btn primary" onClick={openPicked}>Show {picked.length === 1 ? 'its' : 'their'} photos</button>
         </div>
       )}
-      <div className="ftiles">
+      <div className="ftiles" onClick={e => { if (e.target === e.currentTarget) setPicked([]) }}>
         {children.map(f => {
           const hasKids = all.some(x => parentOf(x.path) === f.path && x.path !== f.path)
           return (
@@ -161,7 +170,7 @@ export function FoldersView() {
               onDragStart={e => { setDrag(f.path); e.dataTransfer.setData('text/plain', f.path) }}
               onDragOver={e => { e.preventDefault(); setOver(f.path) }} onDragLeave={() => setOver(null)}
               onDrop={e => { e.preventDefault(); setOver(null); drop(f.path); setDrag(null) }}
-              onClick={e => clickTile(e, f, hasKids)}>
+              onClick={e => { e.stopPropagation(); clickTile(e, f, hasKids) }} onDoubleClick={() => { if (!picking) openTile(f, hasKids) }}>
               <div className="mosaic">
                 {[0, 1, 2, 3].map(i => <span key={i}>{f.covers[i] && !f.covers[i].pending && <RetryImg src={coverUrl(f.covers[i])} />}</span>)}
               </div>
@@ -186,7 +195,7 @@ export function FoldersView() {
         })}
       </div>
       {!children.length && <div className="muted" style={{ padding: 30 }}>No subfolders here.</div>}
-      {!s.isMobile && <div className="small muted" style={{ marginTop: 14 }}>Click a folder to open it. Ctrl-click (or Select) to pick several folders and see their photos together. Drag tiles to put them in your own order. ⋯ on a tile hides it or leaves it out of the library.{pendingPreviews > 0 ? ` Making previews: ${pendingPreviews.toLocaleString()} to go (what you look at goes first).` : ''}</div>}
+      {!s.isMobile && <div className="small muted" style={{ marginTop: 14 }}>Click a folder to select it, double-click to open it. Ctrl-click adds folders, Shift-click picks a range; then “Show their photos” shows them together. Drag tiles to put them in your own order. ⋯ on a tile hides it or leaves it out of the library.{pendingPreviews > 0 ? ` Making previews: ${pendingPreviews.toLocaleString()} to go (what you look at goes first).` : ''}</div>}
       {showExcluded && (
         <>
           <div className="backdrop" onClick={() => setShowExcluded(false)} />

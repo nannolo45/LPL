@@ -121,6 +121,12 @@ CREATE TABLE IF NOT EXISTS sent (
     ts REAL
 );
 
+-- notes and arrows drawn on a series board (one JSON list per series; arrows point at photos by id, notes by key)
+CREATE TABLE IF NOT EXISTS series_shapes (
+    series_id INTEGER PRIMARY KEY,
+    data TEXT NOT NULL DEFAULT '[]'
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT

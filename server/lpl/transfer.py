@@ -197,9 +197,26 @@ def _series_payload(dest_by_id: Dict[int, str]) -> list:
         if not mine:
             continue
         frames = [dict(f) for f in c.execute("SELECT label,x,y,w,h,maybe FROM series_frames WHERE series_id=?", (s["id"],)).fetchall()]
-        out.append({"name": s["name"], "frames": frames,
+        out.append({"name": s["name"], "frames": frames, "shapes": _shapes_payload(s["id"], dest_by_id),
                     "items": [{"dest": dest_by_id[i["photo_id"]], "x": i["x"], "y": i["y"], "ord": i["ord"]} for i in mine]})
     return out
+
+
+def _shapes_payload(sid: int, dest_by_id: Dict[int, str]) -> list:
+    """Board notes and arrows; arrow ends on a photo name it by its NAS path (ids differ there)."""
+    r = db.conn().execute("SELECT data FROM series_shapes WHERE series_id=?", (sid,)).fetchone()
+    try:
+        shapes = json.loads(r["data"]) if r else []
+    except ValueError:
+        return []
+    for sh in shapes:
+        for end in ("a", "b"):
+            e = sh.get(end)
+            if isinstance(e, dict) and e.get("photo") is not None:
+                pid = e.pop("photo")
+                if pid in dest_by_id:
+                    e["dest"] = dest_by_id[pid]
+    return shapes
 
 
 def _delete_local(pid: int) -> None:

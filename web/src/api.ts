@@ -61,6 +61,12 @@ export interface Filters {
   date_to?: string | null
 }
 
+// board notes and arrows; an arrow end sits on a photo or a note, or at a free point
+export interface BoardEnd { x: number; y: number; photo?: number; note?: string }
+export interface BoardNote { key: string; kind: 'note'; x: number; y: number; w: number; h: number; text: string; color: string }
+export interface BoardArrow { key: string; kind: 'arrow'; a: BoardEnd; b: BoardEnd; text?: string }
+export type BoardShape = BoardNote | BoardArrow
+
 export interface AddTarget { frame?: number; new?: boolean; per_folder?: boolean; label?: string }
 export interface LastAdd { filters: Filters; target: AddTarget }
 export interface MatchResult { total: number; new: number; limit: number; folders: number; sample: { id: number; v: number }[] }
@@ -131,7 +137,8 @@ export const api = {
   seriesCreate: (name: string, ids: number[] = []) => call<{ id: number }>('POST', '/api/series', { name, ids }),
   seriesRename: (id: number, name: string) => call('PATCH', `/api/series/${id}`, { name }),
   seriesDelete: (id: number) => call('DELETE', `/api/series/${id}`),
-  board: (id: number) => call<{ series: { id: number; name: string }; frames: Frame[]; items: Photo[]; last_add?: LastAdd | null }>('GET', `/api/series/${id}/board`),
+  board: (id: number) => call<{ series: { id: number; name: string }; frames: Frame[]; items: Photo[]; last_add?: LastAdd | null; shapes?: BoardShape[] }>('GET', `/api/series/${id}/board`),
+  shapesSave: (id: number, shapes: BoardShape[]) => call<{ ok: boolean }>('PUT', `/api/series/${id}/shapes`, { shapes }),
   seriesMatch: (id: number, filters: Filters, sort?: SortLevel[]) => call<MatchResult>('POST', `/api/series/${id}/match`, { filters, sort }),
   seriesAddMatching: (id: number, filters: Filters, target: AddTarget, sort?: SortLevel[]) =>
     call<{ added: number }>('POST', `/api/series/${id}/add-matching`, { filters, target, sort }),

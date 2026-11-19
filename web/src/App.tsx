@@ -47,7 +47,7 @@ function useShortcuts() {
       const t = e.target as HTMLElement
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return
       if (!['grid', 'list', 'board'].includes(s.view) && s.viewer == null) return
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); s.selectAll(); return }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { if (s.view === 'board') return; e.preventDefault(); s.selectAll(); return }
       if (e.ctrlKey || e.metaKey || e.altKey) return
       if (!s.sel.length) return
       if (/^[0-5]$/.test(e.key)) { s.meta({ rating: +e.key }); return }
