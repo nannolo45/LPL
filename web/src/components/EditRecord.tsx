@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react'
 import { api, EditEvent, Photo } from '../api'
 import { useStore } from '../store'
-import { changeLines, editWhere, fmtWhen, lastEditLine } from '../edits'
+import { allModules, changeLines, editWhere, entryWhen, lastEditLine } from '../edits'
 
 /** Re-render every few seconds while on, so a progress bar goes away when its device stops reporting
  *  even if this page stops getting answers from the server. */
@@ -64,12 +64,20 @@ export function EditList({ edits }: { edits: EditEvent[] | null }) {
   if (!edits) return <span className="small muted">Loading…</span>
   return (
     <ol className="editlist" aria-label="Edits of this photo, newest first">
-      {edits.map(e => (
-        <li key={e.id}>
-          <span className="small">{fmtWhen(e.time)} · edited {editWhere(e, s.agents)}</span>
-          {changeLines(e).map((l, i) => <span key={i} className="small muted">{l}</span>)}
-        </li>
-      ))}
+      {edits.map(e => <EditEntry key={e.id} e={e} agents={s.agents} />)}
     </ol>
+  )
+}
+
+function EditEntry({ e, agents }: { e: EditEvent; agents: Parameters<typeof editWhere>[1] }) {
+  const [all, setAll] = useState(false)
+  return (
+    <li>
+      <span className="small">{entryWhen(e)} · edited {editWhere(e, agents)}</span>
+      {changeLines(e).map((l, i) => <span key={i} className="small muted">{l}</span>)}
+      {e.modules.length > 0 && <button className="linkbtn" style={{ fontSize: 11, color: 'var(--muted)' }} aria-expanded={all} onClick={() => setAll(!all)}>
+        {all ? 'hide the modules' : `all modules (${e.modules.length})`} {all ? '▴' : '▾'}</button>}
+      {all && <span className="tiny muted" aria-label="All modules of this edit">{allModules(e).join(', ')}</span>}
+    </li>
   )
 }

@@ -45,12 +45,23 @@ export function lastEditLine(e: EditEvent, now?: number, agents: Pick<Agent, 'id
 
 const names = (ms: EditModule[]) => ms.map(m => m.label).join(', ')
 
-/** One line per kind of change ("changed: exposure"), or the modules in use when there is nothing to compare with. */
+/** When an entry was saved: "today 18:30", or for several saves of the day "today 10:02–18:30 · 5 saves". */
+export function entryWhen(e: Pick<EditEvent, 'time' | 'first_time' | 'saves'>, now?: number): string {
+  const n = e.saves || 1
+  if (n < 2 || !e.first_time || e.first_time >= e.time) return fmtWhen(e.time, now) + (n > 1 ? ` · ${n} saves` : '')
+  const d = new Date(e.time * 1000), from = fmtWhen(e.first_time, now), to = `${two(d.getHours())}:${two(d.getMinutes())}`
+  return `${from.endsWith(to) ? fmtWhen(e.time, now) : `${from}–${to}`} · ${n} saves`  // all in one minute: once
+}
+
+/** One line per kind of change ("changed: exposure"), or, when there is nothing to compare with, the modules in
+ *  use that darktable did not apply by itself ("darktable's default edit" when there are none). */
 export function changeLines(e: Pick<EditEvent, 'changes' | 'modules'>): string[] {
   if (!e.changes) {
-    const on = e.modules.filter(m => m.enabled), off = e.modules.filter(m => !m.enabled)
     if (!e.modules.length) return ['no darktable edit']
-    const out = [`modules in use: ${names(on) || 'none'}`]
+    const mine = e.modules.filter(m => !m.auto)
+    const on = mine.filter(m => m.enabled), off = mine.filter(m => !m.enabled)
+    if (!on.length && !off.length) return ["darktable's default edit"]
+    const out = on.length ? [`modules in use: ${names(on)}`] : []
     if (off.length) out.push(`off: ${names(off)}`)
     return out
   }
@@ -62,4 +73,10 @@ export function changeLines(e: Pick<EditEvent, 'changes' | 'modules'>): string[]
   if (c.switched_off.length) out.push(`switched off: ${names(c.switched_off)}`)
   if (c.removed.length) out.push(`removed: ${names(c.removed)}`)
   return out.length ? out : ['no module changed']
+}
+
+/** Every module of an edit, darktable's automatic ones and switched-off ones marked: "exposure",
+ *  "raw black/white point · automatic", "vignette · off". */
+export function allModules(e: Pick<EditEvent, 'modules'>): string[] {
+  return e.modules.map(m => m.label + (m.auto ? ' · automatic' : '') + (m.enabled ? '' : ' · off'))
 }

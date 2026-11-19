@@ -40,7 +40,9 @@ export interface Photo {
 
 /** A darktable module instance in an edit: operation, its English name (from module-names.json on the
  *  server, else the operation), the instance's name, on or off; label = name + instance name. */
-export interface EditModule { operation: string; name: string; instance: string; priority: number; enabled: boolean; label: string }
+export interface EditModule { operation: string; name: string; instance: string; priority: number; enabled: boolean; label: string
+  /** in an edit's modules: darktable applied it by itself and nobody changed it (left out of the summary) */
+  auto?: boolean }
 export interface EditChanges { added: EditModule[]; removed: EditModule[]; switched_on: EditModule[]; switched_off: EditModule[]; changed: EditModule[] }
 /** Who edited a photo and what changed (GET /api/photos/{id}/edits). source: agent = posted by a device,
  *  outside = found changed on the NAS, import = sent from a PC's local library, local = darktable on this PC.
@@ -49,6 +51,8 @@ export interface EditEvent {
   id: number; photo_id: number; time: number; source: 'agent' | 'outside' | 'import' | 'local' | string
   agent_id: string | null; device: string | null; device_os: string | null
   modules: EditModule[]; changes: EditChanges | null; summary: string
+  /** saves of one device on one day are one entry: time is the last save, first_time the first */
+  first_time?: number; saves?: number
 }
 
 export interface SortLevel { f: string; d: 'asc' | 'desc' }

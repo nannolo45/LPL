@@ -4,7 +4,7 @@
 process.env.TZ = 'UTC'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { changeLines, editWhere, fmtWhen, lastEditLine } from '../src/edits.ts'
+import { allModules, changeLines, editWhere, entryWhen, fmtWhen, lastEditLine } from '../src/edits.ts'
 import { itemProgress, photoActivity, serverNow } from '../src/devices.ts'
 import type { EditEvent, EditModule } from '../src/api.ts'
 
@@ -50,9 +50,31 @@ test('list of edits: one line per kind of change', () => {
 })
 
 test('list of edits: nothing to compare with, or no history', () => {
-  assert.deepEqual(changeLines(ev({ modules: [mod('exposure'), mod('mask_manager', 'mask_manager', '', false)] })),
-    ['modules in use: exposure', 'off: mask_manager'])
+  assert.deepEqual(changeLines(ev({ modules: [mod('exposure'), mod('vignette', 'vignette', '', false)] })),
+    ['modules in use: exposure', 'off: vignette'])
   assert.deepEqual(changeLines(ev({ modules: [] })), ['no darktable edit'])
+})
+
+const auto = (m: EditModule): EditModule => ({ ...m, auto: true })
+
+test('list of edits: what darktable applied by itself is left out, and stays under "all modules"', () => {
+  const opened = [auto(mod('rawprepare', 'raw black/white point')), auto(mod('exposure', 'exposure', 'scene-referred default')),
+    auto(mod('mask_manager', 'mask_manager', '', false))]
+  assert.deepEqual(changeLines(ev({ modules: opened })), ["darktable's default edit"])
+  assert.deepEqual(changeLines(ev({ modules: [...opened, mod('colorbalancergb', 'color balance rgb')] })), ['modules in use: color balance rgb'])
+  assert.deepEqual(allModules(ev({ modules: [...opened, mod('vignette', 'vignette', '', false)] })),
+    ['raw black/white point · automatic', 'exposure scene-referred default · automatic', 'mask_manager · automatic · off', 'vignette · off'])
+  // the server's summary is shown as it comes
+  assert.equal(lastEditLine(ev({ modules: opened, summary: "darktable's default edit" }), T + 60),
+    "last edited on Desktop · today 14:05 · darktable's default edit")
+})
+
+test('list of edits: several saves of one day are one entry', () => {
+  assert.equal(entryWhen({ time: T }, T + 60), 'today 14:05')
+  assert.equal(entryWhen({ time: T, first_time: T - 3 * 3600 - 300, saves: 5 }, T + 60), 'today 11:00–14:05 · 5 saves')
+  assert.equal(entryWhen({ time: T, first_time: T - 600, saves: 2 }, T + 20 * 86400), '18 Nov 13:55–14:05 · 2 saves')
+  assert.equal(entryWhen({ time: T, saves: 1, first_time: T }, T + 60), 'today 14:05')
+  assert.equal(entryWhen({ time: T + 20, first_time: T, saves: 3 }, T + 60), 'today 14:05 · 3 saves')  // all in one minute  // a server that sends them for one save
 })
 
 // ---------------------------------------------------------------- progress bar (R16)

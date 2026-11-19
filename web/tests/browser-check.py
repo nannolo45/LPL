@@ -12,6 +12,8 @@ over the API (real darktable XMPs from server/tests/fixtures/xmp), and checks wh
 bar must go away when the phone stops sending heartbeats (LPL counts a device offline after 15 s)."""
 import json
 import os
+import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -40,7 +42,12 @@ def main(py: str, shots: Path) -> None:
     base = "http://127.0.0.1:%d" % port
     env = dict(os.environ, PHOTO_ROOT=str(tmp / "photos"), DATA_DIR=str(tmp / "data"), WEB_DIR=str(ROOT / "web" / "dist"),
                PORT=str(port), HOST="127.0.0.1", LPL_PASSWORD="", SCAN_INTERVAL="0", LOG_LEVEL="WARNING")
-    srv = subprocess.Popen([py, "-m", "lpl.main"], cwd=str(ROOT / "server"), env=env)
+    # the server runs from a copy, with module-flags.json (generated from the darktable-android schema, see
+    # server/tests/fixtures/xmp/SOURCE.md) at its place in resources/, so darktable's own modules are recognised
+    shutil.copytree(ROOT / "server" / "lpl", tmp / "server" / "lpl", ignore=shutil.ignore_patterns("__pycache__"))
+    (tmp / "server" / "lpl" / "resources").mkdir(exist_ok=True)
+    shutil.copy(ROOT / "server" / "tests" / "fixtures" / "module-flags.json", tmp / "server" / "lpl" / "resources" / "module-flags.json")
+    srv = subprocess.Popen([py, "-m", "lpl.main"], cwd=str(tmp / "server"), env=env)
 
     def call(method, path, body=None, ctype="application/json"):
         data = body if isinstance(body, bytes) else (json.dumps(body).encode() if body is not None else None)
@@ -62,9 +69,13 @@ def main(py: str, shots: Path) -> None:
         call("POST", "/api/agents/heartbeat", {**pc, "state": {"working_set": []}})
         call("POST", "/api/agents/heartbeat", {**phone, "state": {"working_set": []}})
         xmp = lambda n: (XMPS / n).read_bytes()
-        call("POST", "/api/photos/1/xmp?checkout_ts=0&agent=pc-desktop", xmp("nop.xmp"), "application/rdf+xml")
-        call("POST", "/api/photos/1/xmp?checkout_ts=0&agent=android-phone", xmp("exposure.xmp"), "application/rdf+xml")
-        call("POST", "/api/photos/1/xmp?checkout_ts=0&agent=pc-desktop", xmp("blending-modes-uniform.xmp"), "application/rdf+xml")
+        # photo 1: opened on the phone (darktable's default edit only), then three exposure steps on the desktop
+        call("POST", "/api/photos/1/xmp?checkout_ts=0&agent=android-phone", xmp("nop.xmp"), "application/rdf+xml")
+        for v in (b"0000803f", b"0000003f", b"00000040"):
+            data = re.sub(rb'(darktable:operation="exposure"[^>]*darktable:params=")[^"]*', lambda m: m.group(1) + v * 7, xmp("exposure.xmp"))
+            call("POST", "/api/photos/1/xmp?checkout_ts=0&agent=pc-desktop", data, "application/rdf+xml")
+        # photo 3: only opened in darktable on the desktop
+        call("POST", "/api/photos/3/xmp?checkout_ts=0&agent=pc-desktop", xmp("nop.xmp"), "application/rdf+xml")
 
         def beats():  # the phone downloads photo 1, the PC sends the edit of photo 2
             k = 0
@@ -89,7 +100,7 @@ def main(py: str, shots: Path) -> None:
             page.goto(base + "/?photo=1")
             line = page.get_by_role("button", name="last edited on Desktop")
             expect(line).to_be_visible(timeout=15000)
-            assert "last edited on Desktop · today" in line.inner_text(), line.inner_text()
+            assert "last edited on Desktop · today" in line.inner_text() and line.inner_text().endswith("· exposure ▾"), line.inner_text()
             bar = page.get_by_role("progressbar", name="on Phone: downloading")
             expect(bar).to_be_visible(timeout=10000)
             results.append("desktop: last-edit line: " + line.inner_text())
@@ -97,10 +108,20 @@ def main(py: str, shots: Path) -> None:
             lst = page.get_by_role("list", name="Edits of this photo, newest first")
             expect(lst).to_be_visible()
             items = lst.locator("li")
-            expect(items).to_have_count(3)
-            assert "edited on Phone" in items.nth(1).inner_text() and "added: exposure" in items.nth(1).inner_text()
-            results.append("desktop: list of edits: %d entries" % items.count())
+            expect(items).to_have_count(2)  # the desktop's three saves are one entry
+            first = items.nth(0).inner_text()
+            assert "3 saves · edited on Desktop" in first and "added: exposure" in first, first
+            assert "darktable's default edit" in items.nth(1).inner_text() and "edited on Phone" in items.nth(1).inner_text()
+            items.nth(1).get_by_role("button", name="all modules (8)").click()
+            # no module-names.json here: operation names
+            expect(items.nth(1).get_by_label("All modules of this edit")).to_contain_text("rawprepare · automatic")
+            results.append("desktop: list of edits: 2 entries (3 saves merged; the phone's: darktable's default edit, all modules behind it)")
             page.locator(".right").screenshot(path=str(shots / "desktop-last-edit-and-progress.png"))
+            page.goto(base + "/?photo=3")
+            l3 = page.get_by_role("button", name="last edited on Desktop")
+            expect(l3).to_contain_text("darktable's default edit", timeout=15000)
+            results.append("desktop: photo only opened: " + l3.inner_text())
+            page.locator(".right").screenshot(path=str(shots / "desktop-only-opened.png"))
             page.get_by_role("button", name="Working set").first.click()
             expect(page.get_by_role("progressbar", name="sending the edit")).to_be_visible()
             expect(page.get_by_role("progressbar", name="downloading")).to_be_visible()
@@ -117,7 +138,8 @@ def main(py: str, shots: Path) -> None:
             pline.scroll_into_view_if_needed()
             ph.screenshot(path=str(shots / "phone-last-edit-and-progress.png"))
             pline.click()
-            expect(ph.get_by_role("list", name="Edits of this photo, newest first").locator("li")).to_have_count(3)
+            expect(ph.get_by_role("list", name="Edits of this photo, newest first").locator("li")).to_have_count(2)
+            ph.get_by_role("button", name="all modules (8)").click()
             ph.get_by_role("list", name="Edits of this photo, newest first").scroll_into_view_if_needed()
             ph.screenshot(path=str(shots / "phone-list-of-edits.png"))
             results.append("phone: last-edit line and list of edits")
