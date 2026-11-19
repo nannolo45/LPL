@@ -304,3 +304,5 @@ a { color: var(--accent); }
 /* photos hidden from the library (seen only with "Show hidden") */
 .tile.hid .img img { opacity: .4; filter: grayscale(.6); }
 .tile .hidtag { position: absolute; left: 6px; top: 6px; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,.65); color: #ddd; font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
+
+.bitem.hid img { opacity: .35; filter: grayscale(.7); }

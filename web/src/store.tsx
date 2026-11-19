@@ -310,7 +310,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setFacets(f => ({ ...f, hidden_photos: r.hidden_photos }))
       setCache(prev => { const n = new Map(prev); ids.forEach(id => { const p = n.get(id) || items.find(x => x.id === id); if (p) n.set(id, { ...p, hidden: hidden ? 1 : 0 }) }); return n })
       const k = keysOf('hide')[0]
-      if (hidden) toast(`${ids.length} photo${ids.length > 1 ? 's' : ''} hidden${filters.show_hidden ? '' : ' from the library'}. ${k ? k + ' again brings them back; ' : ''}“Show hidden” in Filters shows them.`)
+      if (hidden) toast(`${ids.length} photo${ids.length > 1 ? 's' : ''} hidden${filters.show_hidden ? '' : ' from the library'}. ${k ? k + ' again brings them back; ' : ''}${view === 'board' ? '“show hidden” next to the board name' : '“Show hidden” in Filters'} shows them.`)
       else toast(`${ids.length} photo${ids.length > 1 ? 's' : ''} shown again`)
       reload()
     } catch (e: any) { toast(e.message || String(e)) }

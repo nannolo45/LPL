@@ -72,6 +72,7 @@ type Drag =
   | { kind: 'marquee'; x0: number; y0: number; basePhotos: number[]; baseShapes: string[]; last: string }
   | { kind: 'pan'; sx: number; sy: number; sl: number; st: number }
   | { kind: 'arrow'; a: BoardEnd }
+  | { kind: 'pinch'; d0: number; z0: number }
 
 export function BoardView() {
   const s = useStore()
@@ -161,14 +162,19 @@ export function BoardView() {
   }, [sid])
   useEffect(() => { setAdding(false); setSelShapes([]); setEditing(null); undoStack.current = []; redoStack.current = []; setHist(h => h + 1); load() }, [load])
 
-  const order = useMemo(() => readingOrder(items, frames), [items, frames])
+  // photos hidden from the library: off the board too (they stay in the series and keep their place),
+  // unless "Show hidden" is on; even then they're dimmed and don't count in the reading order
+  const showHidden = !!s.filters.show_hidden
+  const shown = useMemo(() => (showHidden ? items : items.filter(it => !it.hidden)), [items, showHidden])
+  const hiddenCount = useMemo(() => items.filter(it => it.hidden).length, [items])
+  const order = useMemo(() => readingOrder(items.filter(it => !it.hidden), frames), [items, frames])
   const pos = useMemo(() => new Map(order.map((it, i) => [it.id, i + 1])), [order])
 
   const save = useCallback((its: Item[], frs: Frame[], withFrames: boolean) => {
     if (sid == null) return
     window.clearTimeout(saveTimer.current)
     saveTimer.current = window.setTimeout(() => {
-      const ord = new Map(readingOrder(its, frs).map((it, i) => [it.id, i + 1]))
+      const ord = new Map(readingOrder(its.filter(it => !it.hidden), frs).map((it, i) => [it.id, i + 1]))
       api.boardSave(sid, its.map(it => ({ id: it.id, x: Math.round(it.x), y: Math.round(it.y), ord: ord.get(it.id) ?? null })), withFrames || framesDirty.current ? frs : undefined)
         .then(r => { if (withFrames || framesDirty.current) { setFrames(r.frames); framesDirty.current = false } s.reloadSeries() })
         .catch(e => s.toast(e.message))
@@ -207,13 +213,45 @@ export function BoardView() {
   }
   const hitAt = (p: Pt): BoardEnd => {
     for (let i = notes.length - 1; i >= 0; i--) { const n = notes[i]; if (ptIn(p, n)) return { x: p.x, y: p.y, note: n.key } }
-    for (let i = items.length - 1; i >= 0; i--) { if (ptIn(p, itemRect(items[i]))) return { x: p.x, y: p.y, photo: items[i].id } }
+    for (let i = shown.length - 1; i >= 0; i--) { if (ptIn(p, itemRect(shown[i]))) return { x: p.x, y: p.y, photo: shown[i].id } }
     return { x: p.x, y: p.y }
   }
 
   const capture = (e: React.PointerEvent) => { (e.currentTarget as Element).setPointerCapture?.(e.pointerId) }
   // on a touch screen, dragging empty space moves around (there's no Space key); on desktop it draws a selection box
-  const panWanted = (e: React.PointerEvent, bg = false) => e.button === 1 || space || (bg && e.pointerType === 'touch' && tool === 'select')
+  // moving around: drag with the right or middle mouse button (anywhere), or hold Space and drag;
+  // on a touch screen, one finger on empty space moves around and two fingers pinch to zoom
+  const panWanted = (e: React.PointerEvent, bg = false) => e.button === 1 || e.button === 2 || space || (bg && e.pointerType === 'touch' && tool === 'select')
+  const touches = useRef(new Map<number, Pt>())
+  const pinchInfo = () => {
+    const [a, b] = [...touches.current.values()]
+    return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, mid: { clientX: (a.x + b.x) / 2, clientY: (a.y + b.y) / 2 } }
+  }
+  const touchDown = (e: React.PointerEvent) => {
+    if (e.pointerType !== 'touch') return
+    touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    if (touches.current.size === 2) {  // a second finger: stop whatever the first one started, and pinch
+      if (drag.current?.kind === 'marquee') setMarquee(null)
+      if (drag.current?.kind === 'arrow') setGhost(null)
+      drag.current = { kind: 'pinch', d0: pinchInfo().d, z0: zoomRef.current }
+      e.stopPropagation(); e.preventDefault()
+    }
+  }
+  const touchMove = (e: React.PointerEvent) => {
+    if (e.pointerType !== 'touch' || !touches.current.has(e.pointerId)) return
+    touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY })
+    const d = drag.current
+    if (d?.kind === 'pinch' && touches.current.size >= 2) {
+      const { d: dist, mid } = pinchInfo()
+      zoomTo(d.z0 * dist / d.d0, mid)
+      e.stopPropagation()
+    }
+  }
+  const touchUp = (e: React.PointerEvent) => {
+    if (e.pointerType !== 'touch') return
+    touches.current.delete(e.pointerId)
+    if (drag.current?.kind === 'pinch') { if (touches.current.size < 2) drag.current = null; e.stopPropagation() }
+  }
   const startPan = (e: React.PointerEvent) => {
     e.preventDefault()
     const w = wrap.current!
@@ -325,13 +363,14 @@ export function BoardView() {
   const onMove = (e: React.PointerEvent) => {
     const d = drag.current
     if (!d) return
+    if (d.kind === 'pinch') return
     if (d.kind === 'pan') { const w = wrap.current!; w.scrollLeft = d.sl - (e.clientX - d.sx); w.scrollTop = d.st - (e.clientY - d.sy); return }
     if (d.kind === 'arrow') { const b = toBoard(e); setGhost(g => (g ? { ...g, b } : g)); return }
     if (d.kind === 'marquee') {
       const p = toBoard(e)
       const r = { x: Math.min(d.x0, p.x), y: Math.min(d.y0, p.y), w: Math.abs(p.x - d.x0), h: Math.abs(p.y - d.y0) }
       setMarquee(r)
-      const ph = items.filter(it => meets(itemRect(it), r)).map(it => it.id)
+      const ph = shown.filter(it => meets(itemRect(it), r)).map(it => it.id)
       const sh = [
         ...notes.filter(n => meets(n, r)).map(n => n.key),
         ...arrows.filter(a => { const { p: a1, q: b1 } = arrowPts(a); return ptIn(a1, r) && ptIn(b1, r) }).map(a => a.key),
@@ -363,7 +402,7 @@ export function BoardView() {
     if (!d) return
     drag.current = null
     dragCp.current = false
-    if (d.kind === 'pan') return
+    if (d.kind === 'pan' || d.kind === 'pinch') return
     if (d.kind === 'marquee') { setMarquee(null); return }
     if (d.kind === 'arrow') {
       setGhost(null)
@@ -434,7 +473,7 @@ export function BoardView() {
       if (adding || s.viewer != null || typingIn(e.target)) return
       const a = actionFor(e, ['board', 'photos'])
       if (a === 'pan') { e.preventDefault(); setSpace(true); return }
-      if (a === 'selectAll') { e.preventDefault(); s.setSel(items.map(i => i.id)); setSelShapes(shapes.map(x => x.key)); return }
+      if (a === 'selectAll') { e.preventDefault(); s.setSel(shown.map(i => i.id)); setSelShapes(shapes.map(x => x.key)); return }
       if (a === 'toolSelect') setTool('select')
       else if (a === 'toolNote') setTool('note')
       else if (a === 'toolArrow') setTool('arrow')
@@ -444,11 +483,12 @@ export function BoardView() {
       else if (a === 'deselect') { setTool('select'); setSelShapes([]) }
       else if (a === 'undo') { e.preventDefault(); undo() }
       else if (a === 'fullscreen') {  // in reading order, maybe piles after
-        const list = [...order, ...items.filter(it => !pos.has(it.id))]
+        const list = [...order, ...shown.filter(it => !pos.has(it.id))]
         const k = list.findIndex(it => it.id === selPhotosHere[0])
         if (k >= 0) { e.preventDefault(); s.setFullscreen({ list, index: k }) }
       }
       else if (a === 'redo') { e.preventDefault(); redo() }
+      else if (a === 'hide') { e.preventDefault(); toggleHidden() }
       else if (a === 'boardDelete') {
         if (!selShapes.length && !s.sel.some(id => byPhoto.has(id))) return
         e.preventDefault(); removeSel()
@@ -512,6 +552,15 @@ export function BoardView() {
     s.toast(`Frame “${frames[fi].label}” removed; its photos stay on the board (${keysOf('undo')[0] || 'Undo'} brings it back)`)
   }
   const selPhotosHere = s.sel.filter(id => byPhoto.has(id))
+  const toggleHidden = async (ids = selPhotosHere) => {
+    if (!ids.length) return
+    const hide = !ids.every(id => byPhoto.get(id)?.hidden)
+    await s.hidePhotos(ids, hide)
+    const set = new Set(ids)
+    setItems(prev => prev.map(it => (set.has(it.id) ? { ...it, hidden: hide ? 1 : 0 } : it)))
+    if (hide && !showHidden) s.setSel(s.sel.filter(id => !set.has(id)))
+    window.setTimeout(() => setItems(its => { setFrames(frs => { save(its, frs, false); return frs }); return its }), 0)  // new reading order
+  }
   const removeSel = async () => {
     if (!selShapes.length && !selPhotosHere.length) return
     checkpoint()
@@ -576,7 +625,7 @@ export function BoardView() {
           <button className="btn dashed" style={{ margin: '6px 4px' }} onClick={newSeries}>+ New series{s.sel.length ? ` from ${s.sel.length} selected` : ''}</button>
           <div className="small muted" style={{ padding: 8, lineHeight: 1.5 }}>
             “+ Add photos” brings in whole folders or everything matching a rating, label, tag or date. Frames are chapters; photos in a Maybe pile are not part of the series.
-            <br /><br />Drag on empty space to select several things (Shift adds). Hold Space or the middle mouse button and drag to move around. Keys: V select, N note, A arrow, Delete takes what's selected off the board (change them with the keyboard button at the top). Double-click empty space for a note, an arrow to write on it.
+            <br /><br />Drag on empty space to select several things (Shift adds). Drag with the right (or middle) mouse button, or hold Space and drag, to move around; on a touch screen drag empty space with one finger and pinch with two to zoom. Keys: V select, N note, A arrow, Delete takes what's selected off the board (change them with the keyboard button at the top). Double-click empty space for a note, an arrow to write on it.
           </div>
         </div>
       )}
@@ -591,7 +640,12 @@ export function BoardView() {
           <>
             <div className="ctxbar">
               <span className="display" style={{ fontSize: 17 }}>{name}</span>
-              <span className="muted">{order.length} in series · {items.length - order.length} in maybe piles</span>
+              <span className="muted">{order.length} in series · {items.length - hiddenCount - order.length} in maybe piles</span>
+              {(hiddenCount > 0 || showHidden) && (
+                <button className={'chip' + (showHidden ? ' on' : '')} title="Photos you hid from the library. They stay in the series and keep their place on the board." onClick={() => s.patchFilters({ show_hidden: !showHidden, only_hidden: false })}>
+                  {showHidden ? 'showing' : 'show'} {hiddenCount} hidden
+                </button>
+              )}
               <div className="grow" />
               <button className="btn primary" onClick={() => { preAdd.current = cur.current; setAdding(true) }} title="Add photos from folders, or by rating, label, tag and date">+ Add photos</button>
               <button className="btn" onClick={() => addFrame(false)}>+ Frame</button>
@@ -601,7 +655,8 @@ export function BoardView() {
               <button className="btn danger" onClick={del}>Delete</button>
             </div>
             <div className="board-area">
-              <div className="canvas-wrap" ref={wrap} style={{ cursor: canvasCursor }}>
+              <div className="canvas-wrap" ref={wrap} style={{ cursor: drag.current?.kind === 'pan' ? 'grabbing' : canvasCursor }} onContextMenu={e => e.preventDefault()}
+                onPointerDownCapture={touchDown} onPointerMoveCapture={touchMove} onPointerUpCapture={touchUp} onPointerCancelCapture={touchUp}>
                 <div className="canvas" data-bg="1" style={{ width: W * zoom, height: H * zoom }} onPointerDown={onBgDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
                   onDoubleClick={e => { if (tool === 'select' && (e.target as HTMLElement).dataset?.bg) addNote(toBoard(e)) }}>
                   <div ref={inner} data-bg="1" style={{ transform: `scale(${zoom})`, transformOrigin: '0 0', width: W, height: H, position: 'absolute', left: 0, top: 0 }}>
@@ -614,14 +669,14 @@ export function BoardView() {
                         <span className="rs" onPointerDown={e => onFrameDown(e, i, 'resize')} />
                       </div>
                     ))}
-                    {items.map(it => {
+                    {shown.map(it => {
                       const { w, h } = size(it)
                       const n = pos.get(it.id)
                       return (
-                        <button key={it.id} className={'bitem' + (selSet.has(it.id) ? ' sel' : '')} style={{ left: it.x, top: it.y, width: w, height: h, zIndex: selSet.has(it.id) ? 5 : 1, cursor: grab }}
+                        <button key={it.id} className={'bitem' + (selSet.has(it.id) ? ' sel' : '') + (it.hidden ? ' hid' : '')} style={{ left: it.x, top: it.y, width: w, height: h, zIndex: selSet.has(it.id) ? 5 : 1, cursor: grab }}
                           onPointerDown={e => onObjDown(e, { photo: it.id })} onDoubleClick={e => { e.stopPropagation(); if (tool === 'select') s.editInDarktable([it.id]) }} aria-label={it.filename + (n ? `, position ${n}` : ', maybe')}>
                           <img src={thumbUrl(it)} alt="" draggable={false} />
-                          <span className={'num' + (n ? '' : ' maybe')}>{n ? String(n).padStart(2, '0') : '?'}</span>
+                          {it.hidden ? <span className="num maybe">hidden</span> : <span className={'num' + (n ? '' : ' maybe')}>{n ? String(n).padStart(2, '0') : '?'}</span>}
                         </button>
                       )
                     })}
@@ -678,6 +733,7 @@ export function BoardView() {
                   <span className="small soft">{[selPhotosHere.length ? `${selPhotosHere.length} photo${selPhotosHere.length > 1 ? 's' : ''}` : '', nSh ? `${nSh} note${nSh > 1 ? 's' : ''} or arrow${nSh > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ')}</span>
                   {selNotes.length > 0 && NOTE_COLORS.map(c => <button key={c} className="swatch" style={{ background: c }} aria-label="Note color" onClick={() => colorNotes(c)} />)}
                   {selPhotosHere.length > 0 && <button className="btn" onClick={() => s.editInDarktable(selPhotosHere)}>Edit in darktable</button>}
+                  {selPhotosHere.length > 0 && <button className="btn" title={`Hide from the library and the board (${keysOf('hide')[0] || 'no key'})`} onClick={() => toggleHidden()}>{selPhotosHere.every(id => byPhoto.get(id)?.hidden) ? 'Unhide' : 'Hide'}</button>}
                   <button className="btn" onClick={removeSel} title={keysOf('boardDelete').join(', ')}>{selPhotosHere.length ? 'Remove from board' : 'Delete'}</button>
                 </div>
               )}
