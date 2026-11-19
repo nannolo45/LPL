@@ -40,7 +40,7 @@ export function EditOnPhone({ ids, start, series, title, className = 'btn big', 
       <a className={className} href={href} onClick={tapped}
         style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}>{label}</a>
       {missing && (
-        <div className="toast row" role="status" style={{ gap: 10, bottom: 'calc(80px + env(safe-area-inset-bottom))' }}>
+        <div className="toast row" role="status" style={{ gap: 10, top: 'calc(70px + env(safe-area-inset-top))', bottom: 'auto' }}>
           <span className="grow">The darktable app didn't open. Not on this phone yet? <a href="/android-app.html" style={{ color: 'inherit', fontWeight: 600 }}>How to get it</a></span>
           <button className="btn ghost tiny" style={{ color: 'inherit' }} aria-label="Close" onClick={() => setMissing(false)}>×</button>
         </div>
