@@ -559,7 +559,6 @@ def series_create(body: Dict[str, Any] = Body(...)):
             raise HTTPException(409, "a series with this name exists")
         sid = cur.lastrowid
         c.execute("INSERT INTO series_frames(series_id,label,x,y,w,h,maybe) VALUES(?,?,?,?,?,?,0)", (sid, "01", 40, 40, 900, 320))
-        c.execute("INSERT INTO series_frames(series_id,label,x,y,w,h,maybe) VALUES(?,?,?,?,?,?,1)", (sid, "Maybe pile", 980, 40, 360, 320))
         c.commit()
     ids = [int(i) for i in body.get("ids") or []]
     if ids:

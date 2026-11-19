@@ -37,6 +37,11 @@ export const ACTIONS: Action[] = [
   { id: 'toolNote', label: 'Tool: note', scope: 'board', keys: ['N'] },
   { id: 'toolArrow', label: 'Tool: arrow', scope: 'board', keys: ['A'] },
   { id: 'pan', label: 'Move around (hold and drag)', scope: 'board', keys: ['Space'] },
+  { id: 'fitAll', label: 'Fit everything on screen', scope: 'board', keys: ['Shift+1'] },
+  { id: 'fitSel', label: 'Zoom to the selection', scope: 'board', keys: ['Shift+2'] },
+  { id: 'nextFrame', label: 'Go to the next frame', scope: 'board', keys: [']'] },
+  { id: 'prevFrame', label: 'Go to the previous frame', scope: 'board', keys: ['['] },
+  { id: 'newFrame', label: 'New frame', scope: 'board', keys: ['Shift+F'] },
   { id: 'zoomIn', label: 'Zoom in', scope: 'board', keys: ['Ctrl+='] },
   { id: 'zoomOut', label: 'Zoom out', scope: 'board', keys: ['Ctrl+-'] },
   { id: 'zoomReset', label: 'Zoom to 100%', scope: 'board', keys: ['Ctrl+0'] },
@@ -52,6 +57,7 @@ const NAMES: Record<string, string> = { ' ': 'Space', Esc: 'Escape', Del: 'Delet
 export function comboOf(e: KeyboardEvent | React.KeyboardEvent): string {
   let k = NAMES[e.key] ?? e.key
   if (['Control', 'Shift', 'Alt', 'Meta', 'AltGraph'].includes(k)) return ''
+  if (e.shiftKey && /^Digit\d$/.test(e.code || '')) k = e.code.slice(5)  // Shift+1 is "Shift+1", whatever the layout types
   if (k.length === 1) k = k.toUpperCase()
   const symbol = k.length === 1 && !/[A-Z0-9]/.test(k)
   const mods = [(e.ctrlKey || e.metaKey) && 'Ctrl', e.altKey && 'Alt', e.shiftKey && !symbol && 'Shift'].filter(Boolean)

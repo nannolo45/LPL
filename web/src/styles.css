@@ -149,9 +149,15 @@ a { color: var(--accent); }
 .canvas { position: relative; touch-action: none; }
 .frame { position: absolute; border: 1px solid #4a4a52; border-radius: 10px; background: rgba(255,255,255,.025); }
 .frame.maybe { border-style: dashed; background: transparent; }
-.frame .fl { position: absolute; left: 10px; top: 6px; font-family: "Space Grotesk", Inter, sans-serif; font-size: 13px; color: #d4d4d8; cursor: grab; padding: 2px 4px; user-select: none; }
+.frame .fl { position: absolute; left: 0; right: 0; top: 0; height: 32px; padding: 7px 40px 0 14px; border-radius: 10px 10px 0 0; font-family: "Space Grotesk", Inter, sans-serif; font-size: 13px; color: #d4d4d8; cursor: grab; user-select: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.frame .fl:hover { background: rgba(255,255,255,.04); }
+.frame .fedge { position: absolute; cursor: grab; }
+.frame .fedge.l { left: -6px; top: 0; bottom: 0; width: 12px; }
+.frame .fedge.r { right: -6px; top: 0; bottom: 14px; width: 12px; }
+.frame .fedge.b { left: 0; right: 14px; bottom: -6px; height: 12px; }
+.frame:has(.fedge:hover), .frame:has(.fl:hover) { border-color: #6a6a72; }
 .frame .rs { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize; border-right: 2px solid #6a6a70; border-bottom: 2px solid #6a6a70; border-radius: 0 0 10px 0; }
-.frame .fx { position: absolute; right: 8px; top: 6px; border: 0; background: transparent; color: #7c7c84; font-size: 13px; }
+.frame .fx { position: absolute; right: 8px; top: 6px; z-index: 2; border: 0; background: transparent; color: #7c7c84; font-size: 13px; }
 .bitem { position: absolute; padding: 0; border: 0; border-radius: 4px; background: #2a2a2e; cursor: grab; touch-action: none; box-shadow: 0 2px 6px rgba(0,0,0,.45); }
 .bitem img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; display: block; pointer-events: none; }
 .bitem.sel { box-shadow: 0 0 0 2px #212124, 0 0 0 4px var(--accent); }
@@ -326,3 +332,13 @@ a { color: var(--accent); }
 .mboard .ctxbar { padding: 6px 12px; gap: 6px; }
 .mboard .btools { top: 8px; left: 8px; }
 .mboard .bselbar { top: auto; bottom: 10px; max-width: calc(100% - 20px); overflow-x: auto; }
+
+/* things being dragged on the board follow the pointer without redrawing the board */
+.bitem.moving, .bnote.moving, .frame.moving { transform: translate(var(--mdx, 0px), var(--mdy, 0px)); will-change: transform; }
+.bitem.moving { z-index: 20 !important; }
+
+/* board: frame name editing, jump-to menu */
+.frame input.fl-in { height: 26px; top: 3px; left: 8px; right: 40px; width: auto; padding: 0 6px; border: 1px solid var(--accent-line); border-radius: 5px; background: #19191c; color: var(--text); outline: none; cursor: text; }
+.bt-pop { position: relative; }
+.bt-menu { position: absolute; left: 44px; top: 0; min-width: 190px; max-height: 60vh; overflow: auto; display: flex; flex-direction: column; padding: 6px; background: #26262b; border: 1px solid var(--line2); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.5); z-index: 30; }
+.btools .bt-menu button { width: auto; height: auto; text-align: left; padding: 7px 10px; font-size: 13px; color: var(--text); border-radius: 6px; }
