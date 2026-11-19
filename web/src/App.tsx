@@ -14,6 +14,8 @@ import { FullscreenPhoto } from './components/FullscreenPhoto'
 import { SettingsDialog, SettingsSection } from './components/Shortcuts'
 import { TabStrip, ViewSwitch } from './components/Tabs'
 import { actionFor, typingIn, useShortcutsVersion } from './shortcuts'
+import { agentLabel, takeDeepLink } from './devices'
+import { DevicePicker } from './components/DevicePicker'
 
 function TopBar() {
   const s = useStore()
@@ -32,8 +34,8 @@ function TopBar() {
           <svg width="18" height="14" viewBox="0 0 24 18" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true" style={{ verticalAlign: '-2px' }}><rect x="1" y="1" width="22" height="16" rx="3" /><path d="M5 6h1M9 6h1M13 6h1M17 6h2M5 10h1M9 10h1M13 10h1M17 10h2M7 13.5h10" strokeLinecap="round" /></svg>
         </button>
         {settings && <SettingsDialog section={settings} onClose={() => setSettings(null)} />}
-        {s.isLocal ? null : online.length ? <span className="pill-ok" title={online.map(a => a.name).join(', ')}><i />{online.length === 1 ? online[0].name : `${online.length} PCs`} ready</span>
-          : <span className="pill-off" title="Start the LightPhotoLibrary agent on your PC"><i />no PC agent</span>}
+        {s.isLocal ? null : online.length ? <span className="pill-ok" title={online.map(a => agentLabel(a, s.agents)).join(', ')}><i />{online.length === 1 ? agentLabel(online[0], s.agents) : `${online.length} devices`} ready</span>
+          : <span className="pill-off" title="Start the LightPhotoLibrary agent on your PC"><i />no device ready</span>}
       </div>
       <div className="topbar">
         <ViewSwitch />
@@ -94,9 +96,23 @@ function useShortcuts() {
   })
 }
 
+/** <origin>/?photo=<id> selects the photo in its folder (the inspector shows it); ?series=<id> opens its board. */
+function useDeepLinkDesktop() {
+  const s = useStore()
+  useEffect(() => {
+    const d = takeDeepLink()
+    if (d?.photo != null) s.reveal(d.photo)
+    else if (d?.series != null) api.series().then(r => {
+      if (r.series.some(x => x.id === d.series)) { s.setBoardSeries(d.series!); s.setView('board') }
+      else s.toast('series not found')
+    }).catch(e => s.toast(e.message))
+  }, [])
+}
+
 function Desktop() {
   const s = useStore()
   useShortcuts()
+  useDeepLinkDesktop()
   const libView = s.view === 'grid' || s.view === 'list'
   return (
     <div className="app">
@@ -127,6 +143,7 @@ function Shell() {
     <>
       {s.isMobile ? <MobileApp /> : <Desktop />}
       {s.fullscreen && <FullscreenPhoto key={s.fullscreen.list[s.fullscreen.index]?.id} />}
+      {s.devicePick && <DevicePicker />}
       {s.toastMsg && <div className="toast" role="status">{s.toastMsg}</div>}
     </>
   )

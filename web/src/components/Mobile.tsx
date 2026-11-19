@@ -3,14 +3,16 @@ import { api, coverUrl, Photo } from '../api'
 import { useStore } from '../store'
 import { exifLine, fmtDay, stars } from '../fields'
 import { FilterPanel, SortPanel } from './Left'
-import { HideButton, RatingLabels, SeriesPicker, TagPanel } from './Inspector'
+import { HideButton, RatingLabels, SeriesPicker, TagPanel, WhereLine } from './Inspector'
 import { Thumb, useGroups, useReveal } from './Library'
 import { FoldersView } from './Folders'
 import { WorkView } from './Work'
 import { BoardView } from './Board'
 import { SettingsDialog } from './Shortcuts'
+import { EditOnPhone, useListTitle } from './PhoneEdit'
+import { takeDeepLink } from '../devices'
 
-type Tab = 'lib' | 'folders' | 'series' | 'pc'
+type Tab = 'lib' | 'folders' | 'series' | 'pc'  // 'pc': the devices and their working sets
 
 function Sheet({ onClose, title, children }: { onClose: () => void; title: string; children: React.ReactNode }) {
   return (
@@ -62,6 +64,7 @@ function PhotoPage({ id, onBack }: { id: number; onBack: () => void }) {
   const s = useStore()
   const idx = s.items.findIndex(p => p.id === id)
   const [extra, setExtra] = useState<Photo | null>(null)
+  const list = useListTitle()
   useEffect(() => { if (idx < 0) api.photo(id).then(setExtra).catch(() => {}) }, [id, idx])
   const p = idx >= 0 ? s.items[idx] : extra
   if (!p) return null
@@ -87,8 +90,10 @@ function PhotoPage({ id, onBack }: { id: number; onBack: () => void }) {
           <button className="btn big" disabled={idx < 0 || idx >= s.items.length - 1} onClick={() => nav(1)} aria-label="Next">›</button>
         </div>
         <RatingLabels photos={[p]} big />
+        <WhereLine id={p.id} />
         <button className="btn primary big" onClick={() => s.editInDarktable([p.id])}>Edit in darktable</button>
-        <span className="small muted" style={{ marginTop: -6 }}>Opens on your PC (or as soon as it's online). Ratings, labels and tags are saved to the XMP right away.</span>
+        <EditOnPhone ids={idx >= 0 ? s.items.map(x => x.id) : [p.id]} start={p.id} series={list.series} title={list.title} />
+        <span className="small muted" style={{ marginTop: -6 }}>Opens on one of your devices (or as soon as it's online). Ratings, labels and tags are saved to the XMP right away.</span>
         <SeriesPicker ids={[p.id]} />
         <TagPanel photos={[p]} />
         <HideButton photos={[p]} big />
@@ -126,6 +131,7 @@ function SeriesTab({ open, board }: { open: (id: number) => void; board: (id: nu
 
 export function MobileApp() {
   const s = useStore()
+  const list = useListTitle()
   const [tab, setTab] = useState<Tab>('lib')
   const [sheet, setSheet] = useState<'' | 'sort' | 'edit'>('')
   const [selecting, setSelecting] = useState(false)
@@ -134,11 +140,23 @@ export function MobileApp() {
   const [settings, setSettings] = useState(false)
   useEffect(() => { if (photo != null && s.sel.length === 1 && s.sel[0] !== photo) setPhoto(s.sel[0]) }, [s.sel])
   useEffect(() => { if (['folders', 'timeline', 'board', 'work', 'list'].includes(s.view) && tab === 'lib') s.setView('grid') }, [])
-  // "Show in library" (e.g. from the PC tab): go to the Library, where the grid scrolls to the photo
+  // a deep link: ?photo=<id> opens the photo's page, ?series=<id> the series' board
+  useEffect(() => {
+    const d = takeDeepLink()
+    if (d?.photo != null) { const id = d.photo; api.photo(id).then(() => { setTab('lib'); s.setSel([id]); setPhoto(id) }).catch(e => s.toast(e.message)) }
+    else if (d?.series != null) {
+      const id = d.series
+      api.series().then(r => {
+        if (r.series.some(x => x.id === id)) { setTab('series'); setPhoto(null); s.setBoardSeries(id); s.setView('board'); setBoard(id) }
+        else s.toast('series not found')
+      }).catch(e => s.toast(e.message))
+    }
+  }, [])
+  // "Show in library" (e.g. from the Devices tab): go to the Library, where the grid scrolls to the photo
   useEffect(() => { if (s.revealId != null) { setTab('lib'); setPhoto(null) } }, [s.revealId])
   const openPhoto = (p: Photo) => { s.setSel([p.id]); setPhoto(p.id) }
   const goTab = (t: Tab) => { setTab(t); setPhoto(null); setBoard(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders') }
-  const title = board != null ? (s.series.find(x => x.id === board)?.name || 'Board') : photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : tab === 'series' ? 'Series' : 'PC'
+  const title = board != null ? (s.series.find(x => x.id === board)?.name || 'Board') : photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : tab === 'series' ? 'Series' : 'Devices'
   const fcount = [s.filters.folder, (s.filters.folders || []).length, s.filters.month, s.filters.tag, s.filters.series, s.filters.edited, (s.filters.lenses || []).length, (s.filters.cameras || []).length, (s.filters.labels || []).length, (s.filters.ratings || []).length].filter(Boolean).length
   return (
     <div className="app">
@@ -178,10 +196,12 @@ export function MobileApp() {
           <span className="grow">{s.sel.length} selected</span>
           <button className="btn primary big" onClick={() => setSheet('edit')}>Rate & tag</button>
           <button className="btn big" onClick={() => s.editInDarktable(s.sel)}>darktable</button>
+          {(() => { const ids = s.items.map(x => x.id); const start = ids.find(id => s.sel.includes(id)) ?? s.sel[0]
+            return <EditOnPhone ids={ids} start={start} series={list.series} title={list.title} label="This phone" /> })()}
         </div>
       )}
       <nav className="mtabs">
-        {([['lib', 'Library'], ['folders', 'Folders'], ['series', 'Series'], ['pc', 'PC']] as [Tab, string][]).map(([t, l]) => (
+        {([['lib', 'Library'], ['folders', 'Folders'], ['series', 'Series'], ['pc', 'Devices']] as [Tab, string][]).map(([t, l]) => (
           <button key={t} className={tab === t ? 'on' : ''} onClick={() => goTab(t)}><i />{l}</button>
         ))}
       </nav>
