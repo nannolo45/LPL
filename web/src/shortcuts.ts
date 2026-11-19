@@ -23,6 +23,8 @@ export const ACTIONS: Action[] = [
   { id: 'view', label: 'Open large', scope: 'photos', keys: ['Enter'] },
   { id: 'selectAll', label: 'Select all', scope: 'photos', keys: ['Ctrl+A'] },
   { id: 'deselect', label: 'Clear selection', scope: 'photos', keys: ['Escape'] },
+  { id: 'undo', label: 'Undo', scope: 'board', keys: ['Ctrl+Z'] },
+  { id: 'redo', label: 'Redo', scope: 'board', keys: ['Ctrl+Shift+Z', 'Ctrl+Y'] },
   { id: 'boardDelete', label: 'Remove selected from the board (photos, notes, arrows)', scope: 'board', keys: ['Delete', 'Backspace'] },
   { id: 'toolSelect', label: 'Tool: select and move', scope: 'board', keys: ['V'] },
   { id: 'toolNote', label: 'Tool: note', scope: 'board', keys: ['N'] },

@@ -14,6 +14,8 @@ const TOOL_ICONS = {
   select: <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 2.5l13.5 11.2-6.1.6 3.6 7.1-2.6 1.3-3.6-7.2-4.8 3.9z" /></svg>,
   note: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true"><path d="M4 4h16v10l-6 6H4z" /><path d="M14 20v-6h6" /><path d="M8 9h8M8 12.5h4" strokeLinecap="round" /></svg>,
   arrow: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="5" cy="19" r="2.2" fill="currentColor" stroke="none" /><path d="M6.8 17.2L18 6" /><path d="M11.5 5.5H18.5V12.5" strokeLinejoin="round" /></svg>,
+  undo: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 14L4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 010 11H11" /></svg>,
+  redo: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 14l5-5-5-5" /><path d="M20 9H9.5a5.5 5.5 0 000 11H13" /></svg>,
 }
 
 export const NOTE_COLORS = ['#f5d76e', '#f6b26b', '#f4a6c0', '#b9a6f0', '#9cc8f0', '#a8dba0', '#d8d8dc']
@@ -58,6 +60,9 @@ export function readingOrder(items: Item[], frames: Frame[]) {
     .map(o => o.it)
 }
 
+type Snap = { items: (Photo & { x: number; y: number })[]; frames: Frame[]; shapes: BoardShape[] }
+const snapSig = (x: Snap) => JSON.stringify([x.items.map(i => [i.id, Math.round(i.x), Math.round(i.y)]), x.frames.map(f => [f.label, Math.round(f.x), Math.round(f.y), Math.round(f.w), Math.round(f.h), f.maybe]), x.shapes])
+
 type MoveOrig = { photos: Map<number, Pt>; notes: Map<string, Pt>; ends: { key: string; end: 'a' | 'b'; x: number; y: number }[] }
 type Drag =
   | ({ kind: 'move'; sx: number; sy: number; moved: boolean; click?: { photo?: number; shape?: string } } & MoveOrig)
@@ -96,6 +101,55 @@ export function BoardView() {
   const arrows = useMemo(() => shapes.filter((x): x is BoardArrow => x.kind === 'arrow'), [shapes])
   const setShapes = (fn: (prev: BoardShape[]) => BoardShape[]) => { shapesDirty.current = true; setShapesRaw(fn) }
 
+  // ---- undo / redo: snapshots of the whole board (photos on it and their places, frames, notes, arrows).
+  // A snapshot is taken just before each change; going back to one adds/removes photos on the server as needed.
+  const cur = useRef<Snap>({ items: [], frames: [], shapes: [] })
+  cur.current = { items, frames, shapes }
+  const undoStack = useRef<Snap[]>([])
+  const redoStack = useRef<Snap[]>([])
+  const [, setHist] = useState(0)
+  const chain = useRef<Promise<void>>(Promise.resolve())
+  const dragCp = useRef(false)      // this drag already saved its "before"
+  const editCp = useRef(false)      // this note-typing session already saved its "before"
+  const newNote = useRef<string | null>(null)
+  const preAdd = useRef<Snap | null>(null)
+  const checkpoint = (snap: Snap = cur.current) => {
+    const u = undoStack.current
+    if (u.length && snapSig(u[u.length - 1]) === snapSig(snap)) return
+    u.push(snap)
+    if (u.length > 100) u.shift()
+    redoStack.current = []
+    setHist(h => h + 1)
+  }
+  const restore = async (to: Snap) => {
+    if (sid == null) return
+    const have = new Set(cur.current.items.map(i => i.id)), want = new Set(to.items.map(i => i.id))
+    const gone = [...have].filter(id => !want.has(id)), back = [...want].filter(id => !have.has(id))
+    setItems(to.items); setFrames(to.frames); setShapes(() => to.shapes)
+    cur.current = to
+    setEditing(null); setSelShapes(sel => sel.filter(k => to.shapes.some(x => x.key === k)))
+    s.setSel(s.sel.filter(id => want.has(id)))
+    try {
+      if (gone.length) await api.seriesRemove(sid, gone)
+      if (back.length) await api.seriesAdd(sid, back)
+      framesDirty.current = true
+      save(to.items, to.frames, true)
+      if (gone.length || back.length) { s.reloadSeries(); s.reloadTags() }
+    } catch (e: any) { s.toast(e.message) }
+  }
+  const step = (from: React.MutableRefObject<Snap[]>, to: React.MutableRefObject<Snap[]>, what: string) => {
+    chain.current = chain.current.then(async () => {
+      const target = from.current.pop()
+      if (!target) { s.toast(`Nothing to ${what}`); return }
+      to.current.push(cur.current)
+      setHist(h => h + 1)
+      await restore(target)
+      await new Promise(r => window.setTimeout(r, 30))  // let the board redraw before the next step
+    })
+  }
+  const undo = () => step(undoStack, redoStack, 'undo')
+  const redo = () => step(redoStack, undoStack, 'redo')
+
   const load = useCallback(() => {
     if (sid == null) return Promise.resolve(null)
     return api.board(sid).then(r => {
@@ -105,7 +159,7 @@ export function BoardView() {
       return { items: its, frames: r.frames }
     }).catch(e => { s.toast(e.message); return null })
   }, [sid])
-  useEffect(() => { setAdding(false); setSelShapes([]); setEditing(null); load() }, [load])
+  useEffect(() => { setAdding(false); setSelShapes([]); setEditing(null); undoStack.current = []; redoStack.current = []; setHist(h => h + 1); load() }, [load])
 
   const order = useMemo(() => readingOrder(items, frames), [items, frames])
   const pos = useMemo(() => new Map(order.map((it, i) => [it.id, i + 1])), [order])
@@ -195,7 +249,7 @@ export function BoardView() {
     e.stopPropagation()
     if (panWanted(e)) { startPan(e); return }
     e.preventDefault()
-    if (editing) setEditing(null)
+    if (editing) stopEditing(editing)
     if (tool === 'arrow') { startArrow(e); return }
     if (tool === 'note') { addNote(toBoard(e)); setTool('select'); return }  // a note goes on top of whatever is there
     let photos = s.sel.filter(id => byPhoto.has(id)), sh = selShapes
@@ -221,7 +275,7 @@ export function BoardView() {
     if (panWanted(e, true)) { startPan(e); return }
     if (e.button !== 0) return
     e.preventDefault()
-    if (editing) { setEditing(null); return }
+    if (editing) { stopEditing(editing); return }
     const p = toBoard(e)
     if (tool === 'note') { addNote(p); setTool('select'); return }
     if (tool === 'arrow') { startArrow(e); return }
@@ -288,8 +342,10 @@ export function BoardView() {
       return
     }
     const dx = (e.clientX - d.sx) / zoom, dy = (e.clientY - d.sy) / zoom
+    if (d.kind !== 'move' && !dragCp.current) { dragCp.current = true; checkpoint() }  // "before" of a frame/note drag
     if (d.kind === 'move') {
       if (!d.moved && Math.abs(dx) + Math.abs(dy) < 3 / zoom) return
+      if (!d.moved) checkpoint()
       d.moved = true
       applyMove(d, dx, dy)
     } else if (d.kind === 'frame') {
@@ -306,6 +362,7 @@ export function BoardView() {
     const d = drag.current
     if (!d) return
     drag.current = null
+    dragCp.current = false
     if (d.kind === 'pan') return
     if (d.kind === 'marquee') { setMarquee(null); return }
     if (d.kind === 'arrow') {
@@ -315,6 +372,7 @@ export function BoardView() {
       const same = (d.a.photo != null && d.a.photo === b.photo) || (!!d.a.note && d.a.note === b.note)
       if (same || Math.hypot(pa.x - pb.x, pa.y - pb.y) < 12) { setTool('select'); return }
       const key = newKey()
+      checkpoint()
       setShapes(prev => [...prev, { key, kind: 'arrow', a: d.a, b }])
       s.setSel([]); setSelShapes([key]); setTool('select')
       return
@@ -332,11 +390,18 @@ export function BoardView() {
   const addNote = (p: Pt, text = '') => {
     const key = newKey()
     const n: BoardNote = { key, kind: 'note', x: Math.max(0, Math.round(p.x - 90)), y: Math.max(0, Math.round(p.y - 50)), w: 180, h: 110, text, color: NOTE_COLORS[0] }
+    checkpoint()
+    newNote.current = key; editCp.current = true
     setShapes(prev => [...prev, n])
     s.setSel([]); setSelShapes([key]); setEditing(key)
   }
-  const setNoteText = (key: string, text: string) => setShapes(prev => prev.map(x => (x.kind === 'note' && x.key === key ? { ...x, text } : x)))
-  const deleteShapes = (keys: string[]) => {
+  const editNote = (key: string) => { editCp.current = false; newNote.current = null; setSelShapes([key]); setEditing(key) }
+  const setNoteText = (key: string, text: string) => {
+    if (!editCp.current) { editCp.current = true; checkpoint() }
+    setShapes(prev => prev.map(x => (x.kind === 'note' && x.key === key ? { ...x, text } : x)))
+  }
+  const deleteShapes = (keys: string[], cp = true) => {
+    if (cp) checkpoint()
     const ks = new Set(keys)
     setShapes(prev => prev.filter(x => !ks.has(x.key) && !(x.kind === 'arrow' && ((x.a.note && ks.has(x.a.note)) || (x.b.note && ks.has(x.b.note))))))
     setSelShapes(sel => sel.filter(k => !ks.has(k)))
@@ -344,15 +409,21 @@ export function BoardView() {
   const stopEditing = (key: string) => {
     setEditing(cur => (cur === key ? null : cur))
     const n = notes.find(x => x.key === key)
-    if (n && !n.text.trim()) deleteShapes([key])  // an empty note goes away
+    if (n && !n.text.trim()) {  // an empty note goes away; a new one that was never written leaves no undo step
+      if (newNote.current === key) { undoStack.current.pop(); setHist(h => h + 1) }
+      deleteShapes([key], false)
+    }
+    newNote.current = null; editCp.current = false
   }
   const labelArrow = (a: BoardArrow) => {
     const v = window.prompt('Text on the arrow', a.text || '')
     if (v == null) return
+    checkpoint()
     setShapes(prev => prev.map(x => (x.key === a.key && x.kind === 'arrow' ? { ...x, text: v.trim() || undefined } : x)))
   }
   const colorNotes = (c: string) => {
     const ks = new Set(selShapes)
+    checkpoint()
     setShapes(prev => prev.map(x => (x.kind === 'note' && ks.has(x.key) ? { ...x, color: c } : x)))
   }
 
@@ -371,6 +442,8 @@ export function BoardView() {
       else if (a === 'zoomOut') { e.preventDefault(); zoomTo(zoomRef.current - .1) }
       else if (a === 'zoomReset') { e.preventDefault(); zoomTo(1) }
       else if (a === 'deselect') { setTool('select'); setSelShapes([]) }
+      else if (a === 'undo') { e.preventDefault(); undo() }
+      else if (a === 'redo') { e.preventDefault(); redo() }
       else if (a === 'boardDelete') {
         if (!selShapes.length && !s.sel.some(id => byPhoto.has(id))) return
         e.preventDefault(); removeSel()
@@ -420,25 +493,29 @@ export function BoardView() {
     const maxY = Math.max(0, ...frames.map(f => f.y + f.h), ...items.map(i => i.y + 120))
     const label = maybe ? 'Maybe pile' : String(frames.filter(f => !f.maybe).length + 1).padStart(2, '0')
     const nf = [...frames, { label, x: 40, y: maxY + 40, w: maybe ? 380 : 900, h: 300, maybe: maybe ? 1 : 0 }]
-    setFrames(nf); save(items, nf, true)
+    checkpoint(); setFrames(nf); save(items, nf, true)
   }
   const renameFrame = (fi: number) => {
     const v = window.prompt('Chapter name', frames[fi].label)
     if (v == null) return
+    checkpoint()
     const nf = frames.map((f, i) => (i === fi ? { ...f, label: v } : f)); setFrames(nf); save(items, nf, true)
   }
   const deleteFrame = (fi: number) => {
-    if (!window.confirm(`Remove the frame “${frames[fi].label}”? The photos stay on the board.`)) return
+    checkpoint()
     const nf = frames.filter((_, i) => i !== fi); setFrames(nf); save(items, nf, true)
+    s.toast(`Frame “${frames[fi].label}” removed; its photos stay on the board (${keysOf('undo')[0] || 'Undo'} brings it back)`)
   }
   const selPhotosHere = s.sel.filter(id => byPhoto.has(id))
   const removeSel = async () => {
-    if (selShapes.length) deleteShapes(selShapes)
+    if (!selShapes.length && !selPhotosHere.length) return
+    checkpoint()
+    if (selShapes.length) deleteShapes(selShapes, false)
     const ids = selPhotosHere
     if (!ids.length || sid == null) return
     await api.seriesRemove(sid, ids)
     setItems(prev => prev.filter(i => !ids.includes(i.id))); s.setSel([]); s.reloadSeries(); s.reloadTags()
-    s.toast(`${ids.length} photo${ids.length > 1 ? 's' : ''} taken off “${name}” (the files are untouched)`)
+    s.toast(`${ids.length} photo${ids.length > 1 ? 's' : ''} taken off “${name}” (files untouched; ${keysOf('undo')[0] || 'Undo'} puts them back)`)
   }
   const newSeries = async () => {
     const n = window.prompt('Name of the new series')
@@ -460,6 +537,7 @@ export function BoardView() {
   }
   const onAdded = async (n: number) => {
     setAdding(false)
+    if (preAdd.current) checkpoint(preAdd.current)
     s.toast(`${n} photo${n === 1 ? '' : 's'} added to “${name}”`)
     const r = await load()
     if (r) save(r.items, r.frames, false)  // stores the new reading order
@@ -510,7 +588,7 @@ export function BoardView() {
               <span className="display" style={{ fontSize: 17 }}>{name}</span>
               <span className="muted">{order.length} in series · {items.length - order.length} in maybe piles</span>
               <div className="grow" />
-              <button className="btn primary" onClick={() => setAdding(true)} title="Add photos from folders, or by rating, label, tag and date">+ Add photos</button>
+              <button className="btn primary" onClick={() => { preAdd.current = cur.current; setAdding(true) }} title="Add photos from folders, or by rating, label, tag and date">+ Add photos</button>
               <button className="btn" onClick={() => addFrame(false)}>+ Frame</button>
               <button className="btn" onClick={() => addFrame(true)}>+ Maybe pile</button>
               <button className="btn" onClick={showInLibrary} title={selPhotosHere.length ? "Open the selected photo's folder in the Library, scrolled to it" : "Show the whole series in the Library, in board order"}>Show in library</button>
@@ -544,7 +622,7 @@ export function BoardView() {
                     })}
                     {notes.map(nt => (
                       <div key={nt.key} className={'bnote' + (shSet.has(nt.key) ? ' sel' : '')} style={{ left: nt.x, top: nt.y, width: nt.w, height: nt.h, background: nt.color, cursor: editing === nt.key ? 'text' : grab }}
-                        onPointerDown={e => onObjDown(e, { shape: nt.key })} onDoubleClick={e => { e.stopPropagation(); if (tool === 'select') { setSelShapes([nt.key]); setEditing(nt.key) } }}>
+                        onPointerDown={e => onObjDown(e, { shape: nt.key })} onDoubleClick={e => { e.stopPropagation(); if (tool === 'select') editNote(nt.key) }}>
                         {editing === nt.key
                           ? <textarea autoFocus value={nt.text} placeholder="Write a note" onChange={e => setNoteText(nt.key, e.target.value)}
                               onBlur={() => stopEditing(nt.key)} onKeyDown={e => { if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur() }} />
@@ -586,6 +664,9 @@ export function BoardView() {
                   const title = `${label} (${keysOf(act).join(', ') || 'no key'})`
                   return <button key={t} className={tool === t ? 'on' : ''} title={title} aria-label={title} aria-pressed={tool === t} onClick={() => setTool(t)}>{TOOL_ICONS[t]}</button>
                 })}
+                <span className="sep" />
+                <button disabled={!undoStack.current.length} title={`Undo (${keysOf('undo').join(', ') || 'no key'})`} aria-label="Undo" onClick={undo}>{TOOL_ICONS.undo}</button>
+                <button disabled={!redoStack.current.length} title={`Redo (${keysOf('redo').join(', ') || 'no key'})`} aria-label="Redo" onClick={redo}>{TOOL_ICONS.redo}</button>
               </div>
               {(selPhotosHere.length > 0 || nSh > 0) && (
                 <div className="bselbar">

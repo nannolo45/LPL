@@ -668,10 +668,12 @@ def series_save(sid: int, body: Dict[str, Any] = Body(...)):
             keep = []
             for f in body["frames"]:
                 vals = (f.get("label") or "", float(f["x"]), float(f["y"]), float(f["w"]), float(f["h"]), int(bool(f.get("maybe"))))
+                cur = None
                 if f.get("id"):
-                    c.execute("UPDATE series_frames SET label=?,x=?,y=?,w=?,h=?,maybe=? WHERE id=? AND series_id=?", vals + (int(f["id"]), sid))
+                    cur = c.execute("UPDATE series_frames SET label=?,x=?,y=?,w=?,h=?,maybe=? WHERE id=? AND series_id=?", vals + (int(f["id"]), sid))
+                if cur is not None and cur.rowcount:
                     keep.append(int(f["id"]))
-                else:
+                else:  # new, or brought back by undo after it was deleted
                     cur = c.execute("INSERT INTO series_frames(label,x,y,w,h,maybe,series_id) VALUES(?,?,?,?,?,?,?)", vals + (sid,))
                     keep.append(cur.lastrowid)
             if keep:
