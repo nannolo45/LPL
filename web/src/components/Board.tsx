@@ -100,6 +100,15 @@ export function BoardView() {
   const framesDirty = useRef(false)
   const inner = useRef<HTMLDivElement>(null)
   const wrap = useRef<HTMLDivElement>(null)
+  const [vsize, setVsize] = useState({ w: 1200, h: 800 })  // size of the visible board area
+  useEffect(() => {
+    const w = wrap.current
+    if (!w) return
+    const upd = () => setVsize(v => (v.w === w.clientWidth && v.h === w.clientHeight ? v : { w: w.clientWidth || 1200, h: w.clientHeight || 800 }))
+    const ro = new ResizeObserver(upd)
+    ro.observe(w); upd()
+    return () => ro.disconnect()
+  }, [sid])
 
   const notes = useMemo(() => shapes.filter((x): x is BoardNote => x.kind === 'note'), [shapes])
   const arrows = useMemo(() => shapes.filter((x): x is BoardArrow => x.kind === 'arrow'), [shapes])
@@ -625,8 +634,11 @@ export function BoardView() {
     s.patchFilters({ series: sid, folder: null, folders: [], month: null, tag: null }); s.setSort([{ f: 'custom', d: 'asc' }]); s.setView('grid')
   }
 
-  const W = Math.max(1400, ...frames.map(f => f.x + f.w + 200), ...items.map(i => i.x + 400), ...notes.map(n => n.x + n.w + 300))
-  const H = Math.max(900, ...frames.map(f => f.y + f.h + 200), ...items.map(i => i.y + 300), ...notes.map(n => n.y + n.h + 300))
+  // the canvas always reaches a full screen past the furthest thing (and at least two screens), so there's
+  // room to scroll and drag sideways and down at any zoom, like an endless board
+  const vw = vsize.w / zoom, vh = vsize.h / zoom
+  const W = Math.max(2 * vw, 1400, ...frames.map(f => f.x + f.w + vw), ...items.map(i => i.x + 150 + vw), ...notes.map(n => n.x + n.w + vw))
+  const H = Math.max(2 * vh, 900, ...frames.map(f => f.y + f.h + vh), ...items.map(i => i.y + 105 + vh), ...notes.map(n => n.y + n.h + vh))
   const selSet = new Set(s.sel), shSet = new Set(selShapes)
   const selNotes = notes.filter(n => shSet.has(n.key))
   const canvasCursor = space ? 'grab' : tool === 'select' ? 'default' : 'crosshair'
