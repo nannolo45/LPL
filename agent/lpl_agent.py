@@ -257,7 +257,12 @@ def install_bridge(cfg: dict) -> Path:
     luarc = conf / "luarc"
     lines = luarc.read_text(encoding="utf-8").splitlines() if luarc.is_file() else []
     lines = [l for l in lines if "lpl_bridge" not in l]
-    lines.append('require "lightphotolibrary/lpl_bridge"')
+    if not any("script_manager" in l and not l.strip().startswith("--") for l in lines):
+        # no script manager: load it directly from luarc
+        lines.append('require "lightphotolibrary/lpl_bridge"')
+    # with darktable's script manager, it must NOT also be in luarc: the script manager starts it
+    # (lighttable > scripts > lightphotolibrary > lpl_bridge, remembered across restarts), and a copy
+    # loaded from luarc can't be stopped or restarted there.
     luarc.write_text("\n".join(lines) + "\n", encoding="utf-8")
     (BRIDGE / "outbox").mkdir(parents=True, exist_ok=True)
     return folder
