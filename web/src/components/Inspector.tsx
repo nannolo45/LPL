@@ -5,6 +5,7 @@ import { keysOf, useShortcutsVersion } from '../shortcuts'
 import { exifLine, fmtDay, LABELS, leaf } from '../fields'
 import { Thumb } from './Library'
 import { photoWhere } from '../devices'
+import { NewSeriesSheet } from './NewSeries'
 
 export function RatingLabels({ photos, big = false }: { photos: Photo[]; big?: boolean }) {
   const s = useStore()
@@ -34,15 +35,20 @@ export function RatingLabels({ photos, big = false }: { photos: Photo[]; big?: b
 
 export function SeriesPicker({ ids }: { ids: number[] }) {
   const s = useStore()
+  const [naming, setNaming] = useState(false)  // phone: the name is asked in the page
+  const create = async (name: string) => {
+    const r = await api.seriesCreate(name, ids)
+    s.toast(`Series “${name}” created with ${ids.length} photo${ids.length > 1 ? 's' : ''}`)
+    s.setBoardSeries(r.id)
+  }
   const add = async (v: string) => {
     if (!v) return
     try {
       if (v === '__new') {
+        if (s.isMobile) { setNaming(true); return }
         const name = window.prompt('Name of the new series')
         if (!name) return
-        const r = await api.seriesCreate(name, ids)
-        s.toast(`Series “${name}” created with ${ids.length} photo${ids.length > 1 ? 's' : ''}`)
-        s.setBoardSeries(r.id)
+        await create(name)
       } else {
         const r = await api.seriesAdd(+v, ids)
         s.toast(`${r.added} added to ${s.series.find(x => x.id === +v)?.name}`)
@@ -52,11 +58,17 @@ export function SeriesPicker({ ids }: { ids: number[] }) {
     } catch (e: any) { s.toast(e.message) }
   }
   return (
-    <select className="input" value="" onChange={e => add(e.target.value)} aria-label="Add to series">
-      <option value="">Add to series…</option>
-      {s.series.map(x => <option key={x.id} value={x.id}>{x.name} ({x.count})</option>)}
-      <option value="__new">+ new series…</option>
-    </select>
+    <>
+      <select className="input" value="" onChange={e => add(e.target.value)} aria-label="Add to series">
+        <option value="">Add to series…</option>
+        {s.series.map(x => <option key={x.id} value={x.id}>{x.name} ({x.count})</option>)}
+        <option value="__new">+ new series…</option>
+      </select>
+      {naming && <NewSeriesSheet onClose={() => setNaming(false)} onCreate={async name => {
+        try { await create(name); s.reloadSeries(); s.reloadTags(); api.get(ids).then(r => s.mergePhotos(r.items)); return true }
+        catch (e: any) { s.toast(e.message); return false }
+      }} />}
+    </>
   )
 }
 

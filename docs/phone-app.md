@@ -100,3 +100,49 @@ user agents and at 1400 x 900: all steps above except a real "Install app" promp
 `beforeinstallprompt`), real Firefox (its user agent only, the engine was Chrome), the real shell, and
 pull-to-refresh. Back was driven with the browser's own history back (`page.go_back()`), which is what
 Android's Back does in Chrome; Firefox's and the web view's history behaviour were not run.
+
+## Phone polish: the board's bars, New series (branch `phone-polish`)
+
+### Overlaps and clipping on the phone's board
+Reproduced in headless Chrome at 390 x 844 and 360 x 740 (Android Chrome, Firefox and shell user agents),
+with 1 and 3 photos selected, with a short and a long series name. Screenshots:
+`/home/claude/lpl-handoff-build/shots/polish/` on the build workspace (`before-*`, `after-*`; not committed).
+
+| Found | Before | After |
+|---|---|---|
+| Photo selection bar and zoom control | the zoom (− 50% +) sat on the bar's second and third buttons; the bar's last button showed at the right edge | while any selection bar shows, the zoom sits just above it (`.mboard .bselbar ~ .bzoom`) |
+| Bar wider than the screen | the buttons scrolled inside the bar, with no sign that there was more | same scrolling, plus an orange shade at the edge that has more (CSS scroll shades, no script); buttons keep their size |
+| Frame selection bar | the 9 colour swatches were squeezed to slivers, Solid / Dashed / No border wrapped onto three rows (bar 110 px high), zoom on top | swatches and buttons keep their size and scroll in one row; zoom above |
+| Header with a long series name | the name wrapped onto four lines (header 141 px instead of 62), pushing the board down | one line, cut with "…" (`.mhead .display`) |
+| "The darktable app didn't open" note (R1) | sat 80 px above the bottom, over the board's selection bar | below the header |
+
+Checked and left alone (no overlap or clipping): the left tool column (floats over the board's own content,
+as on the desktop; starts below the header and the "+ Add photos" row; the "Go to a frame" menu opens beside
+it inside the screen); the device picker; the Add photos dialog (fits; a long series name wraps in its title
+and the dialog scrolls); the Settings and Tabs sheets; no horizontal page overflow at either width. The bottom
+tab bar and sheets use the safe-area insets, but headless Chrome cannot emulate insets: not verified.
+All changes are CSS under `.mboard` / `.mhead`, which only the phone layout uses; the desktop is unchanged.
+
+### R12: New series on the phone
+- Series tab header: "New series". It opens a small sheet (`components/NewSeries.tsx`, `NewSeriesSheet`) with a
+  name field, Cancel and "Create series"; Back closes it (history layer). It calls `POST /api/series` (as the
+  existing path; server unchanged) and opens the new series' empty board with "+ Add photos".
+- Empty name: "Create series" stays disabled (the existing prompt did nothing on an empty name). A name already
+  taken: the server's "a series with this name exists" as a toast, the sheet stays open. Spaces around the name
+  are trimmed.
+- The phone's "Add to series… → + new series…" (photo page, Rate & tag) uses the same sheet instead of
+  `window.prompt`. The desktop keeps the prompt.
+
+### `window.prompt` / `window.confirm` still reachable on the phone
+- `Inspector.tsx` tag panel (photo page, Rate & tag): rename tag, synonyms, new tag below (prompt); delete tag (confirm).
+- `Board.tsx`: text on an arrow (prompt, double-tap on an arrow).
+- `AddPhotos.tsx`: "Add N photos…? That's a lot" (confirm, over 400 photos).
+- `Folders.tsx`: leave a folder out (confirm).
+- `Work.tsx` (Devices tab): remove an offline device, full rescan (confirm).
+- Not on the phone: the board's own New series / Rename / Delete (desktop only), shortcut reset, local-mode sending.
+`confirm` usually works in web views when the shell implements `onJsConfirm`/`onJsPrompt`; that is for the shell to check.
+
+### Never ran on a real phone
+The on-screen keyboard: in Chrome the keyboard may cover a bottom sheet's field (it resizes the visual viewport
+only); the New series sheet, like the existing sheets with fields, was not tried with a real keyboard. Also not
+run: real Firefox, the real shell, safe-area insets, touch scrolling of the bars.

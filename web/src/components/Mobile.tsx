@@ -14,6 +14,7 @@ import { selectionIds, takeDeepLink } from '../devices'
 import { useBackLayer } from '../back'
 import { phoneSpot } from '../phonetabs'
 import { tabTitle } from './Tabs'
+import { NewSeriesSheet } from './NewSeries'
 
 type Tab = 'lib' | 'folders' | 'series' | 'pc'  // 'pc': the devices and their working sets (same as PhoneTab)
 
@@ -143,6 +144,7 @@ export function MobileApp() {
   const [board, setBoard] = useState<number | null>(null)
   const [settings, setSettings] = useState(false)
   const [tabsOpen, setTabsOpen] = useState(false)
+  const [newSeries, setNewSeries] = useState(false)
   const [cameFrom, setCameFrom] = useState<'folders' | 'series' | null>(null)  // a folder or series opened from its overview
   useEffect(() => { if (photo != null && s.sel.length === 1 && s.sel[0] !== photo) setPhoto(s.sel[0]) }, [s.sel])
   // show what the open tab shows (also a tab made or changed on the desktop); a view the phone has no
@@ -181,6 +183,7 @@ export function MobileApp() {
         <span className="display">{title}</span>
         <button className="btn big" style={{ minWidth: 44, fontWeight: 600 }} aria-label={`Tabs: ${s.tabs.length} open`} title="Tabs" onClick={() => setTabsOpen(true)}>{s.tabs.length}</button>
         {photo == null && !(tab === 'lib' && !board) && <button className="btn ghost big" aria-label="Settings" onClick={() => setSettings(true)}>⚙</button>}
+        {tab === 'series' && photo == null && board == null && <button className="btn big" onClick={() => setNewSeries(true)}>New series</button>}
         {tab === 'lib' && photo == null && (
           <>
             <button className={'btn big' + (selecting ? ' primary' : '')} onClick={() => { setSelecting(!selecting); if (selecting) s.setSel([]) }}>{selecting ? 'Done' : 'Select'}</button>
@@ -224,6 +227,14 @@ export function MobileApp() {
       </nav>
       {settings && <SettingsDialog onClose={() => setSettings(false)} />}
       {tabsOpen && <TabsSheet onClose={() => setTabsOpen(false)} />}
+      {newSeries && <NewSeriesSheet onClose={() => setNewSeries(false)} onCreate={async name => {
+        try {
+          const r = await api.seriesCreate(name, [])
+          s.toast(`Series “${name}” created`)
+          s.reloadSeries(); s.setBoardSeries(r.id); s.setView('board'); setBoard(r.id)  // its empty board, with "+ Add photos"
+          return true
+        } catch (e: any) { s.toast(e.message); return false }
+      }} />}
       {sheet === 'sort' && <Sheet title="Sort & filter" onClose={() => setSheet('')}><SortPanel /><div className="hr" /><FilterPanel /></Sheet>}
       {sheet === 'edit' && <Sheet title={`${s.selPhotos.length} photos`} onClose={() => setSheet('')}>
         <RatingLabels photos={s.selPhotos} big />
