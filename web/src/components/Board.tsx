@@ -34,6 +34,20 @@ function frameLook(f: Frame): React.CSSProperties {
   return st
 }
 
+// where you were on each board (centre in board coordinates and zoom), so switching views or tabs doesn't lose it
+type BoardViewPos = { z: number; cx: number; cy: number }
+const views = new Map<number, BoardViewPos>()
+function readView(sid: number | null): BoardViewPos | null {
+  if (sid == null) return null
+  if (views.has(sid)) return views.get(sid)!
+  try { const v = JSON.parse(localStorage.getItem('lpl.boardview.' + sid) || 'null'); if (v && isFinite(v.z)) { views.set(sid, v); return v } } catch { /* ignore */ }
+  return null
+}
+function writeView(sid: number, v: BoardViewPos) {
+  views.set(sid, v)
+  try { localStorage.setItem('lpl.boardview.' + sid, JSON.stringify(v)) } catch { /* ignore */ }
+}
+
 export const NOTE_COLORS = ['#f5d76e', '#f6b26b', '#f4a6c0', '#b9a6f0', '#9cc8f0', '#a8dba0', '#d8d8dc']
 
 function size(p: Photo) {
@@ -123,6 +137,8 @@ export function BoardView() {
   const wrap = useRef<HTMLDivElement>(null)
   const origin = useRef<{ ox: number; oy: number } | null>(null)
   const needInitialScroll = useRef(true)
+  const viewTimer = useRef<number>()
+  const oxy = useRef({ ox: 0, oy: 0 })
 
   const notes = useMemo(() => shapes.filter((x): x is BoardNote => x.kind === 'note'), [shapes])
   const arrows = useMemo(() => shapes.filter((x): x is BoardArrow => x.kind === 'arrow'), [shapes])
@@ -187,7 +203,7 @@ export function BoardView() {
       return { items: its, frames: r.frames }
     }).catch(e => { s.toast(e.message); return null })
   }, [sid])
-  useEffect(() => { needInitialScroll.current = true; origin.current = null; setAdding(false); setSelShapes([]); setSelFrames([]); setEditing(null); undoStack.current = []; redoStack.current = []; setHist(h => h + 1); load() }, [load])
+  useEffect(() => { needInitialScroll.current = true; origin.current = null; const v = readView(sid); if (v) setZoom(v.z); setAdding(false); setSelShapes([]); setSelFrames([]); setEditing(null); undoStack.current = []; redoStack.current = []; setHist(h => h + 1); load() }, [load])
 
   // photos hidden from the library: off the board too (they stay in the series and keep their place),
   // unless "Show hidden" is on; even then they're dimmed and don't count in the reading order
@@ -767,11 +783,19 @@ export function BoardView() {
   const oy = Math.min(0, ...frames.map(f => f.y), ...items.map(i => i.y), ...notes.map(n => n.y)) - EDGE
   const W = Math.max(1400, ...frames.map(f => f.x + f.w), ...items.map(i => i.x + 150), ...notes.map(n => n.x + n.w)) + EDGE - ox
   const H = Math.max(900, ...frames.map(f => f.y + f.h), ...items.map(i => i.y + 105), ...notes.map(n => n.y + n.h)) + EDGE - oy
+  oxy.current = { ox, oy }
   useLayoutEffect(() => {
     const w = wrap.current
     if (!w) return
-    if (needInitialScroll.current && (items.length || frames.length)) {  // open with the start of the board at the top left
+    if (needInitialScroll.current && (items.length || frames.length)) {  // back where you were on this board, or its start at the top left
       needInitialScroll.current = false
+      const v = readView(sid)
+      if (v) {
+        w.scrollLeft = (v.cx - ox) * zoom - w.clientWidth / 2
+        w.scrollTop = (v.cy - oy) * zoom - w.clientHeight / 2
+        origin.current = { ox, oy }
+        return
+      }
       w.scrollLeft = (Math.min(0, ...frames.map(f => f.x), ...items.map(i => i.x)) - ox) * zoom - 40
       w.scrollTop = (Math.min(0, ...frames.map(f => f.y), ...items.map(i => i.y)) - oy) * zoom - 40
     } else if (origin.current && (origin.current.ox !== ox || origin.current.oy !== oy)) {  // the canvas grew left/up: keep the view still
@@ -830,6 +854,12 @@ export function BoardView() {
             </div>
             <div className="board-area">
               <div className="canvas-wrap" ref={wrap} style={{ cursor: drag.current?.kind === 'pan' ? 'grabbing' : canvasCursor }} onContextMenu={e => e.preventDefault()}
+                onScroll={e => {  // remember where you are on this board (centre and zoom), for coming back
+                  if (needInitialScroll.current || sid == null) return
+                  const w = e.currentTarget
+                  window.clearTimeout(viewTimer.current)
+                  viewTimer.current = window.setTimeout(() => writeView(sid, { z: zoomRef.current, cx: (w.scrollLeft + w.clientWidth / 2) / zoomRef.current + oxy.current.ox, cy: (w.scrollTop + w.clientHeight / 2) / zoomRef.current + oxy.current.oy }), 200)
+                }}
                 onPointerDownCapture={touchDown} onPointerMoveCapture={touchMove} onPointerUpCapture={touchUp} onPointerCancelCapture={touchUp}>
                 <div className="canvas" data-bg="1" style={{ width: W * zoom, height: H * zoom }} onPointerDown={onBgDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
                   onDoubleClick={e => { if (tool === 'select' && (e.target as HTMLElement).dataset?.bg) addNote(toBoard(e)) }}>
