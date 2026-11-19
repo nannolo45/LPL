@@ -197,8 +197,9 @@ Every action that can target one of several devices either sits in that device's
   `os` must be exactly `"android"` (lower case) in every heartbeat: that is what keeps PC jobs away from
   the phone. `name` is shown everywhere as the device's name. Answer: `{"jobs": [...], "server_time": …}`;
   the phone only ever gets jobs addressed to its `id`. Mark each with `POST /api/jobs/{id}/done`
-  (`{"status": "done"}` or `"failed"`). A job is handed out once (status `taken`); if the app dies before
-  doing it, it is not handed out again.
+  (`{"status": "done"}` or `"failed"`). A job is handed out (status `taken`); one that is never reported done
+  is handed to the same agent again after `JOB_RETRY_SECONDS` (default 30 min), at most 3 times in all
+  (R13, see `docs/android-edit-record-progress.md`).
 - Jobs for the phone are created only by the user choosing the phone in the picker ("Edit in darktable"
   on another device). "Edit on this phone" creates no job.
 - `lpldt://edit` parameters: see section 1. `server` is `location.origin` of the page (scheme, host, port;
