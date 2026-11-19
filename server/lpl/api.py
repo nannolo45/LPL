@@ -883,7 +883,9 @@ def heartbeat(body: Dict[str, Any] = Body(...)):
         c.execute("INSERT INTO agents(id,name,os,last_seen,state) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
                   "name=excluded.name, os=excluded.os, last_seen=excluded.last_seen, state=excluded.state",
                   (aid, body.get("name"), body.get("os"), time.time(), json.dumps(body.get("state") or {})))
-        jobs = c.execute("SELECT * FROM jobs WHERE status='queued' AND (agent_id=? OR agent_id IS NULL) ORDER BY id", (aid,)).fetchall()
+        # an Android agent (the darktable phone app) only takes jobs addressed to it, never ones meant for any PC
+        anyone = "" if body.get("os") == "android" else " OR agent_id IS NULL"
+        jobs = c.execute("SELECT * FROM jobs WHERE status='queued' AND (agent_id=?%s) ORDER BY id" % anyone, (aid,)).fetchall()
         out = []
         for j in jobs:
             c.execute("UPDATE jobs SET status='taken', taken=?, agent_id=? WHERE id=?", (time.time(), aid, j["id"]))
@@ -907,7 +909,7 @@ def job_create(body: Dict[str, Any] = Body(...)):
             raise HTTPException(500, str(e))
     agent_id = body.get("agent_id")
     if not agent_id:
-        online = [a for a in list_agents() if a["online"]]
+        online = [a for a in list_agents() if a["online"] and a["os"] != "android"]  # never pick a phone by itself
         agent_id = online[0]["id"] if len(online) == 1 else None
     with db.write_lock:
         c = db.conn()
