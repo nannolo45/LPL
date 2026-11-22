@@ -126,23 +126,44 @@ local function reload_sidecar(img)
   end
 end
 
-local function show(img)
-  -- darktable enters the darkroom on the selected (or hovered) image and refuses, without an error, when there
-  -- is none: with the mouse somewhere else nothing happened. So select the photo first.
+-- Lighttable must be showing the photo's folder for darktable to open it: darktable enters the darkroom on the
+-- selected (or hovered) image, counts a selection only among the images of the current collection, and refuses
+-- without an error when that gives nothing. So: collect the working copy's folder, select the photo, then switch.
+local function collect_folder(img)
   local ok, err = pcall(function()
-    pcall(function() dt.gui.selection({ img }) end)
-    if dt.gui.current_view() ~= dt.gui.views.darkroom then
-      dt.gui.current_view(dt.gui.views.darkroom)
-    end
-    dt.gui.views.darkroom.display_image(img)
+    local rule = dt.gui.libs.collect.new_rule()
+    rule.mode = "DT_LIB_COLLECT_MODE_AND"
+    rule.item = "DT_COLLECTION_PROP_FILMROLL"
+    rule.data = img.path
+    dt.gui.libs.collect.filter({ rule })
   end)
-  if not ok then status("display failed: " .. tostring(err)) end
-  local okv, view = pcall(function() return dt.gui.current_view() end)
-  if okv and view ~= dt.gui.views.darkroom then
-    status("darktable stayed in " .. tostring(view and view.id or "another view") .. ": it did not enter the darkroom")
+  if not ok then status("could not show the working folder in lighttable: " .. tostring(err)) end
+end
+
+local function show(img)
+  local ok, err = pcall(function()
+    if dt.gui.current_view() == dt.gui.views.darkroom then
+      dt.gui.views.darkroom.display_image(img)
+      return
+    end
+    collect_folder(img)
+    dt.gui.selection({ img })
+    dt.gui.current_view(dt.gui.views.darkroom)
+  end)
+  if not ok then
+    status("display failed: " .. tostring(err))
     return false
   end
-  return ok
+  -- the switch can take a moment (it is handed to darktable's own loop)
+  for _ = 1, 10 do
+    local okv, view = pcall(function() return dt.gui.current_view() end)
+    if okv and view == dt.gui.views.darkroom then return true end
+    if not pcall(dt.control.sleep, 200) then break end
+  end
+  local okv, view = pcall(function() return dt.gui.current_view() end)
+  if okv and view == dt.gui.views.darkroom then return true end
+  status("darktable stayed in " .. tostring(okv and view and view.id or "another view") .. ": it did not enter the darkroom")
+  return false
 end
 
 local function forget(path)
