@@ -178,6 +178,43 @@ class Board:
             tw, th = api._tile(r["width"], r["height"], r["orientation"])
             self.items[r["id"]] = {"id": r["id"], "x": r["x"] or 0, "y": r["y"] or 0, "tw": tw, "th": th}
 
+    # notes and arrows: one JSON list per board (series_shapes / folder_shapes)
+    def _shape_table(self):
+        return ("series_shapes", "series_id") if self.kind == "s" else ("folder_shapes", "folder_id")
+
+    def load_shapes(self) -> list:
+        t, k = self._shape_table()
+        r = self.c.execute("SELECT data FROM %s WHERE %s=?" % (t, k), (self.id,)).fetchone()
+        try:
+            data = json.loads(r["data"]) if r else []
+        except ValueError:
+            data = []
+        return data if isinstance(data, list) else []
+
+    @staticmethod
+    def shape_points(shapes: list) -> list:
+        """What can move on its own: notes (a rectangle) and free arrow ends (a point, no photo / note behind it)."""
+        out = []
+        for sh in shapes:
+            if not isinstance(sh, dict):
+                continue
+            if sh.get("kind") == "note" and isinstance(sh.get("x"), (int, float)) and isinstance(sh.get("y"), (int, float)):
+                out.append((sh, {"x": sh["x"], "y": sh["y"], "tw": sh.get("w") or 0, "th": sh.get("h") or 0}))
+            elif sh.get("kind") == "arrow":
+                for e in (sh.get("a"), sh.get("b")):
+                    if isinstance(e, dict) and e.get("photo") is None and e.get("note") is None \
+                            and isinstance(e.get("x"), (int, float)) and isinstance(e.get("y"), (int, float)):
+                        out.append((e, {"x": e["x"], "y": e["y"], "tw": 0, "th": 0}))
+        return out
+
+    def shape_owners(self, shapes: list, fr: list) -> list:
+        return [(obj, pt, owner(pt, fr, self.kind == "f")) for obj, pt in self.shape_points(shapes)]
+
+    def save_shapes(self, shapes: list) -> None:
+        t, k = self._shape_table()
+        self.c.execute("INSERT INTO %s(%s,data) VALUES(?,?) ON CONFLICT(%s) DO UPDATE SET data=excluded.data" % (t, k, k),
+                       (self.id, json.dumps(shapes, ensure_ascii=False)))
+
     def _dims(self, pid: int):
         r = self.c.execute("SELECT width, height, orientation FROM photos WHERE id=?", (pid,)).fetchone()
         return api._tile(r["width"], r["height"], r["orientation"]) if r else (150, 100)
@@ -231,6 +268,9 @@ class Board:
         fr = frames_sorted(self.frames)
         own = {i: owner(it, fr, self.kind == "f") for i, it in self.items.items()}  # who holds what, before anything moves
         moving = set(pids)
+        shapes = None if f.get("virtual") else self.load_shapes()
+        sown = self.shape_owners(shapes, fr) if shapes else []
+        shifted = False
         cols = max(1, int((f["w"] - 32) // CELL_W))
         start = f["y"] + 40
         if append:
@@ -255,10 +295,16 @@ class Board:
             for i, it in list(self.items.items()):
                 if own.get(i) is g and i not in moving:
                     self.set_pos(i, it["x"], it["y"] + dy)
+            for obj, pt, o in sown:  # notes and free arrow ends in the displaced frame go with it
+                if o is g:
+                    obj["y"] = pt["y"] = pt["y"] + dy
+                    shifted = True
         if grow > 0:
-            self._grow(f, grow, own, moving)
+            shifted = self._grow(f, grow, own, moving, sown) or shifted
+        if shifted:
+            self.save_shapes(shapes)
 
-    def _grow(self, f: dict, grow: float, own: dict, skip: set) -> None:
+    def _grow(self, f: dict, grow: float, own: dict, skip: set, sown: list = ()) -> bool:
         old_bottom = f["y"] + f["h"]
         f["h"] += grow
         self.c.execute("UPDATE %s SET h=? WHERE id=?" % self.ft, (f["h"], f["id"]))
@@ -287,6 +333,18 @@ class Board:
                     self.set_pos(i, it["x"], it["y"] + grow)
             elif any(it["y"] >= ob - 1 and it["x"] < h["x"] + h["w"] and h["x"] < it["x"] + it["tw"] for h, ob in pushed):
                 self.set_pos(i, it["x"], it["y"] + grow)
+        changed = False
+        for obj, pt, o in sown:  # notes / free arrow ends: inside the growing frame they stay; inside a pushed frame they go with it;
+            if o is f:           # outside every frame, in the area the frame grows into or below a pushed frame, they are pushed too
+                continue
+            if o is not None:
+                push = id(o) in moved
+            else:
+                push = any(pt["y"] >= ob - 1 and pt["x"] < h["x"] + h["w"] and h["x"] < pt["x"] + pt["tw"] for h, ob in pushed)
+            if push:
+                obj["y"] = pt["y"] = pt["y"] + grow
+                changed = True
+        return changed
 
     def place_below(self, pids: List[int]) -> None:
         """Loose places under everything, eight to a row."""

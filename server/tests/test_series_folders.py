@@ -626,3 +626,66 @@ def test_send_to_nas_carries_the_folder(lib):
     data = ok(c.get("/api/series"))
     assert all(x["folder_id"] is None and x["linked"] is True for x in data["series"] if x["name"].endswith(" old"))
     assert api.app is not None
+
+
+def three_frames(c, ids):
+    sid, bd = single(c, uniq("Lanes"), ids[30:36])
+    f = bd["frames"][0]
+    fr = [dict(f, label="A", x=40, y=40, w=400, h=250), {"label": "B", "x": 40, "y": 400, "w": 400, "h": 250, "maybe": 0},
+          {"label": "C", "x": 40, "y": 760, "w": 400, "h": 250, "maybe": 0}]
+    items = [{"id": ids[30], "x": 60, "y": 90}, {"id": ids[31], "x": 60, "y": 450}, {"id": ids[32], "x": 60, "y": 810},
+             {"id": ids[33], "x": 240, "y": 810}, {"id": ids[34], "x": 60, "y": 1200}, {"id": ids[35], "x": 240, "y": 1200}]
+    ok(c.put("/api/series/%d/board" % sid, json={"items": items, "frames": fr}))
+    return sid
+
+
+def test_notes_move_with_frames_and_get_out_of_the_way(lib):
+    c, ids = lib
+    sid = three_frames(c, ids)
+    shapes = [{"key": "n1", "kind": "note", "x": 60, "y": 130, "w": 100, "h": 60, "text": "inside A"},
+              {"key": "n2", "kind": "note", "x": 60, "y": 470, "w": 100, "h": 60, "text": "inside B"},
+              {"key": "n3", "kind": "note", "x": 300, "y": 700, "w": 100, "h": 60, "text": "loose, between B and C"},
+              {"key": "n4", "kind": "note", "x": 1800, "y": 700, "w": 100, "h": 60, "text": "far right"},
+              {"key": "a1", "kind": "arrow", "a": {"x": 70, "y": 800}, "b": {"photo": ids[30]}},
+              {"key": "a2", "kind": "arrow", "a": {"x": 70, "y": 140}, "b": {"x": 90, "y": 150}}]
+    ok(c.put("/api/series/%d/shapes" % sid, json={"shapes": shapes}))
+    before = {p["id"]: p["y"] for p in ok(c.get("/api/series/%d/board" % sid))["items"]}
+    # eight photos into frame A: it grows, B and C (and what is in them) move down by the same amount
+    st = ok(c.get("/api/series/%d/strip" % sid))
+    ok(c.post("/api/series/%d/strip/move" % sid, json={"ids": ids[34:36] + [ids[32], ids[33], ids[31]], "lane": st["lanes"][0]["key"], "before": ids[30]}))
+    bd = ok(c.get("/api/series/%d/board" % sid))
+    fa = next(f for f in bd["frames"] if f["label"] == "A")
+    grown = fa["h"] - 250
+    assert grown > 0
+    sh = {s["key"]: s for s in bd["shapes"]}
+    assert (sh["n1"]["x"], sh["n1"]["y"]) == (60, 130)          # inside the growing frame: stays
+    fb = next(f for f in bd["frames"] if f["label"] == "B")
+    assert fb["y"] == 400 + grown
+    assert sh["n2"]["y"] == 470 + grown                         # inside a pushed frame: goes with it
+    assert sh["n3"]["y"] == 700 + grown                         # loose, below A's old bottom, over its width
+    assert sh["a1"]["a"]["y"] == 800 + grown and sh["a1"]["b"] == {"photo": ids[30]}
+    assert sh["a2"]["a"]["y"] == 140
+    assert sh["n4"]["y"] == 700 and sh["n3"]["x"] == 300
+
+
+def test_notes_move_on_a_folder_board(lib):
+    c, ids = lib
+    g, a, b = uniq("Grecia"), uniq("Top"), uniq("Bottom")
+    fid, s = new_folder(c, g, {a: ids[0:2], b: ids[2:6]})
+    bd = board(c, fid)
+    fa = next(f for f in bd["frames"] if f["series_id"] == s[a])
+    fb = next(f for f in bd["frames"] if f["series_id"] == s[b])
+    fa_small = dict(fa, w=32 + 2 * 160, h=165)
+    ok(c.put("/api/series-folders/%d/board" % fid, json={"items": [], "frames": [fa_small]}))
+    bd = board(c, fid)
+    fa, fb = (next(f for f in bd["frames"] if f["series_id"] == s[x]) for x in (a, b))
+    inside, below = {"key": "in", "kind": "note", "x": fa["x"] + 20, "y": fa["y"] + 20, "w": 80, "h": 50}, \
+                    {"key": "lo", "kind": "note", "x": fb["x"] + 20, "y": fb["y"] + 60, "w": 80, "h": 50}
+    ok(c.put("/api/series-folders/%d/shapes" % fid, json={"shapes": [inside, below]}))
+    ok(c.post("/api/series-folders/%d/strip/move" % fid, json={"ids": ids[6:14], "series": s[a], "before": None}))
+    bd = board(c, fid)
+    fa2, fb2 = (next(f for f in bd["frames"] if f["series_id"] == s[x]) for x in (a, b))
+    grown = fb2["y"] - fb["y"]
+    assert grown > 0
+    sh = {x["key"]: x for x in bd["shapes"]}
+    assert sh["in"]["y"] == inside["y"] and sh["lo"]["y"] == below["y"] + grown
