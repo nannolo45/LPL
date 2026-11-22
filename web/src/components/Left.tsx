@@ -94,6 +94,7 @@ export function FilterPanel() {
   const ratings = f.ratings || []
   const lenses = f.lenses || []
   const cameras = f.cameras || []
+  const formats = f.formats || []
   return (
     <div className="col">
       <div className="row" style={{ justifyContent: 'space-between' }}>
@@ -127,6 +128,12 @@ export function FilterPanel() {
         right={cameras.length > 0 && <button className="btn ghost tiny" onClick={() => s.patchFilters({ cameras: [] })}>clear</button>}>
         <div className="row wrap" style={{ gap: 4 }}>
           {s.facets.cameras.map(l => <button key={l.v} className={'chip' + (cameras.includes(l.v) ? ' on' : '')} title={`${l.n} photos`} onClick={() => s.patchFilters({ cameras: toggle(cameras, l.v) })}>{l.v}</button>)}
+        </div>
+      </Section>
+      <Section id="format" title="Format" defaultOpen={false} summary={picked(formats.length)}
+        right={formats.length > 0 && <button className="btn ghost tiny" onClick={() => s.patchFilters({ formats: [] })}>clear</button>}>
+        <div className="row wrap" style={{ gap: 4 }}>
+          {s.facets.formats.map(l => <button key={l.v} className={'chip' + (formats.includes(l.v) ? ' on' : '')} title={`${l.n} photos`} onClick={() => s.patchFilters({ formats: toggle(formats, l.v) })}>{l.v} <span className="muted">{l.n}</span></button>)}
         </div>
       </Section>
       <Section id="darktable" title="darktable" summary={f.edited === 'yes' ? 'edited' : f.edited === 'no' ? 'not edited' : ''}>

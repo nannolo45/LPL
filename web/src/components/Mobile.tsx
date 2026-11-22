@@ -198,7 +198,7 @@ export function MobileApp() {
   const openPhoto = (p: Photo) => { s.setSel([p.id]); setPhoto(p.id) }
   const goTab = (t: Tab) => { setTab(t); setPhoto(null); setBoard(null); setCameFrom(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders'); setDevices(false) }
   const title = devices ? 'Devices' : board != null ? (targetName(targetOf(board), s.series, s.seriesFolders) || 'Series') : photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : 'Series'
-  const fcount = [s.filters.folder, (s.filters.folders || []).length, s.filters.month, s.filters.tag, s.filters.series, s.filters.series_folder, s.filters.edited, (s.filters.lenses || []).length, (s.filters.cameras || []).length, (s.filters.labels || []).length, (s.filters.ratings || []).length].filter(Boolean).length
+  const fcount = [s.filters.folder, (s.filters.folders || []).length, s.filters.month, s.filters.tag, s.filters.series, s.filters.series_folder, s.filters.edited, (s.filters.lenses || []).length, (s.filters.cameras || []).length, (s.filters.formats || []).length, (s.filters.labels || []).length, (s.filters.ratings || []).length].filter(Boolean).length
   return (
     <div className="app">
       <div className="mhead">

@@ -253,8 +253,13 @@ def facets():
     c = db.conn()
     lenses = [dict(r) for r in c.execute("SELECT lens AS v, COUNT(*) n FROM photos WHERE missing=0 AND lens IS NOT NULL AND lens<>'' GROUP BY lens ORDER BY lens").fetchall()]
     cams = [dict(r) for r in c.execute("SELECT camera AS v, COUNT(*) n FROM photos WHERE missing=0 AND camera IS NOT NULL AND camera<>'' GROUP BY camera ORDER BY camera").fetchall()]
+    fm: Dict[str, int] = {}
+    for r in c.execute("SELECT ext, COUNT(*) n FROM photos WHERE missing=0 AND ext<>'' GROUP BY ext").fetchall():
+        k = query.format_of(r["ext"])
+        fm[k] = fm.get(k, 0) + r["n"]
+    formats = [{"v": k, "n": n} for k, n in sorted(fm.items(), key=lambda kv: (-kv[1], kv[0]))]
     hidden = c.execute("SELECT COUNT(*) n FROM photos WHERE missing=0 AND hidden=1").fetchone()["n"]
-    return {"lenses": lenses, "cameras": cams, "hidden_photos": hidden}
+    return {"lenses": lenses, "cameras": cams, "formats": formats, "hidden_photos": hidden}
 
 
 @app.post("/api/photos/hide")
@@ -734,7 +739,7 @@ def _match(sid: int, filters: Dict[str, Any], sort: List[Dict[str, str]]):
     f = dict(filters or {})
     for k in ("series", "ids", "not_in_series"):
         f.pop(k, None)
-    if not any(f.get(k) for k in ("folders", "folder", "ratings", "labels", "tags", "tag", "lenses", "cameras", "date_from", "date_to", "q", "edited", "month")):
+    if not any(f.get(k) for k in ("folders", "folder", "ratings", "labels", "tags", "tag", "lenses", "cameras", "formats", "date_from", "date_to", "q", "edited", "month")):
         raise HTTPException(400, "pick at least one folder or criterion")
     c = db.conn()
     where, args, join = query.build_where(f)

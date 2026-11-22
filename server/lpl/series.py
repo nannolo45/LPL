@@ -1599,7 +1599,7 @@ def _match_folder(fid: int, filters: Dict[str, Any], sort: List[Dict[str, str]])
     f = dict(filters or {})
     for k in ("series", "ids", "not_in_series", "series_folder"):
         f.pop(k, None)
-    if not any(f.get(k) for k in ("folders", "folder", "ratings", "labels", "tags", "tag", "lenses", "cameras", "date_from", "date_to", "q", "edited", "month")):
+    if not any(f.get(k) for k in ("folders", "folder", "ratings", "labels", "tags", "tag", "lenses", "cameras", "formats", "date_from", "date_to", "q", "edited", "month")):
         raise HTTPException(400, "pick at least one folder or criterion")
     c = db.conn()
     where, args, join = query.build_where(f)

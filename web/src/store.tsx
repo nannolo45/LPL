@@ -15,7 +15,7 @@ interface Saved { view: View; sort: SortLevel[]; group: boolean; gran: Gran; fil
 const DEFAULTS: Saved = {
   view: 'grid',
   sort: [{ f: 'taken', d: 'asc' }, { f: 'name', d: 'asc' }],
-  group: true, gran: 'day', filters: { ratings: [], labels: [], label_mode: 'or', lenses: [], cameras: [], subfolders: true }, thumb: 170,
+  group: true, gran: 'day', filters: { ratings: [], labels: [], label_mode: 'or', lenses: [], cameras: [], formats: [], subfolders: true }, thumb: 170,
 }
 
 function loadSaved(): Saved {
@@ -52,7 +52,7 @@ export interface Store {
   mergePhotos: (ps: Photo[]) => void
   meta: (body: Record<string, unknown>, ids?: number[]) => Promise<void>
   tags: Tag[]; reloadTags: () => void
-  facets: { lenses: { v: string; n: number }[]; cameras: { v: string; n: number }[]; hidden_photos?: number }
+  facets: { lenses: { v: string; n: number }[]; cameras: { v: string; n: number }[]; formats: { v: string; n: number }[]; hidden_photos?: number }
   /** Hide photos from the library views (or show them again); LPL only, files untouched. */
   hidePhotos: (ids: number[], hidden: boolean) => Promise<void>
   series: SeriesInfo[]; reloadSeries: () => void
@@ -113,7 +113,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [sel, setSel] = useState<number[]>([])
   const [cache, setCache] = useState<Map<number, Photo>>(new Map())
   const [tags, setTags] = useState<Tag[]>([])
-  const [facets, setFacets] = useState<Store['facets']>({ lenses: [], cameras: [] })
+  const [facets, setFacets] = useState<Store['facets']>({ lenses: [], cameras: [], formats: [] })
   const [series, setSeries] = useState<SeriesInfo[]>([])
   const [seriesFolders, setSeriesFolders] = useState<SeriesFolder[]>([])
   const [agents, setAgents] = useState<Agent[]>([])

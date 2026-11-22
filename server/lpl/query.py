@@ -5,6 +5,25 @@ LABEL_MIN = "(SELECT MIN(label) FROM photo_labels pl WHERE pl.photo_id=p.id)"
 FIRST_TAG = ("(SELECT MIN(t.path) FROM photo_tags pt JOIN tags t ON t.id=pt.tag_id "
              "WHERE pt.photo_id=p.id AND t.path NOT LIKE 'darktable|%')")
 
+_FMT_ALIASES = {"JPEG": ["jpg", "jpeg"], "JPG": ["jpg", "jpeg"], "TIFF": ["tif", "tiff"], "TIF": ["tif", "tiff"]}
+
+
+def format_of(ext: str) -> str:
+    """The format name shown in the filter: upper case, JPEG as JPG and TIFF as TIF."""
+    e = (ext or "").upper()
+    return {"JPEG": "JPG", "TIFF": "TIF"}.get(e, e)
+
+
+def format_exts(formats) -> list:
+    """Stored (lower-case) extensions for a list of format names."""
+    out: list = []
+    for x in formats or []:
+        x = str(x).strip().lstrip(".").upper()
+        for e in _FMT_ALIASES.get(x, [x.lower()] if x else []):
+            if e not in out:
+                out.append(e)
+    return out
+
 SORT_SQL = {
     "taken": "p.taken",
     "name": "p.filename COLLATE NOCASE",
@@ -79,6 +98,10 @@ def build_where(f: Dict[str, Any]) -> Tuple[str, List[Any], str]:
         if vals:
             where.append("%s IN (%s)" % (col, ",".join("?" * len(vals))))
             args += vals
+    exts = format_exts(f.get("formats"))
+    if exts:
+        where.append("p.ext IN (%s)" % ",".join("?" * len(exts)))
+        args += exts
     e = f.get("edited")
     if e == "yes":
         where.append("p.edited=1")
