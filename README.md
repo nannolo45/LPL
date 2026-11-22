@@ -20,7 +20,7 @@ NAS (Docker)                                 your PC
 - **Filters**: text, rating, colour labels (any/all), lens, camera, edited, folder, month, tag, series.
 - **Tags**: darktable's model: hierarchy with `|`, attach/detach on a selection, create, rename/move, delete, synonyms, category/private, suggestions. Written to the `.xmp` sidecars exactly the way darktable reads them.
 - **Series board**: drag photos freely, frames as chapters, a maybe pile, live reading order. Series are also tags (`series|name`).
-- **Series folders and Strip mode**: a folder holds several series with one shared board (each frame is a series); every series or folder can also be shown as a **Strip** (one lane per series or frame, drag photos and lanes), and the board can be linked to the strip or left free. Folders and series can be put in any order. See `docs/series-folders-strip.md`.
+- **Series folders and Strip mode**: a folder holds several series with one shared board (each frame is a series); every series or folder can also be shown as a **Strip** (one lane per series or frame, drag photos and lanes), and the board can be linked to the strip or left free. Folders can hold folders, to any depth: on the board of its top-level folder a subfolder is a group frame around its series' frames, in the Strip a foldable group heading. Folders and series can be put in any order. See `docs/series-folders-strip.md`.
 - **Devices tab**: the old "Working set" page, now one card per device with what is on it and what is queued (`docs/devices-stop-estimate.md`).
 - **Edit in darktable**: from any device. The PC agent copies the RAW + XMP to the PC's SSD, opens it in darktable, and sends the XMP back to the NAS when you're done. darktable never touches the NAS directly, so it's fast.
 
