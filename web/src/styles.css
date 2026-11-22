@@ -565,3 +565,61 @@ a { color: var(--accent); }
 }
 .mhead > .btn.big { min-width: 44px; }
 .mtabs button { min-height: 44px; }
+
+/* devices */
+.nowrap { white-space: nowrap; }
+.devcard { padding: 10px 16px; border-radius: 10px; background: #1f1f23; display: flex; flex-direction: column; gap: 10px; }
+.devcard.open { padding: 14px 16px; }
+.devhead { min-height: 32px; gap: 10px; }
+.devbtns { margin-left: auto; gap: 8px; }  /* the device's buttons stay together, at the right, also when the row wraps */
+.devfold { display: inline-flex; align-items: center; gap: 10px; border: 0; background: none; padding: 4px 0; color: var(--text); text-align: left; }
+.devfold .display { font-size: 18px; }
+.devfold:hover .display { color: #fff; }
+.devfold .chev, .devmore .chev, .devblock .chev { flex: 0 0 auto; display: block; width: 14px; color: var(--muted); transition: transform .15s; }
+.devfold .chev.open, .devmore .chev.open, .devblock .chev.open { transform: rotate(90deg); }
+.devmore { border: 0; background: none; padding: 4px 0; color: var(--soft); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+.devmore:hover { color: #fff; }
+.devblock { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 0 16px; border: 0; border-radius: 10px; background: transparent; color: var(--text); text-align: left; }
+.devfold:focus-visible, .devmore:focus-visible, .devblock:focus-visible, .dev-ind:focus-visible, .dev-open:focus-visible, .dev-pop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.xferbox { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border: 1px solid var(--line2); border-radius: 8px; background: #19191c; }
+.xferbox.compact { gap: 9px; padding: 12px; background: #1b1b1e; }
+.xfer-title { font-size: 15px; font-weight: 500; color: #fff; }
+.xfer-detail { font-size: 13px; color: var(--soft); }
+.xferbox.compact .xfer-title { font-size: 13px; }
+.xferbox.compact .xfer-detail { font-size: 12px; }
+.xfer-detail b { font-weight: 600; color: var(--accent-text); white-space: nowrap; }
+.xbar { display: block; position: relative; height: 6px; border-radius: 3px; background: var(--line2); overflow: hidden; }
+.xbar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 3px; transition: width .4s; }
+.xbar.still i { background: #8c8c94; }
+.xbar.thin { height: 3px; }
+.btn.icon, .btn.stop { display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; flex: 0 0 auto; }
+.btn.stop { height: 36px; padding: 0 18px; background: #3a3a41; border-color: #55555e; color: #fff; font-weight: 600; font-size: 13px; }
+.btn.stop:hover:not(:disabled) { background: #46464e; }
+.btn.stop.small { height: 32px; padding: 0 14px; font-size: 12px; }
+.xferbox.compact .btn.stop { height: 34px; padding: 0 14px; font-size: 12px; }
+.btn.stop.big { height: 44px; font-size: 14px; }
+.devtable td { vertical-align: middle; }
+.devthumb { display: block; width: 52px; height: 34px; object-fit: cover; border-radius: 4px; cursor: pointer; background: #2a2a2e; flex: 0 0 auto; }
+/* the top bar's devices indicator and its popover */
+.dev-ind-wrap { align-self: center; position: relative; flex: 0 0 auto; }
+.dev-ind { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px 0 4px; border: 1px solid var(--line2); border-radius: 17px; background: transparent; color: var(--text); font-size: 12px; white-space: nowrap; }
+.dev-ind:hover, .dev-ind.on { background: #38383f; border-color: #55555e; }
+.dev-ind b { font-weight: 600; color: #fff; }
+.dev-ind span { color: var(--soft); }
+.dev-ind.round { width: 44px; height: 44px; padding: 0; border-radius: 22px; justify-content: center; flex: 0 0 auto; }
+.dev-pop { position: absolute; top: 42px; right: 0; width: 384px; max-height: calc(100vh - 70px); overflow: auto; padding: 14px 16px; background: #26262b; border: 1px solid #44444c; border-radius: 12px; box-shadow: 0 12px 36px rgba(0,0,0,.6); display: flex; flex-direction: column; gap: 12px; z-index: 29; }
+.dev-pop-line { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line2); }
+.dev-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #6a6a70; display: inline-block; }
+.dev-dot.on { background: var(--ok); }
+.dev-open { display: flex; align-items: center; justify-content: center; gap: 8px; height: 36px; border: 1px solid #44444c; border-radius: 6px; background: #303036; color: #fff; font-size: 13px; font-weight: 500; }
+.dev-open:hover { background: #3a3a41; }
+/* the Devices page on the phone */
+.devcard.m, .devcard.m.open { padding: 8px 14px 14px; gap: 8px; }
+.devcard.m .devfold { display: flex; width: 100%; min-height: 44px; padding: 0; }
+.devcard.m .devfold .display { font-size: 19px; }
+.devcard.m > .btn.big, .devcard.m > div > .btn.big { width: 100%; }
+.devcard.m .xfer-detail { font-size: 13px; }
+.devcard.m .devtable td { padding: 10px 0; }
+.devacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.devacts > .btn { flex: 1 1 calc(50% - 6px); white-space: nowrap; }
+.devacts > .btn.danger { flex-basis: 100%; }

@@ -275,7 +275,7 @@ export function WhereLine({ id }: { id: number }) {
   return (
     <>
       {bars.map((a, i) => <ProgressBar key={i} label={a.text} fraction={a.progress ?? null} />)}
-      {plain.length > 0 && <span className="small soft" title="See the working set for more">{plain.join(' · ')}</span>}
+      {plain.length > 0 && <span className="small soft" title="See Devices for more">{plain.join(' · ')}</span>}
     </>
   )
 }

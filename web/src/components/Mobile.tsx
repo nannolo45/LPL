@@ -12,6 +12,7 @@ import { SeriesView } from './SeriesView'
 import { FolderIcon, SeriesTree } from './SeriesTree'
 import { buildTree, targetName, targetOf } from '../seriesnav'
 import { useSeriesOps } from '../seriesops'
+import { DevicesIndicatorPhone } from './DevicesIndicator'
 import { SettingsDialog } from './Shortcuts'
 import { EditOnPhone, useListTitle } from './PhoneEdit'
 import { selectionIds, takeDeepLink } from '../devices'
@@ -20,7 +21,7 @@ import { phoneSpot } from '../phonetabs'
 import { tabTitle } from './Tabs'
 import { NewSeriesSheet } from './NewSeries'
 
-type Tab = 'lib' | 'folders' | 'series' | 'pc'  // 'pc': the devices and their working sets (same as PhoneTab)
+type Tab = 'lib' | 'folders' | 'series'  // (same as PhoneTab; the Devices page is not a tab: `devices` below)
 
 function Sheet({ onClose, title, children }: { onClose: () => void; title: string; children: React.ReactNode }) {
   useBackLayer(true, onClose)  // Back closes it
@@ -161,6 +162,8 @@ export function MobileApp() {
   const [newSeries, setNewSeries] = useState(false)
   const [tree, setTree] = useState(false)  // the series tree, opened from the title of an open folder or series
   const [cameFrom, setCameFrom] = useState<'folders' | 'series' | null>(null)  // a folder or series opened from its overview
+  const [devices, setDevices] = useState(false)  // the Devices page, over whatever was open; Back returns to that
+  const closeDevices = () => { setDevices(false); if (s.view === 'work') s.setView('grid') }
   useEffect(() => { if (photo != null && s.sel.length === 1 && s.sel[0] !== photo) setPhoto(s.sel[0]) }, [s.sel])
   useEffect(() => { if (photo != null) photoShown(s.activeTab, photo) }, [photo])  // the grid shows it when you go back
   // show what the open tab shows (also a tab made or changed on the desktop); a view the phone has no
@@ -168,7 +171,7 @@ export function MobileApp() {
   useEffect(() => {
     const st = s.tabs.find(t => t.id === s.activeTab)?.st  // as stored: the live values may not be applied yet
     const sp = phoneSpot(st?.view ?? s.view, st ? st.boardSeries : s.boardSeries)
-    setTab(sp.tab); setBoard(sp.board); setPhoto(null); setCameFrom(null); setSelecting(false)
+    setTab(sp.tab); setBoard(sp.board); setPhoto(null); setCameFrom(null); setSelecting(false); setDevices(!!sp.devices)
   }, [s.activeTab])
   // the phone's Back steps out of what is open, one thing at a time
   useBackLayer(photo != null, () => setPhoto(null))
@@ -176,6 +179,7 @@ export function MobileApp() {
   // another folder or series was opened from inside (the tree, a lane's menu), or the open one was deleted
   useEffect(() => { if (board != null && s.boardSeries !== board) { setBoard(s.boardSeries); if (s.boardSeries == null) s.setView('grid') } }, [s.boardSeries])
   useBackLayer(cameFrom != null && tab === 'lib', () => goTab(cameFrom!))
+  useBackLayer(devices, closeDevices)
   // a deep link: ?photo=<id> opens the photo's page, ?series=<id> the series' board
   useEffect(() => {
     const d = takeDeepLink()
@@ -189,33 +193,34 @@ export function MobileApp() {
     }
   }, [])
   // "Show in library" (e.g. from the Devices tab): go to the Library, where the grid scrolls to the photo
-  useEffect(() => { if (s.revealId != null) { setTab('lib'); setPhoto(null) } }, [s.revealId])
+  useEffect(() => { if (s.revealId != null) { setTab('lib'); setPhoto(null); setDevices(false) } }, [s.revealId])
   const openPhoto = (p: Photo) => { s.setSel([p.id]); setPhoto(p.id) }
-  const goTab = (t: Tab) => { setTab(t); setPhoto(null); setBoard(null); setCameFrom(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders'); if (t === 'pc' && !s.isLocal) s.setView('work') }
-  const title = board != null ? (targetName(targetOf(board), s.series, s.seriesFolders) || 'Series') : photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : tab === 'series' ? 'Series' : 'Devices'
+  const goTab = (t: Tab) => { setTab(t); setPhoto(null); setBoard(null); setCameFrom(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders'); setDevices(false) }
+  const title = devices ? 'Devices' : board != null ? (targetName(targetOf(board), s.series, s.seriesFolders) || 'Series') : photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : 'Series'
   const fcount = [s.filters.folder, (s.filters.folders || []).length, s.filters.month, s.filters.tag, s.filters.series, s.filters.series_folder, s.filters.edited, (s.filters.lenses || []).length, (s.filters.cameras || []).length, (s.filters.labels || []).length, (s.filters.ratings || []).length].filter(Boolean).length
   return (
     <div className="app">
       <div className="mhead">
-        {(photo != null || board != null) && <button className="btn ghost big" onClick={() => { if (photo != null) setPhoto(null); else { setBoard(null); s.setView('grid') } }} aria-label={board != null && photo == null ? 'Back to all series' : 'Back'}>‹</button>}
-        {board != null && photo == null
+        {(devices || photo != null || board != null) && <button className="btn ghost big" onClick={() => { if (devices) closeDevices(); else if (photo != null) setPhoto(null); else { setBoard(null); s.setView('grid') } }} aria-label={board != null && photo == null ? 'Back to all series' : 'Back'}>‹</button>}
+        {!devices && board != null && photo == null
           ? <button className="mtitle" aria-label={`${title}. Open the series tree to switch folder or series`} onClick={() => setTree(true)}>
               {board < 0 && <span style={{ color: 'var(--accent)', display: 'inline-flex', flex: '0 0 auto' }}><FolderIcon size={20} /></span>}
               <span className="display">{title}</span>
               <span className="mtitle-chev"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg></span>
             </button>
           : <span className="display">{title}</span>}
+        {!s.isLocal && <DevicesIndicatorPhone pressed={devices} onOpen={() => (devices ? closeDevices() : setDevices(true))} />}
         <button className="btn big" style={{ minWidth: 44, fontWeight: 600 }} aria-label={`Tabs: ${s.tabs.length} open`} title="Tabs" onClick={() => setTabsOpen(true)}>{s.tabs.length}</button>
-        {photo == null && !(tab === 'lib' && !board) && <button className="btn ghost big" aria-label="Settings" onClick={() => setSettings(true)}>⚙</button>}
-        {tab === 'series' && photo == null && board == null && <button className="btn big" onClick={() => setNewSeries(true)}>New series</button>}
-        {tab === 'lib' && photo == null && (
+        {(devices || (photo == null && !(tab === 'lib' && !board))) && <button className="btn ghost big" aria-label="Settings" onClick={() => setSettings(true)}>⚙</button>}
+        {!devices && tab === 'series' && photo == null && board == null && <button className="btn big" onClick={() => setNewSeries(true)}>New series</button>}
+        {!devices && tab === 'lib' && photo == null && (
           <>
             <button className={'btn big' + (selecting ? ' primary' : '')} onClick={() => { setSelecting(!selecting); if (selecting) s.setSel([]) }}>{selecting ? 'Done' : 'Select'}</button>
             <button className="btn big" onClick={() => setSheet('sort')}>Sort{fcount ? ` · ${fcount}` : ''}</button>
           </>
         )}
       </div>
-      {tab === 'lib' && photo == null && (
+      {!devices && tab === 'lib' && photo == null && (
         <div className="col" style={{ padding: '0 14px 8px', gap: 8 }}>
           <input className="input" style={{ height: 40, fontSize: 15 }} placeholder="Search filename, folder, tag, lens…" value={s.filters.q || ''} onChange={e => s.patchFilters({ q: e.target.value })} aria-label="Search" />
           <div className="row wrap" style={{ gap: 6 }}>
@@ -229,14 +234,15 @@ export function MobileApp() {
         </div>
       )}
       <div key={s.activeTab} style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        {photo != null ? <PhotoPage id={photo} onBack={() => setPhoto(null)} />
+        {devices ? <WorkView />
+          : photo != null ? <PhotoPage id={photo} onBack={() => setPhoto(null)} />
           : board != null ? <div className="mboard"><SeriesView /></div>
           : tab === 'lib' ? <MobileGrid selecting={selecting} onOpen={openPhoto} />
           : tab === 'folders' ? <FoldersViewMobile onOpen={() => { goTab('lib'); setCameFrom('folders') }} />
           : tab === 'series' ? <SeriesTab board={id => { s.setBoardSeries(id); s.setView('board'); setBoard(id) }} open={id => { s.patchFilters({ series: id > 0 ? id : null, series_folder: id < 0 ? -id : null, folder: null, tag: null, month: null }); s.setSort([{ f: 'custom', d: 'asc' }]); s.setGroup(false); goTab('lib'); setCameFrom('series') }} />
           : <WorkView />}
       </div>
-      {selecting && s.sel.length > 0 && photo == null && (
+      {selecting && s.sel.length > 0 && photo == null && !devices && (
         <div className="row" style={{ padding: '8px 14px', background: '#222226', borderTop: '1px solid var(--line)' }}>
           <span className="grow">{s.sel.length} selected</span>
           <button className="btn primary big" onClick={() => setSheet('edit')}>Rate & tag</button>
@@ -246,7 +252,7 @@ export function MobileApp() {
         </div>
       )}
       <nav className="mtabs">
-        {([['lib', 'Library'], ['folders', 'Folders'], ['series', 'Series'], ['pc', 'Devices']] as [Tab, string][]).map(([t, l]) => (
+        {([['lib', 'Library'], ['folders', 'Folders'], ['series', 'Series']] as [Tab, string][]).map(([t, l]) => (
           <button key={t} className={tab === t ? 'on' : ''} onClick={() => goTab(t)}><i />{l}</button>
         ))}
       </nav>

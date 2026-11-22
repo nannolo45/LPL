@@ -232,6 +232,8 @@ def migrate(c: sqlite3.Connection) -> None:
     for col, decl in (("folder_id", "INTEGER"), ("pos", "INTEGER"), ("color", "TEXT DEFAULT ''"), ("linked", "INTEGER DEFAULT 1")):
         if col not in scols:
             c.execute("ALTER TABLE series ADD COLUMN %s %s" % (col, decl))
+    from . import transfers  # batches sent to devices: its own tables, and agents.caps
+    transfers.migrate(c)
     c.commit()
 
 

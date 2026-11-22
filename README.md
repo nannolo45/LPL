@@ -84,7 +84,7 @@ It installs a systemd user service. darktable from your distribution and the Fla
 
 - Select photos (click, Ctrl-click, Shift-click), then rate (0–5, R = reject), label (F1–F5), tag (right panel). Everything is saved to XMP immediately.
 - **Edit in darktable**: the button, the E key, or double-click on the board. On the phone: "Edit in darktable" queues it; it opens when the PC agent is online.
-- **Working set** tab: what is on your PC right now, sync and release. The agent syncs automatically a few seconds after darktable writes the XMP, and immediately when you leave the image in darkroom.
+- **Devices** (the device icon in the top bar): what is on each device right now, how far a batch is, Stop, sync and release. The agent syncs automatically a few seconds after darktable writes the XMP, and immediately when you leave the image in darkroom.
 - **Phone**: open the same address. Add it to the home screen for an app-like window. From outside your home, use Tailscale (or similar) instead of opening a port.
 
 ### When the same photo is changed in two places
@@ -118,7 +118,7 @@ Folders you never send simply stay PC-only. Removing a folder from the library d
 - Agent log: `%LOCALAPPDATA%\LightPhotoLibrary\agent.log` (Windows), `~/.local/share/lightphotolibrary/agent.log` (Linux). `python lpl_agent.py --status` shows the setup.
 - "bridge script not seen": the agent can still start darktable, but can't send photos to an already-open darktable on Windows. Run `lpl_agent.py --install-bridge` and restart darktable. darktable's own log shows lines starting with `[lpl]`.
 - Server log: `docker logs lightphotolibrary`.
-- Local library not opening: `lpl-agent.exe --status`; the Working set tab on the NAS shows "local library not available" with the reason. `lpl-agent.exe --selftest` checks the bundled parts.
+- Local library not opening: `lpl-agent.exe --status`; Settings → Devices & library → the device's Details on the NAS shows "local library not available" with the reason. `lpl-agent.exe --selftest` checks the bundled parts.
 
 ## Development
 ```

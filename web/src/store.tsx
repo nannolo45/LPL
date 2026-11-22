@@ -192,7 +192,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const tick = () => api.status().then(s => { if (alive) { setStatus({ ...s, received_at: Date.now() / 1000 }); setAgents(s.agents) } }).catch(() => {})
     tick()
     const t = window.setInterval(tick, 4000)
-    return () => { alive = false; window.clearInterval(t) }
+    window.addEventListener('lpl-refresh-status', tick)  // now, not at the next round (devicesApi.refreshStatus)
+    return () => { alive = false; window.clearInterval(t); window.removeEventListener('lpl-refresh-status', tick) }
   }, [])
 
   const mergePhotos = useCallback((ps: Photo[]) => {

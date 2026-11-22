@@ -27,12 +27,17 @@ export interface Settings {
   boardStrip: boolean
   boardStripSort: 'reading' | 'taken' | 'name' | 'rating' | 'label' | 'folder'
   boardStripDesc: boolean
+  /** photos sent to a device are opened in darktable when they have arrived (the server passes it on with the job) */
+  devicesAutoOpen: boolean
+  /** the top bar's devices indicator shows the time left while photos are sent */
+  devicesEtaInBar: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   boardPan: 'both', boardWheel: 'scroll', boardTouch: 'pan', boardPhotoDouble: 'darktable',
   boardNumbers: true, boardSnap: false, boardNoteColor: '#f5d76e', boardFrameColor: '', boardZoom: 100, boardZoomPhone: 50,
   boardStrip: true, boardStripSort: 'reading', boardStripDesc: false,
+  devicesAutoOpen: true, devicesEtaInBar: true,
 }
 
 let current: Settings = (() => {
