@@ -639,6 +639,41 @@ def three_frames(c, ids):
     return sid
 
 
+def test_reorder_frame_lanes(lib):
+    c, ids = lib
+    sid = three_frames(c, ids)
+    st = ok(c.get("/api/series/%d/strip" % sid))
+    assert [la["label"] for la in st["lanes"]] == ["A", "B", "C", "Outside the frames"]
+    kA, kB, kC = [la["key"] for la in st["lanes"][:3]]
+    # C to the front
+    st = ok(c.post("/api/series/%d/strip/lanes" % sid, json={"lane": kC, "before": kA}))
+    assert [la["label"] for la in st["lanes"]] == ["C", "A", "B", "Outside the frames"]
+    assert [[p["id"] for p in la["photos"]] for la in st["lanes"]] == [ids[32:34], [ids[30]], [ids[31]], ids[34:36]]
+    bd = ok(c.get("/api/series/%d/board" % sid))
+    assert [p["num"] for p in sorted(bd["items"], key=lambda p: p["num"])] == list(range(1, 7))
+    assert {p["id"]: p["num"] for p in bd["items"]}[ids[32]] == 1
+    assert_tidy_single(bd)
+    q = ok(c.post("/api/photos/query", json={"filters": {"series": sid}, "sort": [{"f": "custom", "d": "asc"}]}))
+    assert [p["id"] for p in q["items"]][:4] == [ids[32], ids[33], ids[30], ids[31]]
+    # A to the end of the framed lanes
+    st = ok(c.post("/api/series/%d/strip/lanes" % sid, json={"lane": kA, "before": "out"}))
+    assert [la["label"] for la in st["lanes"]] == ["C", "B", "A", "Outside the frames"]
+    assert_tidy_single(ok(c.get("/api/series/%d/board" % sid)))
+    # unlinked: no frame lanes to move
+    ok(c.post("/api/series/%d/link" % sid, json={"linked": False, "mode": "none"}))
+    assert c.post("/api/series/%d/strip/lanes" % sid, json={"lane": kA, "before": None}).status_code == 409
+
+
+def assert_tidy_single(bd):
+    frs = bd["frames"]
+    for i, a in enumerate(frs):
+        for b in frs[i + 1:]:
+            assert not overlap((a["x"], a["y"], a["w"], a["h"]), (b["x"], b["y"], b["w"], b["h"])), (a["label"], b["label"])
+    for p in bd["items"]:
+        x, y, w, h = rect(p)
+        assert any(f["x"] <= x and x + w <= f["x"] + f["w"] and f["y"] <= y and y + h <= f["y"] + f["h"] for f in frs) or p["y"] >= 1000
+
+
 def test_notes_move_with_frames_and_get_out_of_the_way(lib):
     c, ids = lib
     sid = three_frames(c, ids)

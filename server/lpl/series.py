@@ -1164,6 +1164,89 @@ def series_strip_move(sid: int, body: Dict[str, Any] = Body(...)):
     return series_strip(sid)
 
 
+def _frame_lane_order(b: "Board") -> List[int]:
+    return [f["id"] for f in frames_sorted(b.frames) if not f["maybe"]]
+
+
+def move_frame_lane(c, sid: int, fid: int, before: Optional[int]) -> None:
+    """Reading order of a linked single series: put frame `fid` in front of frame `before` (None: after the last).
+    The frame goes to where `before` lies, with its photos, notes and free arrow ends; `before` and everything after it
+    in reading order (and what is loose below) moves down by the frame's height, so nothing overlaps."""
+    b = Board(c, "s", sid)
+    fr = frames_sorted(b.frames)
+    own = {i: owner(it, fr) for i, it in b.items.items()}  # who holds what, before anything moves
+    shapes = b.load_shapes()
+    sown = b.shape_owners(shapes, fr)
+    F = next((f for f in b.frames if f["id"] == fid and not f["maybe"]), None)
+    if F is None:
+        raise HTTPException(400, "that frame no longer exists")
+    order = [f for f in fr if not f["maybe"] and f is not F]
+    T = next((f for f in order if f["id"] == before), None) if before is not None else None
+    if before is not None and T is None:
+        raise HTTPException(400, "that frame no longer exists")
+    want = [f["id"] for f in order]
+    want.insert(want.index(T["id"]) if T else len(want), fid)
+    if T:
+        tx, ty = T["x"], T["y"]
+        later = {id(f) for f in order[order.index(T):]}
+    else:
+        tx, ty = F["x"], max([f["y"] + f["h"] for f in order] + [0]) + 40
+        later = set()
+    dy = F["h"] + 40
+
+    def shift(g, ddx, ddy):  # a frame with its photos, notes and free arrow ends
+        g["x"] += ddx
+        g["y"] += ddy
+        c.execute("UPDATE series_frames SET x=?, y=? WHERE id=?", (g["x"], g["y"], g["id"]))
+        for i, it in list(b.items.items()):
+            if own.get(i) is g:
+                b.set_pos(i, it["x"] + ddx, it["y"] + ddy)
+        for obj, pt, o in sown:
+            if o is g:
+                obj["x"] = pt["x"] = pt["x"] + ddx
+                obj["y"] = pt["y"] = pt["y"] + ddy
+
+    for g in b.frames:  # make the gap (maybe-frames and loose things at or below it move too)
+        if g is not F and (id(g) in later or (g["maybe"] and g["y"] >= ty - 1)):
+            shift(g, 0, dy)
+    for i, it in list(b.items.items()):
+        if own.get(i) is None and it["y"] >= ty - 1:
+            b.set_pos(i, it["x"], it["y"] + dy)
+    for obj, pt, o in sown:
+        if o is None and pt["y"] >= ty - 1:
+            obj["y"] = pt["y"] = pt["y"] + dy
+    shift(F, tx - F["x"], ty - F["y"])
+    if _frame_lane_order(b) != want:  # a band boundary got in the way: stack the frames under each other, in the wanted order
+        byid = {f["id"]: f for f in b.frames}
+        y = min(f["y"] for f in b.frames if not f["maybe"])
+        for k in want:
+            shift(byid[k], 0, y - byid[k]["y"])
+            y += byid[k]["h"] + 40
+    if sown:
+        b.save_shapes(shapes)
+
+
+@router.post("/api/series/{sid}/strip/lanes")
+def series_strip_lanes(sid: int, body: Dict[str, Any] = Body(...)):
+    """Reorder the frame lanes of a linked single series: lane `lane` ("f<frame id>") goes in front of lane `before`
+    (null: after the last framed lane). The frame moves on the board to the matching place, with its photos."""
+    def fid_of(k):
+        k = str(k)
+        if not k.startswith("f") or not k[1:].isdigit():
+            raise HTTPException(400, "not a frame lane")
+        return int(k[1:])
+    with db.write_lock:
+        c = db.conn()
+        s = api._series(sid)
+        if not is_linked(s):
+            raise HTTPException(409, "this series has no frames in its strip (its board is not linked)")
+        before = body.get("before")
+        move_frame_lane(c, sid, fid_of(body.get("lane")), fid_of(before) if before not in (None, "", "out") else None)
+        sync_series(c, sid)
+        c.commit()
+    return series_strip(sid)
+
+
 # ---------------------------------------------------------------- link / unlink
 def folder_link_state(c, fid: int) -> dict:
     """How far a folder's board and its strip are apart: what each way of linking them again would do."""

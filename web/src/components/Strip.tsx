@@ -208,6 +208,8 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries }: {
       const secs = sections()
       let slot = secs.length, top = 0
       for (let i = 0; i < secs.length; i++) { const b = secs[i].getBoundingClientRect(); if (d.y < b.top + b.height / 2) { slot = i; top = b.top - 6; break } top = b.bottom + 4 }
+      const lim = isFolder ? secs.length : state.current.lanes.filter(l => l.frame && !l.maybe).length  // a series' frames come before "Outside" and the maybes
+      if (slot > lim && lim > 0) { slot = lim; top = secs[lim - 1].getBoundingClientRect().bottom + 4 }
       d.drop = { lane: '', slot }
       if (m) { if (m.className !== 'strip-mark h') m.className = 'strip-mark h'; m.style.transform = `translate(${rr.left + 12}px, ${top}px)`; m.style.width = rr.width - 24 + 'px'; m.style.height = ''; m.style.display = 'block' }
     } else {
@@ -304,8 +306,15 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries }: {
       const rest = keys.filter(k => k !== d.from)
       const at = d.drop.slot > i ? d.drop.slot - 1 : d.drop.slot
       rest.splice(at, 0, d.from)
-      if (rest.every((k, j) => k === keys[j]) || !folder || !data) return
+      if (rest.every((k, j) => k === keys[j]) || !data) return
       const order = rest.map(k => st.lanes.find(l => l.key === k)!)
+      if (!folder) {  // the frames of a single series: the server moves the frame on the board to the matching place
+        const next = order.find((l, j) => j > at && l.frame && !l.maybe)
+        const id = ++req.current
+        setData({ ...data, lanes: renumber(order, false) })
+        api.seriesLanes(target.id, d.from, next ? next.key : null).then(r => { if (id === req.current) setData(r); told() }).catch(e => { s.toast(e.message); load() })
+        return
+      }
       setData({ ...data, lanes: order })
       api.seriesOrder(folder.id, order.map(l => l.series!.id)).then(() => { s.reloadSeries(); load(); told() }).catch(e => { s.toast(e.message); load() })
       return
@@ -446,7 +455,7 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries }: {
       {lanes.map(l => {
         const shown = shownOf.get(l.key) || []
         return <LaneRow key={l.key} lane={l} shown={shown} selKey={shown.filter(p => sel.has(p.id)).map(p => p.id).join(',')} folder={isFolder} linked={linked}
-          canReorder={isFolder && lanes.length > 1} phone={phone} menu={laneMenu(l)} />
+          canReorder={isFolder ? lanes.length > 1 : linked && l.frame && !l.maybe && lanes.filter(x => x.frame && !x.maybe).length > 1} phone={phone} menu={laneMenu(l)} />
       })}
       {data && isFolder && <button type="button" className="strip-new" onClick={onNewSeries}>+ New series in {name}</button>}
       {data && !isFolder && !all.length && <div className="muted" style={{ padding: '6px 2px' }}>No photos in this series yet. “+ Add photos” brings them in.</div>}
@@ -454,10 +463,10 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries }: {
         <div className="strip-hint">
           {phone
             ? <><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" /></svg>
-                <span>Press and hold a photo, then drag it to a new place or another lane.{isFolder && lanes.length > 1 ? ' Hold a lane handle to move the series.' : ''}</span></>
+                <span>Press and hold a photo, then drag it to a new place or another lane.{isFolder && lanes.length > 1 ? ' Hold a lane handle to move the series.' : linked && lanes.filter(l => l.frame && !l.maybe).length > 1 ? ' Hold a frame handle to move the frame.' : ''}</span></>
             : isFolder
               ? <>Drag a photo to change its place, or drop it in another lane to move it to that series. Drag a lane by its handle to reorder the series. {linked ? 'The board follows.' : 'The board is not linked: it stays as it is.'}</>
-              : <>Drag a photo to change its place{lanes.length > 1 ? ', or drop it in another lane to move it to that frame' : ''}. Ctrl or Shift selects several. {linked ? 'The board follows.' : data.folder ? `The board of ${data.folder.name} follows if it is linked.` : 'The board is not linked: it stays as it is.'}</>}
+              : <>Drag a photo to change its place{lanes.length > 1 ? ', or drop it in another lane to move it to that frame' : ''}. {linked && lanes.filter(l => l.frame && !l.maybe).length > 1 ? 'Drag a frame by its handle to change the reading order. ' : ''}Ctrl or Shift selects several. {linked ? 'The board follows.' : data.folder ? `The board of ${data.folder.name} follows if it is linked.` : 'The board is not linked: it stays as it is.'}</>}
         </div>
       )}
       {selHere.length > 0 && !lifted && (

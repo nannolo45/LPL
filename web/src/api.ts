@@ -208,6 +208,7 @@ export const api = {
   tshapesSave: (t: Target, shapes: BoardShape[]) => call<{ ok: boolean }>('PUT', `${tbase(t)}/shapes`, { shapes }),
   tmatch: (t: Target, filters: Filters, sort?: SortLevel[]) => call<MatchResult>('POST', `${tbase(t)}/match`, { filters, sort }),
   taddMatching: (t: Target, filters: Filters, target: AddTarget, sort?: SortLevel[]) => call<{ added: number }>('POST', `${tbase(t)}/add-matching`, { filters, target, sort }),
+  seriesLanes: (id: number, lane: string, before: string | null) => call<StripData>('POST', `/api/series/${id}/strip/lanes`, { lane, before }),
   tstrip: (t: Target) => call<StripData>('GET', `${tbase(t)}/strip`),
   /** photos (in the order they should stand) into a lane, in front of `before` (null: at its end) */
   tstripMove: (t: Target, ids: number[], lane: Lane, before: number | null) =>
