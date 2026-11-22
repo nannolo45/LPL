@@ -12,20 +12,23 @@ export const keyOf = (t: Target): number => (t.kind === 'folder' ? -t.id : t.id)
 const byPos = <T extends { pos?: number | null; name: string }>(a: T, b: T) =>
   (a.pos ?? 1e9) - (b.pos ?? 1e9) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
 
-export interface Tree { folders: { folder: SeriesFolder; series: SeriesInfo[] }[]; top: SeriesInfo[] }
+export type TreeEntry = { kind: 'folder'; folder: SeriesFolder; series: SeriesInfo[] } | { kind: 'series'; series: SeriesInfo }
+export interface Tree { folders: { folder: SeriesFolder; series: SeriesInfo[] }[]; top: SeriesInfo[]; entries: TreeEntry[] }
 /** Folders (each with its series in order), then the series at the top level. */
 export function buildTree(series: SeriesInfo[], folders: SeriesFolder[]): Tree {
   const known = new Set(folders.map(f => f.id))
-  return {
-    folders: [...folders].sort(byPos).map(folder => ({ folder, series: series.filter(x => x.folder_id === folder.id).sort(byPos) })),
-    top: series.filter(x => x.folder_id == null || !known.has(x.folder_id)).sort(byPos),
-  }
+  const fs = [...folders].sort(byPos).map(folder => ({ folder, series: series.filter(x => x.folder_id === folder.id).sort(byPos) }))
+  const top = series.filter(x => x.folder_id == null || !known.has(x.folder_id)).sort(byPos)
+  // folders and top-level series share one order (the server's pos); a folder comes first on a tie
+  const entries: TreeEntry[] = [...fs.map(f => ({ kind: 'folder' as const, ...f })), ...top.map(x => ({ kind: 'series' as const, series: x }))]
+    .sort((a, b) => ((a.kind === 'folder' ? a.folder.pos : a.series.pos) ?? 1e9) - ((b.kind === 'folder' ? b.folder.pos : b.series.pos) ?? 1e9) || (a.kind === b.kind ? 0 : a.kind === 'folder' ? -1 : 1))
+  return { folders: fs, top, entries }
 }
 
 /** What to show when a tab has nothing (valid) chosen: the first folder, else the first series. */
 export function firstTarget(tree: Tree): Target | null {
-  if (tree.folders.length) return { kind: 'folder', id: tree.folders[0].folder.id }
-  return tree.top.length ? { kind: 'series', id: tree.top[0].id } : null
+  const e = tree.entries[0]
+  return !e ? null : e.kind === 'folder' ? { kind: 'folder', id: e.folder.id } : { kind: 'series', id: e.series.id }
 }
 
 /** The chosen target if it still exists, else the first one. */

@@ -53,6 +53,22 @@ def series_in(c, fid: Optional[int]) -> list:
     return c.execute("SELECT * FROM series WHERE folder_id=? ORDER BY pos NULLS LAST, name COLLATE NOCASE", (fid,)).fetchall()
 
 
+def top_entries(c) -> list:
+    """The top-level entries, folders and series in one order: [("f", id) | ("s", id)] by pos (a folder first on a tie)."""
+    rows = [(r["pos"] if r["pos"] is not None else 10 ** 9, 0, r["name"].lower(), "f", r["id"]) for r in c.execute("SELECT id, name, pos FROM series_folders")]
+    rows += [(r["pos"] if r["pos"] is not None else 10 ** 9, 1, r["name"].lower(), "s", r["id"]) for r in c.execute("SELECT id, name, pos FROM series WHERE folder_id IS NULL")]
+    return [(k, i) for _, _, _, k, i in sorted(rows)]
+
+
+def write_top(c, entries: list) -> None:
+    for n, (k, i) in enumerate(entries):
+        c.execute("UPDATE %s SET pos=? WHERE id=?" % ("series_folders" if k == "f" else "series"), (n + 1, i))
+
+
+def next_top_pos(c) -> int:
+    return max(c.execute("SELECT MAX(pos) m FROM series_folders").fetchone()["m"] or 0, c.execute("SELECT MAX(pos) m FROM series WHERE folder_id IS NULL").fetchone()["m"] or 0) + 1
+
+
 def tag_of(s, folder_name: Optional[str] = None) -> str:
     """The tag that mirrors a series for darktable: series|<name>, or series|<folder>|<name> inside a folder."""
     fid = s["folder_id"]
@@ -518,7 +534,7 @@ def create_series(body: Dict[str, Any]) -> dict:
         if fid is None and c.execute("SELECT 1 FROM series_folders WHERE name=?", (name,)).fetchone():
             raise HTTPException(409, "a folder has this name")
         if fid is None:
-            pos = (c.execute("SELECT MAX(pos) m FROM series WHERE folder_id IS NULL").fetchone()["m"] or 0) + 1
+            pos = next_top_pos(c)
             color = str(body.get("color") or "")[:20]
         else:
             n = c.execute("SELECT COUNT(*) n FROM series WHERE folder_id=?", (fid,)).fetchone()["n"]
@@ -680,8 +696,7 @@ def folder_create(body: Dict[str, Any] = Body(...)):
             raise HTTPException(409, "a folder with this name exists")
         if c.execute("SELECT 1 FROM series WHERE name=? AND folder_id IS NULL", (name,)).fetchone():
             raise HTTPException(409, "a series has this name")
-        pos = (c.execute("SELECT MAX(pos) m FROM series_folders").fetchone()["m"] or 0) + 1
-        fid = c.execute("INSERT INTO series_folders(name, pos, linked, created) VALUES(?,?,1,?)", (name, pos, time.time())).lastrowid
+        fid = c.execute("INSERT INTO series_folders(name, pos, linked, created) VALUES(?,?,1,?)", (name, next_top_pos(c), time.time())).lastrowid
         c.commit()
     return {"id": fid}
 
@@ -719,7 +734,7 @@ def folder_delete(fid: int):
         for s in sers:
             if c.execute("SELECT 1 FROM series_folders WHERE name=? AND id<>?", (s["name"], fid)).fetchone():
                 raise HTTPException(409, "the series “%s” has the name of another folder: rename one of them first" % s["name"])
-        pos = c.execute("SELECT MAX(pos) m FROM series WHERE folder_id IS NULL").fetchone()["m"] or 0
+        pos = next_top_pos(c) - 1
         for k, s in enumerate(sers):
             c.execute("UPDATE series SET folder_id=NULL, pos=?, linked=0 WHERE id=?", (pos + k + 1, s["id"]))
         for t in ("folder_frames", "folder_items", "folder_shapes"):
@@ -746,8 +761,32 @@ def series_order(body: Dict[str, Any] = Body(...)):
         c = db.conn()
         have = [s["id"] for s in series_in(c, int(fid) if fid else None)]
         ids = [int(i) for i in body.get("ids") or [] if int(i) in have]
+        if not fid:  # the top level shares its order with the folders: the series take the series' places, folders stay
+            order = ids + [i for i in have if i not in ids]
+            it = iter(order)
+            write_top(c, [(k, next(it)) if k == "s" else (k, i) for k, i in top_entries(c)])
+            c.commit()
+            return {"ok": True}
         for k, sid in enumerate(ids + [i for i in have if i not in ids]):
             c.execute("UPDATE series SET pos=? WHERE id=?", (k + 1, sid))
+        c.commit()
+    return {"ok": True}
+
+
+@router.post("/api/series/top-order")
+def series_top_order(body: Dict[str, Any] = Body(...)):
+    """The order of the top level, folders and series together: entries [{"folder": id} | {"series": id}], first to
+    last (what is not named follows in its present order). The same on every device."""
+    with db.write_lock:
+        c = db.conn()
+        cur = top_entries(c)
+        have = set(cur)
+        want: list = []
+        for e in body.get("entries") or []:
+            k = ("f", int(e["folder"])) if isinstance(e, dict) and e.get("folder") is not None else ("s", int(e["series"])) if isinstance(e, dict) and e.get("series") is not None else None
+            if k in have and k not in want:
+                want.append(k)
+        write_top(c, want + [k for k in cur if k not in want])
         c.commit()
     return {"ok": True}
 
@@ -783,11 +822,18 @@ def series_move(sid: int, body: Dict[str, Any] = Body(...)):
             # in a folder the order comes from the folder; a series that leaves one keeps its order and stays unlinked
             c.execute("UPDATE series SET folder_id=?, linked=0, color=?, pos=NULL WHERE id=?", (fid, color, sid))
             write_order(c, sid, order_of(c, sid))  # every photo gets a place (a "maybe" pile had none)
-        order = [x["id"] for x in series_in(c, fid) if x["id"] != sid]
-        k = order.index(int(before)) if before and int(before) in order else len(order)
-        order.insert(k, sid)
-        for i, x in enumerate(order):
-            c.execute("UPDATE series SET pos=? WHERE id=?", (i + 1, x))
+        if fid is None:  # the top level: folders and series share one order ("before_folder": in front of that folder)
+            order = [e for e in top_entries(c) if e != ("s", sid)]
+            bf = body.get("before_folder")
+            k = order.index(("f", int(bf))) if bf and ("f", int(bf)) in order else order.index(("s", int(before))) if before and ("s", int(before)) in order else len(order)
+            order.insert(k, ("s", sid))
+            write_top(c, order)
+        else:
+            order = [x["id"] for x in series_in(c, fid) if x["id"] != sid]
+            k = order.index(int(before)) if before and int(before) in order else len(order)
+            order.insert(k, sid)
+            for i, x in enumerate(order):
+                c.execute("UPDATE series SET pos=? WHERE id=?", (i + 1, x))
         if target is not None and target["linked"] and fid != s["folder_id"]:
             ensure_frames(c, fid, Board(c, "f", fid))
         c.commit()
@@ -1431,11 +1477,10 @@ def import_place(c, sid: int, se: dict) -> None:
         if r:
             fid = r["id"]
         elif not c.execute("SELECT 1 FROM series WHERE name=? AND folder_id IS NULL AND id<>?", (fname, sid)).fetchone():
-            pos = (c.execute("SELECT MAX(pos) m FROM series_folders").fetchone()["m"] or 0) + 1
             fid = c.execute("INSERT INTO series_folders(name, pos, linked, created) VALUES(?,?,?,?)",
-                            (fname, pos, int(bool(se.get("folder_linked", True))), time.time())).lastrowid
+                            (fname, next_top_pos(c), int(bool(se.get("folder_linked", True))), time.time())).lastrowid
     if fid is None:
-        pos = (c.execute("SELECT MAX(pos) m FROM series WHERE folder_id IS NULL").fetchone()["m"] or 0) + 1
+        pos = next_top_pos(c)
         linked = 0 if fname else int(bool(se.get("linked", True)))
     else:
         pos = se.get("pos") or (c.execute("SELECT MAX(pos) m FROM series WHERE folder_id=?", (fid,)).fetchone()["m"] or 0) + 1

@@ -28,7 +28,7 @@ test('tree: folders with their series in their order, then the top level', () =>
   assert.equal(firstTarget(buildTree([], [])), null)
   assert.deepEqual(resolveTarget(-11, series, [F(11, 'Sardegna'), F(10, 'Grecia')]), { kind: 'folder', id: 11 })
   assert.deepEqual(resolveTarget(4, series, []), { kind: 'series', id: 4 })
-  assert.deepEqual(resolveTarget(-5, series, [F(10, 'Grecia')]), { kind: 'folder', id: 10 })  // a folder that is gone: the first one
+  assert.deepEqual(resolveTarget(-5, series, [F(10, 'Grecia', 0)]), { kind: 'folder', id: 10 })  // a folder that is gone: the first one
   assert.equal(targetName({ kind: 'folder', id: 10 }, series, [F(10, 'Grecia')]), 'Grecia')
   assert.equal(targetName({ kind: 'series', id: 2 }, series, []), 'Atene')
   assert.equal(num2(6), '06'); assert.equal(num2(14), '14'); assert.equal(num2(null), '')
@@ -73,4 +73,10 @@ test('strip: the lanes right after a drop, and their numbers', () => {
   assert.equal(numAtSlot([P(1), P(2), P(3), P(4), P(5), P(6)], [6], 2), 3)  // "06 -> 03"
   assert.equal(numAtSlot([P(1), P(2, { hidden: 1 }), P(3)], [9], 3), 3)
   assert.equal(numAtSlot([P(1), P(2), P(3)], [1], 3), 3)                    // dragging the first to the end of three
+})
+
+test('tree: folders and top-level series share one order', () => {
+  const t = buildTree([S(1, 'Solo', null, 1), S(2, 'In', 10, 1), S(3, 'Last', null, 4)], [F(10, 'Grecia', 2), F(11, 'Empty', 3)])
+  assert.deepEqual(t.entries.map(e => (e.kind === 'folder' ? 'f' + e.folder.id : 's' + e.series.id)), ['s1', 'f10', 'f11', 's3'])
+  assert.deepEqual(firstTarget(t), { kind: 'series', id: 1 })
 })

@@ -232,6 +232,16 @@ def migrate(c: sqlite3.Connection) -> None:
     for col, decl in (("folder_id", "INTEGER"), ("pos", "INTEGER"), ("color", "TEXT DEFAULT ''"), ("linked", "INTEGER DEFAULT 1")):
         if col not in scols:
             c.execute("ALTER TABLE series ADD COLUMN %s %s" % (col, decl))
+    # the top level of the series tree has one order for folders and series together (series_folders.pos and series.pos
+    # of the top-level series share it). Older libraries had two numberings (folders first, then series): where
+    # they collide, number them again in that order. Nothing is rewritten once the numbers are distinct.
+    fs = c.execute("SELECT id, pos FROM series_folders ORDER BY pos NULLS LAST, name COLLATE NOCASE").fetchall()
+    ss = c.execute("SELECT id, pos FROM series WHERE folder_id IS NULL ORDER BY pos NULLS LAST, name COLLATE NOCASE").fetchall()
+    if {r[1] for r in fs} & {r[1] for r in ss}:
+        for n, r in enumerate(fs):
+            c.execute("UPDATE series_folders SET pos=? WHERE id=?", (n + 1, r[0]))
+        for n, r in enumerate(ss):
+            c.execute("UPDATE series SET pos=? WHERE id=?", (len(fs) + n + 1, r[0]))
     from . import transfers  # batches sent to devices: its own tables, and agents.caps
     transfers.migrate(c)
     c.commit()

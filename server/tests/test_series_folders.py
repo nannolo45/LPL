@@ -724,3 +724,43 @@ def test_notes_move_on_a_folder_board(lib):
     assert grown > 0
     sh = {x["key"]: x for x in bd["shapes"]}
     assert sh["in"]["y"] == inside["y"] and sh["lo"]["y"] == below["y"] + grown
+
+
+def test_manual_order_of_top_level_entries(lib):
+    c, ids = lib
+    f1, f2 = uniq("Folder A"), uniq("Folder B")
+    fa = ok(c.post("/api/series-folders", json={"name": f1}))["id"]
+    fb = ok(c.post("/api/series-folders", json={"name": f2}))["id"]
+    s1 = ok(c.post("/api/series", json={"name": uniq("Solo"), "ids": ids[0:2]}))["id"]
+    s2 = ok(c.post("/api/series", json={"name": uniq("Solo"), "ids": ids[2:4]}))["id"]
+
+    def top():
+        d = ok(c.get("/api/series"))
+        rows = [("f", f["id"], f["pos"]) for f in d["folders"]] + [("s", s["id"], s["pos"]) for s in d["series"] if s["folder_id"] is None]
+        return [(k, i) for k, i, _ in sorted(rows, key=lambda r: r[2])]
+    assert top() == [("f", fa), ("f", fb), ("s", s1), ("s", s2)]
+    ok(c.post("/api/series/top-order", json={"entries": [{"series": s1}, {"folder": fb}, {"series": s2}, {"folder": fa}]}))
+    assert top() == [("s", s1), ("f", fb), ("s", s2), ("f", fa)]
+    # a series moved before a folder, and out of a folder to a place among the top-level entries
+    ok(c.post("/api/series/%d/move" % s2, json={"folder_id": None, "before_folder": fb}))
+    assert top() == [("s", s1), ("s", s2), ("f", fb), ("f", fa)]
+    ok(c.post("/api/series/%d/move" % s1, json={"folder_id": fa}))
+    ok(c.post("/api/series/%d/move" % s1, json={"folder_id": None, "before": s2}))
+    assert top() == [("s", s1), ("s", s2), ("f", fb), ("f", fa)]
+    # the old call (series among themselves) leaves the folders where they are
+    ok(c.post("/api/series/order", json={"folder_id": None, "ids": [s2, s1]}))
+    assert top() == [("s", s2), ("s", s1), ("f", fb), ("f", fa)]
+    # new things come last
+    f3 = ok(c.post("/api/series-folders", json={"name": uniq("Folder C")}))["id"]
+    assert top()[-1] == ("f", f3)
+    # an old library (folders first, then series, two separate numberings) keeps that look once
+    from lpl import db
+    cn = db.conn()
+    for n, (k, i) in enumerate([e for e in top() if e[0] == "f"]):
+        cn.execute("UPDATE series_folders SET pos=? WHERE id=?", (n + 1, i))
+    cn.execute("UPDATE series SET pos=1 WHERE id=?", (s1,))
+    cn.execute("UPDATE series SET pos=2 WHERE id=?", (s2,))
+    cn.commit()
+    db.migrate(cn)
+    t = top()
+    assert [k for k, _ in t] == ["f", "f", "f", "s", "s"] and t[-2:] == [("s", s1), ("s", s2)]
