@@ -142,7 +142,7 @@ def start_scan(body: Dict[str, Any] = Body(default={})):
 def photos_query(body: Dict[str, Any] = Body(...)):
     filters = body.get("filters") or {}
     where, args, join = query.build_where(filters)
-    order = query.build_order(body.get("sort") or [], body.get("seed") or 1, bool(filters.get("series")))
+    order = query.build_order(body.get("sort") or [], body.get("seed") or 1, bool(filters.get("series") or filters.get("series_folder")))
     limit = max(1, min(int(body.get("limit") or 200), 2000))
     offset = max(0, int(body.get("offset") or 0))
     c = db.conn()
@@ -157,7 +157,7 @@ def photos_ids(body: Dict[str, Any] = Body(...)):
     """All ids matching filters (for 'select all')."""
     filters = body.get("filters") or {}
     where, args, join = query.build_where(filters)
-    order = query.build_order(body.get("sort") or [], body.get("seed") or 1, bool(filters.get("series")))
+    order = query.build_order(body.get("sort") or [], body.get("seed") or 1, bool(filters.get("series") or filters.get("series_folder")))
     rows = db.conn().execute("SELECT p.id FROM photos p%s WHERE %s ORDER BY %s LIMIT 20000" % (join, where, order), args).fetchall()
     return {"ids": [r["id"] for r in rows]}
 
@@ -168,7 +168,7 @@ def photos_position(body: Dict[str, Any] = Body(...)):
     filters = body.get("filters") or {}
     pid = int(body.get("id"))
     where, args, join = query.build_where(filters)
-    order = query.build_order(body.get("sort") or [], body.get("seed") or 1, bool(filters.get("series")))
+    order = query.build_order(body.get("sort") or [], body.get("seed") or 1, bool(filters.get("series") or filters.get("series_folder")))
     r = db.conn().execute(
         "SELECT n FROM (SELECT p.id, ROW_NUMBER() OVER (ORDER BY %s) - 1 AS n FROM photos p%s WHERE %s) WHERE id=?" % (order, join, where),
         args + [pid]).fetchone()
@@ -186,8 +186,7 @@ def photo_detail(pid: int):
     if not items:
         raise HTTPException(404)
     d = items[0]
-    d["series"] = [dict(r) for r in db.conn().execute(
-        "SELECT s.id, s.name FROM series_items si JOIN series s ON s.id=si.series_id WHERE si.photo_id=?", (pid,)).fetchall()]
+    d["series"] = series_mod.photo_series(pid)
     d["last_edit"] = edits.last(pid)
     return d
 
@@ -354,7 +353,7 @@ def folders_exclude(body: Dict[str, Any] = Body(...)):
             for i in range(0, len(ids), 500):
                 chunk = ids[i:i + 500]
                 qs = ",".join("?" * len(chunk))
-                for t in ("photo_labels", "photo_tags", "series_items", "sent"):
+                for t in ("photo_labels", "photo_tags", "series_items", "folder_items", "sent"):
                     c.execute("DELETE FROM %s WHERE photo_id IN (%s)" % (t, qs), chunk)
                 c.execute("DELETE FROM photos WHERE id IN (%s)" % qs, chunk)
             removed = len(ids)
@@ -571,42 +570,19 @@ def series_list():
         items = c.execute("SELECT si.photo_id id, p.preview_ver v FROM series_items si JOIN photos p ON p.id=si.photo_id "
                           "WHERE si.series_id=? ORDER BY si.ord NULLS LAST LIMIT 8", (s["id"],)).fetchall()
         n = c.execute("SELECT COUNT(*) n FROM series_items WHERE series_id=?", (s["id"],)).fetchone()["n"]
-        out.append({"id": s["id"], "name": s["name"], "count": n, "covers": [dict(i) for i in items]})
-    return {"series": out}
+        out.append({"id": s["id"], "name": s["name"], "count": n, "covers": [dict(i) for i in items], **series_mod.list_extra(s)})
+    return {"series": out, "folders": series_mod.folders_list()}
 
 
 @app.post("/api/series")
 def series_create(body: Dict[str, Any] = Body(...)):
-    name = (body.get("name") or "").strip().replace("|", "/")
-    if not name:
-        raise HTTPException(400, "name required")
-    with db.write_lock:
-        c = db.conn()
-        try:
-            cur = c.execute("INSERT INTO series(name, created) VALUES(?,?)", (name, time.time()))
-        except Exception:
-            raise HTTPException(409, "a series with this name exists")
-        sid = cur.lastrowid
-        c.execute("INSERT INTO series_frames(series_id,label,x,y,w,h,maybe) VALUES(?,?,?,?,?,?,0)", (sid, "01", 40, 40, 900, 320))
-        c.commit()
-    ids = [int(i) for i in body.get("ids") or []]
-    if ids:
-        series_add(sid, {"ids": ids})
-    return {"id": sid}
+    """name, ids (photos to start with), folder_id (a series folder to put it in)."""
+    return series_mod.create_series(body)
 
 
 @app.patch("/api/series/{sid}")
 def series_rename(sid: int, body: Dict[str, Any] = Body(...)):
-    s = _series(sid)
-    name = (body.get("name") or "").strip().replace("|", "/")
-    if not name or name == s["name"]:
-        return {"ok": True}
-    with db.write_lock:
-        db.conn().execute("UPDATE series SET name=? WHERE id=?", (name, sid))
-        db.conn().commit()
-    if config.write_series_tags:
-        tag_rename({"old": SERIES_TAG + s["name"], "new": SERIES_TAG + name})
-    return {"ok": True}
+    return series_mod.rename_series(sid, body.get("name"))
 
 
 @app.delete("/api/series/{sid}")
@@ -614,15 +590,16 @@ def series_delete(sid: int):
     s = _series(sid)
     ids = [r["photo_id"] for r in db.conn().execute("SELECT photo_id FROM series_items WHERE series_id=?", (sid,)).fetchall()]
     if ids and config.write_series_tags:
-        set_meta({"ids": ids, "detach": [SERIES_TAG + s["name"]]})
+        set_meta({"ids": ids, "detach": [series_mod.tag_of(s)]})
     with db.write_lock:
         c = db.conn()
+        series_mod.on_delete(c, s)
         c.execute("DELETE FROM series_items WHERE series_id=?", (sid,))
         c.execute("DELETE FROM series_frames WHERE series_id=?", (sid,))
         c.execute("DELETE FROM series WHERE id=?", (sid,))
         c.execute("DELETE FROM settings WHERE key=?", (_add_criteria_key(sid),))
         c.execute("DELETE FROM series_shapes WHERE series_id=?", (sid,))
-        c.execute("DELETE FROM tags WHERE path=? AND id NOT IN (SELECT tag_id FROM photo_tags)", (SERIES_TAG + s["name"],))
+        c.execute("DELETE FROM tags WHERE path=? AND id NOT IN (SELECT tag_id FROM photo_tags)", (series_mod.tag_of(s),))
         c.commit()
     return {"ok": True}
 
@@ -646,7 +623,8 @@ def series_board(sid: int):
         shapes = json.loads(r["data"]) if r else []
     except ValueError:
         shapes = []
-    return {"series": {"id": s["id"], "name": s["name"]}, "frames": frames, "items": items, "last_add": last_add, "shapes": shapes}
+    return {"series": {"id": s["id"], "name": s["name"]}, "frames": frames, "items": items, "last_add": last_add, "shapes": shapes,
+            **series_mod.board_extra(s, items)}
 
 
 @app.put("/api/series/{sid}/shapes")
@@ -681,9 +659,11 @@ def series_add(sid: int, body: Dict[str, Any] = Body(...)):
             c.execute("INSERT INTO series_items(series_id,photo_id,x,y,ord) VALUES(?,?,?,?,NULL)",
                       (sid, pid, 40 + (k % 8) * 165, base_y + (k // 8) * 140))
         c.commit()
+    moved = series_mod.moved_count(sid, new)
+    series_mod.after_add(sid, new)  # their place in the order; in a folder: out of its other series, onto its board
     if new and config.write_series_tags:
-        set_meta({"ids": new, "attach": [SERIES_TAG + s["name"]]})
-    return {"added": len(new)}
+        set_meta({"ids": new, "attach": [series_mod.tag_of(s)]})
+    return {"added": len(new), "moved": moved}
 
 
 @app.post("/api/series/{sid}/remove")
@@ -695,8 +675,9 @@ def series_remove(sid: int, body: Dict[str, Any] = Body(...)):
         for pid in ids:
             c.execute("DELETE FROM series_items WHERE series_id=? AND photo_id=?", (sid, pid))
         c.commit()
+    series_mod.after_remove(sid, ids)
     if ids and config.write_series_tags:
-        set_meta({"ids": ids, "detach": [SERIES_TAG + s["name"]]})
+        set_meta({"ids": ids, "detach": [series_mod.tag_of(s)]})
     return {"ok": True}
 
 
@@ -706,8 +687,10 @@ def series_save(sid: int, body: Dict[str, Any] = Body(...)):
     with db.write_lock:
         c = db.conn()
         for it in body.get("items") or []:
-            c.execute("UPDATE series_items SET x=?, y=?, ord=? WHERE series_id=? AND photo_id=?",
-                      (float(it.get("x", 0)), float(it.get("y", 0)), it.get("ord"), sid, int(it["id"])))
+            # the order is not taken from the client (an "ord" it sends is ignored): while the board is linked the
+            # server reads it from the places, otherwise the strip keeps it (series.py)
+            c.execute("UPDATE series_items SET x=?, y=? WHERE series_id=? AND photo_id=?",
+                      (float(it.get("x", 0)), float(it.get("y", 0)), sid, int(it["id"])))
         if "frames" in body:
             keep = []
             for f in body["frames"]:
@@ -726,6 +709,7 @@ def series_save(sid: int, body: Dict[str, Any] = Body(...)):
             else:
                 c.execute("DELETE FROM series_frames WHERE series_id=?", (sid,))
         c.commit()
+    series_mod.after_board_save(sid)
     return series_board(sid)
 
 
@@ -864,8 +848,9 @@ def series_add_matching(sid: int, body: Dict[str, Any] = Body(...)):
         c.commit()
     db.set_setting(_add_criteria_key(sid), json.dumps({"filters": filters, "target": target}))
     ids = [r["id"] for r in rows]
+    series_mod.after_add(sid, ids)
     if config.write_series_tags:
-        set_meta({"ids": ids, "attach": [SERIES_TAG + s["name"]]})
+        set_meta({"ids": ids, "attach": [series_mod.tag_of(s)]})
     return {"added": len(ids)}
 
 
@@ -1224,6 +1209,7 @@ def import_index(body: Dict[str, Any] = Body(...)):
     ids = scanner.index_paths(paths)
     by_dest = {d: ids.get(scanner.rel_of(_dest(d))) for d in body.get("dests") or []}
     merged = []
+    added_by_series: Dict[str, list] = {}
     for se in body.get("series") or []:
         name = (se.get("name") or "").strip().replace("|", "/")
         if not name:
@@ -1234,6 +1220,7 @@ def import_index(body: Dict[str, Any] = Body(...)):
             created = r is None
             if created:
                 sid = c.execute("INSERT INTO series(name, created) VALUES(?,?)", (name, time.time())).lastrowid
+                series_mod.import_place(c, sid, se)  # its folder, colour and link state, when the sender has them
                 for f in se.get("frames") or []:
                     c.execute("INSERT INTO series_frames(series_id,label,x,y,w,h,maybe,color,border) VALUES(?,?,?,?,?,?,?,?,?)",
                               (sid, f.get("label") or "", float(f["x"]), float(f["y"]), float(f["w"]), float(f["h"]), int(bool(f.get("maybe"))),
@@ -1263,8 +1250,10 @@ def import_index(body: Dict[str, Any] = Body(...)):
                           (sid, json.dumps(shapes, ensure_ascii=False)))
             c.commit()
         if new_ids and config.write_series_tags:
-            set_meta({"ids": new_ids, "attach": [SERIES_TAG + name]})
+            set_meta({"ids": new_ids, "attach": [series_mod.tag_of(_series(sid))]})
         merged.append({"name": name, "created": created, "added": len(new_ids)})
+        added_by_series[name] = new_ids
+    series_mod.import_boards(body.get("series_folders"), lambda d: by_dest.get(d) if d else None, added_by_series)
     return {"indexed": len(ids), "ids": by_dest, "series": merged}
 
 
@@ -1322,7 +1311,7 @@ def library_remove(body: Dict[str, Any] = Body(...)):
         ids = [r["id"] for r in c.execute("SELECT id FROM photos WHERE relpath LIKE ? ESCAPE '\\'",
                                           (name.replace("%", "\\%").replace("_", "\\_") + "/%",)).fetchall()]
         for pid in ids:
-            for t in ("photo_labels", "photo_tags", "series_items", "sent"):
+            for t in ("photo_labels", "photo_tags", "series_items", "folder_items", "sent"):
                 c.execute("DELETE FROM %s WHERE photo_id=?" % t, (pid,))
             c.execute("DELETE FROM photos WHERE id=?", (pid,))
         c.commit()
@@ -1425,3 +1414,7 @@ def mount_web() -> None:
         @app.get("/")
         def no_web():
             return {"message": "LightPhotoLibrary API is running. Web UI not built (missing %s)." % config.web_dir}
+
+
+# series folders, the strip and the board link: their routes and the rules for membership and order (series.py)
+from . import series as series_mod  # noqa: E402

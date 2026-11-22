@@ -197,14 +197,40 @@ def _series_payload(dest_by_id: Dict[int, str]) -> list:
         if not mine:
             continue
         frames = [dict(f) for f in c.execute("SELECT label,x,y,w,h,maybe,color,border FROM series_frames WHERE series_id=?", (s["id"],)).fetchall()]
-        out.append({"name": s["name"], "frames": frames, "shapes": _shapes_payload(s["id"], dest_by_id),
-                    "items": [{"dest": dest_by_id[i["photo_id"]], "x": i["x"], "y": i["y"], "ord": i["ord"]} for i in mine]})
+        entry = {"name": s["name"], "frames": frames, "shapes": _shapes_payload(s["id"], dest_by_id),
+                 "items": [{"dest": dest_by_id[i["photo_id"]], "x": i["x"], "y": i["y"], "ord": i["ord"]} for i in mine]}
+        # series folders (a NAS that does not know them ignores these and gets the series at the top level, as before)
+        entry.update(color=s["color"] or "", linked=bool(s["linked"]), pos=s["pos"])
+        if s["folder_id"]:
+            f = c.execute("SELECT name, linked FROM series_folders WHERE id=?", (s["folder_id"],)).fetchone()
+            if f:
+                entry.update(folder=f["name"], folder_linked=bool(f["linked"]))
+        out.append(entry)
     return out
 
 
-def _shapes_payload(sid: int, dest_by_id: Dict[int, str]) -> list:
+def _folders_payload(dest_by_id: Dict[int, str], series: list) -> list:
+    """The shared board of every series folder that has a series in this send: frames (a frame that is a series
+    names it), the places of the sent photos, notes and arrows."""
+    c = db.conn()
+    out = []
+    for name in sorted({se["folder"] for se in series if se.get("folder")}):
+        f = c.execute("SELECT * FROM series_folders WHERE name=?", (name,)).fetchone()
+        if not f:
+            continue
+        frames = [dict(r) for r in c.execute(
+            "SELECT ff.label, ff.x, ff.y, ff.w, ff.h, ff.color, ff.border, s.name series FROM folder_frames ff LEFT JOIN series s ON s.id=ff.series_id "
+            "WHERE ff.folder_id=? ORDER BY ff.id", (f["id"],)).fetchall()]
+        items = [{"dest": dest_by_id[r["photo_id"]], "x": r["x"], "y": r["y"]}
+                 for r in c.execute("SELECT photo_id, x, y FROM folder_items WHERE folder_id=?", (f["id"],)).fetchall() if r["photo_id"] in dest_by_id]
+        out.append({"name": f["name"], "linked": bool(f["linked"]), "frames": frames, "items": items,
+                    "shapes": _shapes_payload(f["id"], dest_by_id, "folder_shapes", "folder_id")})
+    return out
+
+
+def _shapes_payload(sid: int, dest_by_id: Dict[int, str], table: str = "series_shapes", key: str = "series_id") -> list:
     """Board notes and arrows; arrow ends on a photo name it by its NAS path (ids differ there)."""
-    r = db.conn().execute("SELECT data FROM series_shapes WHERE series_id=?", (sid,)).fetchone()
+    r = db.conn().execute("SELECT data FROM %s WHERE %s=?" % (table, key), (sid,)).fetchone()
     try:
         shapes = json.loads(r["data"]) if r else []
     except ValueError:
@@ -231,7 +257,7 @@ def _delete_local(pid: int) -> None:
         except OSError as e:
             raise RuntimeError("could not delete %s: %s" % (f, e))
     c = db.conn()
-    for t in ("photo_labels", "photo_tags", "series_items"):
+    for t in ("photo_labels", "photo_tags", "series_items", "folder_items"):
         c.execute("DELETE FROM %s WHERE photo_id=?" % t, (pid,))
     c.execute("DELETE FROM photos WHERE id=?", (pid,))
     c.execute("DELETE FROM sent WHERE photo_id=?", (pid,))
@@ -287,7 +313,9 @@ def _run(items: List[dict], delete_after: bool) -> None:
         state["done"] += 1
     if dest_by_id:
         state.update(phase="adding to the NAS library")
-        res = nas.json("POST", "/api/import/index", {"dests": list(dest_by_id.values()), "series": _series_payload(dest_by_id)}, timeout=900)
+        series = _series_payload(dest_by_id)
+        res = nas.json("POST", "/api/import/index", {"dests": list(dest_by_id.values()), "series": series,
+                                                     "series_folders": _folders_payload(dest_by_id, series)}, timeout=900)
         state["series"] = res.get("series", [])
     if delete_after and verified:
         state.update(phase="deleting local copies")
