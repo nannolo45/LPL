@@ -199,7 +199,7 @@ export function SeriesView() {
       {showHidden ? 'showing' : 'show'} {info.hidden} hidden
     </button>
   )
-  const add = <button className="btn primary" onClick={() => setAdding(true)} title="Add photos from folders, or by rating, label, tag and date">+ Add photos</button>
+  const add = <button className="btn primary" onClick={() => setAdding(true)} aria-label="Add photos" title="Add photos from folders, or by rating, label, tag and date">{phone ? '+ Add' : '+ Add photos'}</button>
   const more = <MenuButton label="More: show in library, rename, delete" items={menu} className="sv-more" />
   return (
     <div className="board-wrap">

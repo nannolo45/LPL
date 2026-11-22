@@ -77,23 +77,8 @@ function edgePoint(r: Rect, toward: Pt): Pt {
   return t >= 1 ? { x: toward.x, y: toward.y } : { x: cx + dx * t, y: cy + dy * t }
 }
 
-export function readingOrder(items: Item[], frames: Frame[]) {
-  const fr = frames.map((f, i) => ({ f, i })).sort((a, b) => Math.round(a.f.y / 100) - Math.round(b.f.y / 100) || a.f.x - b.f.x)
-  const frameOf = (it: Item) => {
-    const { w, h } = size(it)
-    const cx = it.x + w / 2, cy = it.y + h / 2
-    for (let k = 0; k < fr.length; k++) {
-      const f = fr[k].f
-      if (cx >= f.x && cx <= f.x + f.w && cy >= f.y && cy <= f.y + f.h) return k
-    }
-    return 999
-  }
-  return items
-    .map(it => ({ it, k: frameOf(it) }))
-    .filter(o => o.k === 999 || !fr[o.k].f.maybe)
-    .sort((a, b) => a.k - b.k || Math.round(a.it.y / 110) - Math.round(b.it.y / 110) || a.it.x - b.it.x)
-    .map(o => o.it)
-}
+// The reading order (frames in order, rows inside a frame, left to right) is worked out on the server, in one
+// place for board and strip: server/lpl/series.py. The board shows the numbers the server sends back.
 
 // linked: whether the board gave the order when the snapshot was taken (undo puts that back too)
 type Snap = { items: (Photo & { x: number; y: number })[]; frames: Frame[]; shapes: BoardShape[]; linked?: boolean }

@@ -526,13 +526,14 @@ a { color: var(--accent); }
 .mhead .mtitle .display { flex: 0 1 auto; }
 .mtitle-chev { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: #2a2a2e; color: var(--soft); }
 .sv-head.phone { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 14px 8px; }
-.sv-head.phone .sv-seg button { height: 40px; padding: 0 12px; font-size: 14px; }
-.sv-head.phone .sv-link { flex: 1 1 auto; min-width: 0; height: 46px; justify-content: space-between; font-size: 14px; }
+.sv-head.phone .sv-seg button { height: 44px; padding: 0 12px; font-size: 14px; }
+.sv-head.phone .sv-link { flex: 1 1 auto; min-width: 0; height: 50px; justify-content: space-between; font-size: 14px; }
 .sv-head.phone .sv-link > .row { min-width: 0; overflow: hidden; }
 .sv-head.phone .sv-link > .row > span { overflow: hidden; text-overflow: ellipsis; }
-.sv-head.phone .sv-more, .sv-head.phone .btn.primary { height: 44px; min-width: 44px; }
+.sv-head.phone .sv-more, .sv-head.phone .btn.primary { flex: 0 0 auto; height: 44px; min-width: 44px; white-space: nowrap; }
+.sv-head.phone .small { font-size: 12px; line-height: 1.35; }
 .sv-head.phone .chip { min-height: 32px; }
-.strip.phone { padding: 0 0 30px; gap: 0; }
+.strip.phone { padding: 0; gap: 0; }
 .strip.phone .lane { border-width: 1px 0; border-radius: 0; padding: 4px 0 10px; gap: 2px; }
 .strip.phone .lane + .lane { margin-top: -1px; }
 .strip.phone .lane-h { height: 44px; padding: 0 4px 0 6px; gap: 6px; }
@@ -546,7 +547,9 @@ a { color: var(--accent); }
 .strip.phone .sth .cap { display: none; }
 .strip.phone .sth .num { font-size: 11px; }
 .strip.phone .strip-new { margin: 10px 14px 0; min-height: 44px; font-size: 14px; text-align: center; }
-.strip.phone .strip-hint { margin: 12px 14px 0; font-size: 13px; }
+.strip.phone .strip-hint { position: sticky; bottom: 0; z-index: 4; margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #1b1b1e; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.35; color: var(--soft); }
+.strip.phone .strip-hint svg { flex: 0 0 auto; color: var(--accent); }
+.strip.phone .strip-new { margin-bottom: 12px; }
 .strip.phone .strip-sel { bottom: 8px; margin: 10px 8px 0; align-self: stretch; }
 .strip.phone .strip-sel .btn { min-height: 44px; flex-shrink: 0; }
 .stree.phone .st-main { min-height: 44px; font-size: 15px; }
@@ -560,3 +563,5 @@ a { color: var(--accent); }
   .lk-choice { padding: 12px; gap: 12px; }
   .lk-how { flex-basis: 64px; }
 }
+.mhead > .btn.big { min-width: 44px; }
+.mtabs button { min-height: 44px; }

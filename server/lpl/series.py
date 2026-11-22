@@ -1116,14 +1116,16 @@ def folder_link_state(c, fid: int) -> dict:
     free = [{"id": f["id"], "label": f["label"], "photos": sum(1 for v in target.values() if v == ("new", f["id"]))}
             for f in b.frames if f.get("series_id") not in sids]
     missing = [s["name"] for s in sers if b.frame_of_series(s["id"]) is None]
-    moves = sum(1 for pid, v in target.items() if mem.get(pid) != v)
+    # photos lying in another series' frame (those in a frame that is no series are counted with that frame)
+    moves = sum(1 for pid, v in target.items() if mem.get(pid) != v and not isinstance(v, tuple))
+    in_free = sum(f["photos"] for f in free)
     reorder = sum(1 for s in sers if order.get(s["id"], []) != order_of(c, s["id"]))
     loose_ids = [pid for pid in b.items if pid not in mem]
     loose = [{"id": p["id"], "filename": p["filename"]} for p in api.photo_dicts(loose_ids)]
     off = sum(1 for pid in mem if pid not in b.items)
     return {"frames": len(b.frames), "series": len(sers), "free_frames": free, "missing_frames": missing, "moves": moves,
             "reordered": reorder, "loose": loose, "off_board": off,
-            "same": not free and not missing and not moves and not reorder}
+            "same": not free and not missing and not moves and not in_free and not reorder}
 
 
 @router.get("/api/series-folders/{fid}/link")

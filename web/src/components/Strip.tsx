@@ -450,10 +450,11 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries }: {
       })}
       {data && isFolder && <button type="button" className="strip-new" onClick={onNewSeries}>+ New series in {name}</button>}
       {data && !isFolder && !all.length && <div className="muted" style={{ padding: '6px 2px' }}>No photos in this series yet. “+ Add photos” brings them in.</div>}
-      {data && (
+      {data && !(phone && selHere.length > 0) && (
         <div className="strip-hint">
           {phone
-            ? <>Press and hold a photo, then drag it to a new place or another lane.{isFolder && lanes.length > 1 ? ' Hold a lane handle to move the series.' : ''}</>
+            ? <><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" /></svg>
+                <span>Press and hold a photo, then drag it to a new place or another lane.{isFolder && lanes.length > 1 ? ' Hold a lane handle to move the series.' : ''}</span></>
             : isFolder
               ? <>Drag a photo to change its place, or drop it in another lane to move it to that series. Drag a lane by its handle to reorder the series. {linked ? 'The board follows.' : 'The board is not linked: it stays as it is.'}</>
               : <>Drag a photo to change its place{lanes.length > 1 ? ', or drop it in another lane to move it to that frame' : ''}. Ctrl or Shift selects several. {linked ? 'The board follows.' : data.folder ? `The board of ${data.folder.name} follows if it is linked.` : 'The board is not linked: it stays as it is.'}</>}
