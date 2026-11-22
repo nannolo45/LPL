@@ -190,7 +190,6 @@ export function SeriesTree({ current, phone = false, onOpened }: { current: Targ
           </div>
         )
       })}
-      {tree.top.map(x => seriesRow(x, tree.top, false))}
       {!tree.entries.length && <span className="small muted" style={{ padding: 8 }}>No series yet.</span>}
       <div className={'st-new' + (over?.kind === 'top' && (dragged?.folder_id != null || dragF != null) ? ' over' : '')}>
         <button type="button" className={'btn dashed' + (phone ? ' big' : '')} onClick={() => ops.newSeries(null, phone ? [] : s.sel)}>+ New series{!phone && s.sel.length ? ` from ${s.sel.length} selected` : ''}</button>
