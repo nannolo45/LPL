@@ -622,6 +622,19 @@ a { color: var(--accent); }
 .devcard.m > .btn.big, .devcard.m > div > .btn.big { width: 100%; }
 .devcard.m .xfer-detail { font-size: 13px; }
 .devcard.m .devtable td { padding: 10px 0; }
+.devcheck { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+td.devcheckcell, th.devcheckcell { width: 34px; padding-right: 0; }
+.devtable, .devselall { user-select: none; }
+.devtable tr.sel td { background: rgba(120,160,255,.09); }
+.devgroup td { padding: 10px 8px 4px; border-bottom: 0; }
+.devcard.m .devgroup td { padding: 10px 0 2px; }
+.devcard.m .devcheckcell { display: flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; height: 44px; margin-left: -12px; }
+.devcard.m .devselall { min-height: 44px; gap: 0; }
+.selbar { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; padding: 8px 12px; background: #2b2b31; border: 1px solid #44444c; border-radius: 10px; box-shadow: 0 -4px 18px rgba(0,0,0,.35); }
+.selbar .selcount { margin-right: 4px; white-space: nowrap; }
+.selbar.m { padding: 8px 10px calc(8px + env(safe-area-inset-bottom) * 0); }
+.selbar.m .btn.big { flex: 1 1 calc(50% - 8px); min-height: 44px; }
+.selbar.m .btn.danger { flex-basis: 100%; }
 .devacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .devacts > .btn { flex: 1 1 calc(50% - 6px); white-space: nowrap; }
 .devacts > .btn.danger { flex-basis: 100%; }

@@ -12,6 +12,7 @@ import { Bar, Chevron, CrossIcon, PlayIcon, StopIcon } from './DevicesBits'
 import { devicesApi, refreshStatus } from '../devicesApi'
 import { ProgressBar, useTick } from './EditRecord'
 import { SettingsDialog } from './Shortcuts'
+import { boxState, bulkActions, prune, rangeIds, Selection, SelRow, toggleGroup, toggleId } from '../selection'
 
 /** What the page and the top bar's popover do with a device; each asks the server and fetches the result at once. */
 export function useDeviceActions() {
@@ -127,23 +128,75 @@ function Thumb({ id, v, onClick }: { id: number; v?: number; onClick: () => void
     onError={e => ((e.target as HTMLImageElement).style.visibility = 'hidden')} />
 }
 
+/** A checkbox; state 'some' shows the dash. */
+function Check({ state, label, onClick }: { state: 'none' | 'some' | 'all'; label: string; onClick: (e: React.MouseEvent) => void }) {
+  return <input type="checkbox" className="devcheck" aria-label={label} checked={state === 'all'} onChange={() => {}} onClick={onClick}
+    ref={el => { if (el) el.indeterminate = state === 'some' }} />
+}
+
+/** The bar under a device's table while photos are selected: only what applies to at least one of them, each with its number. */
+function SelectionBar({ a, name, act, sel, rows, clear, phone }: { a: Agent; name: string; act: Actions; sel: number[]; rows: SelRow[]; clear: () => void; phone?: boolean }) {
+  const s = useStore()
+  const b = bulkActions(rows, sel)
+  const big = phone ? ' big' : ''
+  const n = (k: number) => `${k} photo${k === 1 ? '' : 's'}`
+  const stuck = b.stuck > 0 ? `${n(b.stuck)} cannot be taken out now: ${name} has already taken ${b.stuck === 1 ? 'it' : 'them'} and cannot give up a copy that is under way.` : ''
+  return (
+    <div className={'selbar' + (phone ? ' m' : '')} role="toolbar" aria-label={`Selected photos on ${name}`}>
+      <b className="selcount" aria-live="polite">{sel.length} selected</b>
+      {b.drop.length > 0 && <button className={'btn icon' + big} title={stuck || `Take ${n(b.drop.length)} out of what is sent to ${name}`}
+        onClick={() => { act.dontSend(a.id, b.drop); clear() }}><CrossIcon />Don’t send {b.drop.length}</button>}
+      {b.drop.length === 0 && b.stuck > 0 && <span className="tiny muted" title={stuck}>{b.stuck} cannot be taken out now</span>}
+      {b.open.length > 0 && <button className={'btn' + big} title={`Open the copies on ${name} in darktable`} onClick={() => act.job('open', a.id, b.open)}>Open in darktable ({b.open.length})</button>}
+      {b.save.length > 0 && <button className={'btn' + big} title={`Copy the edits (XMP) of ${n(b.save.length)} from ${name} back to the NAS now. The photos stay on ${name}.`} onClick={() => act.job('sync', a.id, b.save)}>Save edits to NAS ({b.save.length})</button>}
+      {b.show.length > 0 && <button className={'btn' + big} title="Find them in LightPhotoLibrary: only these photos" onClick={() => s.showPhotos(b.show)}>Show in library ({b.show.length})</button>}
+      {b.done.length > 0 && <button className={'btn danger' + big} title={`Done with ${b.done.length === 1 ? 'it' : 'them'}: save the edits to the NAS, close in darktable and delete the working cop${b.done.length === 1 ? 'y' : 'ies'} on ${name}. The originals on the NAS are never touched.`}
+        onClick={() => act.job('release', a.id, b.done)}>Done · remove {b.done.length} from {name}</button>}
+      <button className={'btn ghost' + big} title="Unselect everything (Esc)" onClick={clear}>Clear</button>
+    </div>
+  )
+}
+
 /** The photos of a device: copying first, then waiting, then what is on it, then what a stop left unsent. */
-function PhotoTable({ a, name, now, act, phone }: { a: Agent; name: string; now: number; act: Actions; phone?: boolean }) {
+function PhotoTable({ a, name, now, act, phone, sel, setSel }: { a: Agent; name: string; now: number; act: Actions; phone?: boolean; sel: Selection | null; setSel: (ids: number[], anchor: number | null) => void }) {
   const s = useStore()
   const rows = deviceRows(a)
   const busy = !!a.transfer || !!a.stopped
   const skip = !!a.transfer?.can_skip
-  const waiting = useCut(rows.waiting, LIMIT, n => `${n} more waiting`, 'more-w', 5)
-  const arrived = useCut(rows.arrived, busy ? LIMIT : 8, n => `${n} more on ${name}`, 'more-a', 5)
-  const unsent = useCut(rows.unsent, 0, n => `${n} not sent`, 'more-u', 5)
+  const waiting = useCut(rows.waiting, LIMIT, n => `${n} more waiting`, 'more-w', 6)
+  const arrived = useCut(rows.arrived, busy ? LIMIT : 8, n => `${n} more on ${name}`, 'more-a', 6)
+  const unsent = useCut(rows.unsent, 0, n => `${n} not sent`, 'more-u', 6)
   const big = phone ? ' big' : ''
+  const order = [...rows.copying, ...rows.waiting, ...rows.arrived, ...rows.unsent].map(r => r.id)
+  const selIds = sel?.ids ?? []
+  const selRows: SelRow[] = [
+    ...rows.copying.map(w => ({ id: w.id, kind: 'copying' as const, droppable: skip && a.transfer?.current?.id === w.id })),
+    ...rows.waiting.map(w => ({ id: w.id, kind: 'waiting' as const, droppable: skip || !a.transfer })),
+    ...rows.arrived.map(w => ({ id: w.id, kind: 'arrived' as const, unsaved: hasUnsavedEdits(w) })),
+    ...rows.unsent.map(w => ({ id: w.id, kind: 'unsent' as const, droppable: true })),
+  ]
+  const pick = (id: number, shift: boolean) => setSel(shift ? rangeIds(order, selIds, sel?.anchor ?? null, id) : toggleId(selIds, id), id)
+  const all = boxState(order, selIds)
+  const headBox = <Check state={all} label={`Select all ${order.length} photos on ${name}`} onClick={() => setSel(all === 'all' ? [] : order, all === 'all' ? null : order[0])} />
+  const heading = (text: string, group: { id: number }[]) => {
+    const ids = group.map(g => g.id), full = boxState(ids, selIds) === 'all'
+    return <tr key={'h-' + text} className="devgroup"><td colSpan={6}><div className="row" style={{ gap: 10 }}>
+      <span className="small soft">{text} · {ids.length}</span>
+      <button className="linkbtn tiny soft" style={{ textDecoration: 'underline' }} title={full ? 'Unselect this group' : `Select all ${ids.length}, also the ones that are not shown`}
+        onClick={() => setSel(toggleGroup(selIds, ids), full ? null : ids[0])}>{full ? 'Unselect' : 'Select all'}</button>
+    </div></td></tr>
+  }
   const show = (id: number) => <button className={'btn' + big} title="Find it in LightPhotoLibrary: its folder, scrolled to it" onClick={() => s.reveal(id)}>Show in library</button>
   const dont = (id: number, filename: string, title: string) => (
     <button className={'btn icon' + big} aria-label={`Don’t send ${filename}`} title={title} onClick={() => act.dontSend(a.id, [id])}><CrossIcon />Don’t send</button>
   )
-  const cells = (id: number, filename: string, v: number | undefined, status: React.ReactNode, when: string, actions: React.ReactNode, error?: string) => phone ? (
-    <tr key={id}><td colSpan={5}>
+  const cells = (id: number, filename: string, v: number | undefined, status: React.ReactNode, when: string, actions: React.ReactNode, error?: string) => {
+    const chosen = selIds.includes(id)
+    const box = <Check state={chosen ? 'all' : 'none'} label={`Select ${filename}`} onClick={e => pick(id, e.shiftKey)} />
+    return phone ? (
+    <tr key={id} className={chosen ? 'sel' : undefined}><td colSpan={6}>
       <div className="row" style={{ gap: 10 }}>
+        <label className="devcheckcell">{box}</label>
         <Thumb id={id} v={v} onClick={() => s.reveal(id)} />
         <div className="col grow" style={{ gap: 4, alignItems: 'flex-start' }}>
           <span className="ellipsis" style={{ maxWidth: '100%' }}>{filename}</span>
@@ -154,14 +207,16 @@ function PhotoTable({ a, name, now, act, phone }: { a: Agent; name: string; now:
       <div className="devacts">{actions}</div>
     </td></tr>
   ) : (
-    <tr key={id}>
+    <tr key={id} className={chosen ? 'sel' : undefined}>
+      <td className="devcheckcell">{box}</td>
       <td style={{ width: 64 }}><Thumb id={id} v={v} onClick={() => s.reveal(id)} /></td>
       <td><button className="linkbtn" title="Show in the library" onClick={() => s.reveal(id)}>{filename}</button>{error && <div className="tiny" style={{ color: '#ff8b8e' }}>{error}</div>}</td>
       <td><div className="col" style={{ gap: 6, alignItems: 'flex-start' }}>{status}</div></td>
       <td className="muted nowrap">{when}</td>
       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div className="row" style={{ display: 'inline-flex', gap: 6 }}>{actions}</div></td>
     </tr>
-  )
+    )
+  }
   const pill = (text: string, bg = '#2a2a2e', fg = '#c8c8cc') => <span className="status nowrap" style={{ background: bg, color: fg }}>{text}</span>
   const item = (w: WorkItem) => {
     const st = STATUS[w.status] || [w.status, '#2a2a2e', '#c8c8cc']
@@ -182,25 +237,36 @@ function PhotoTable({ a, name, now, act, phone }: { a: Agent; name: string; now:
   const queued = (w: TransferItem, words: string, title: string) => cells(w.id, w.filename || `photo ${w.id}`, 0, pill(words), '', <>{show(w.id)}{(skip || !a.transfer) && dont(w.id, w.filename || `photo ${w.id}`, title)}</>)
   if (!rows.copying.length && !rows.waiting.length && !rows.arrived.length && !rows.unsent.length)
     return <div className="small muted">{isPhoneAgent(a) ? `No photos on ${name}.` : `Nothing checked out on ${name}.`}</div>
+  const keys = (e: React.KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); setSel(order, order[0] ?? null) }
+    else if (e.key === 'Escape' && selIds.length) { e.preventDefault(); setSel([], null) }
+  }
   return (
+    <div className="devsel" onKeyDown={keys}>
+    {phone && <label className="devselall row"><span className="devcheckcell">{headBox}</span><span className="small soft">Select all {order.length}</span></label>}
     <div style={{ overflowX: 'auto' }}>
       <table className="wtable devtable">
-        {!phone && <thead><tr><th /><th>Photo</th><th>Status</th><th>Checked out</th><th /></tr></thead>}
+        {!phone && <thead><tr><th className="devcheckcell">{headBox}</th><th /><th>Photo</th><th>Status</th><th>Checked out</th><th /></tr></thead>}
         <tbody>
           {rows.copying.map(item)}
+          {rows.waiting.length > 0 && heading('Waiting', rows.waiting)}
           {waiting.shown.map(w => queued(w, 'waiting', 'Take this photo out of the queue'))}
           {waiting.toggle}
+          {rows.arrived.length > 0 && heading(`On ${name}`, rows.arrived)}
           {arrived.shown.map(item)}
           {arrived.toggle}
+          {rows.unsent.length > 0 && heading('Not sent', rows.unsent)}
           {unsent.toggle}
           {unsent.shown.map(w => queued(w, 'not sent', 'Leave this photo out when you resume'))}
         </tbody>
       </table>
     </div>
+    {selIds.length > 0 && <SelectionBar a={a} name={name} act={act} sel={selIds} rows={selRows} clear={() => setSel([], null)} phone={phone} />}
+    </div>
   )
 }
 
-function DeviceCard({ a, folded, onFold, now, act, phone }: { a: Agent; folded: boolean; onFold: (f: boolean) => void; now: number; act: Actions; phone?: boolean }) {
+function DeviceCard({ a, folded, onFold, now, act, phone, sel, setSel }: { a: Agent; folded: boolean; onFold: (f: boolean) => void; now: number; act: Actions; phone?: boolean; sel: Selection | null; setSel: (ids: number[], anchor: number | null) => void }) {
   const s = useStore()
   const name = agentLabel(a, s.agents)
   const ws = a.state?.working_set || []
@@ -235,7 +301,7 @@ function DeviceCard({ a, folded, onFold, now, act, phone }: { a: Agent; folded: 
       {t ? <TransferBox a={a} name={name} now={now} act={act} phone /> : <span className="soft" style={{ fontSize: 13 }}>{deviceCounts(a)}</span>}
       {st && <StoppedBox a={a} name={name} act={act} phone />}
       {save}{remove}
-      {!folded && <PhotoTable a={a} name={name} now={now} act={act} phone />}
+      {!folded && <PhotoTable a={a} name={name} now={now} act={act} phone sel={sel} setSel={setSel} />}
     </section>
   )
   return (
@@ -259,7 +325,7 @@ function DeviceCard({ a, folded, onFold, now, act, phone }: { a: Agent; folded: 
       {lines}
       {!folded && t && <TransferBox a={a} name={name} now={now} act={act} />}
       {!folded && st && <StoppedBox a={a} name={name} act={act} />}
-      {!folded && <PhotoTable a={a} name={name} now={now} act={act} />}
+      {!folded && <PhotoTable a={a} name={name} now={now} act={act} sel={sel} setSel={setSel} />}
     </section>
   )
 }
@@ -308,6 +374,15 @@ export function DevicesView() {
   const phone = s.isMobile
   const now = serverNow(s.status)
   const [settings, setSettings] = useState(false)
+  // The photos he ticked: of one device at a time; photos that leave the device's list leave the selection.
+  const [selection, setSelection] = useState<Selection | null>(null)
+  useEffect(() => {
+    if (!selection) return
+    const a = s.agents.find(x => x.id === selection.agent)
+    const r = a ? deviceRows(a) : null
+    const ids = r ? prune(selection.ids, [...r.copying, ...r.waiting, ...r.arrived, ...r.unsent].map(x => x.id)) : []
+    if (ids !== selection.ids) setSelection(ids.length ? { ...selection, ids } : null)
+  }, [s.agents])
   // His fold choices are kept on the server, so every browser agrees; the phone layout keeps its own (under
   // "phone:<id>"), because there every device starts folded: a folded card already shows what matters.
   // mine: his own click, shown at once; forgotten when the server says the same.
@@ -335,7 +410,8 @@ export function DevicesView() {
       Once it runs, it appears here and “Edit in darktable” opens photos on that PC.
     </div>
   )
-  const cards = s.agents.map(a => <DeviceCard key={a.id} a={a} folded={folded(a)} onFold={f => setFolds({ [key(a)]: f })} now={now} act={act} phone={phone} />)
+  const cards = s.agents.map(a => <DeviceCard key={a.id} a={a} folded={folded(a)} onFold={f => setFolds({ [key(a)]: f })} now={now} act={act} phone={phone}
+    sel={selection?.agent === a.id ? selection : null} setSel={(ids, anchor) => setSelection(ids.length ? { agent: a.id, ids, anchor } : null)} />)
   return (
     <div className="scroll">
       {phone ? (

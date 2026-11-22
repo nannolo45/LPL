@@ -86,6 +86,8 @@ export interface Filters {
   only_hidden?: boolean
   date_from?: string | null
   date_to?: string | null
+  /** exactly these photos (the Devices page's "Show in library" for a selection) */
+  ids?: number[]
 }
 
 // board notes and arrows; an arrow end sits on a photo or a note, or at a free point

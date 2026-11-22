@@ -69,6 +69,8 @@ export interface Store {
   boardSeries: number | null; setBoardSeries: (id: number | null) => void
   /** Open the Library on a photo's folder, scrolled to it and selected. */
   reveal: (id: number) => void
+  /** the Library showing exactly these photos, in the place of the current tab's view (as reveal does) */
+  showPhotos: (ids: number[]) => void
   revealId: number | null; clearReveal: () => void
   /** Full screen photo view: the photos to page through and where to start. */
   fullscreen: { list: Photo[]; index: number } | null; setFullscreen: (f: { list: Photo[]; index: number } | null) => void
@@ -285,6 +287,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     }).catch(e => toast(e.message))
   }, [toast])
 
+  const showPhotos = useCallback((ids: number[]) => {
+    if (ids.length === 1) { reveal(ids[0]); return }
+    setFilters(f => ({ ...DEFAULTS.filters, show_hidden: f.show_hidden, ids }))
+    setSel(ids)
+    setView(v => (v === 'list' ? 'list' : 'grid'))
+    toast(`Showing ${ids.length} photos from your devices`)
+  }, [reveal, toast])
+
   const patchFilters = useCallback((p: Partial<Filters>) => setFilters(f => ({ ...f, ...p })), [])
   const clearFilters = useCallback(() => setFilters(DEFAULTS.filters), [])
 
@@ -353,7 +363,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }
 
   const value: Store = {
-    isMobile, tabs, activeTab, switchTab, newTab, closeTab, renameTab, moveTab, liveTab, view, setView, sort, setSort, group, setGroup, gran, setGran, filters, patchFilters, clearFilters,
+    isMobile, showPhotos, tabs, activeTab, switchTab, newTab, closeTab, renameTab, moveTab, liveTab, view, setView, sort, setSort, group, setGroup, gran, setGran, filters, patchFilters, clearFilters,
     thumb, setThumb, seed, reshuffle: () => setSeed(s => s + 1), items, total, loading, loadMore, reload, itemsKey,
     sel, setSel, clickSelect, selPhotos, selectAll, mergePhotos, meta, tags, reloadTags, facets, hidePhotos, series, reloadSeries, seriesFolders,
     agents, status, isLocal: status?.mode === 'local', sendIds, setSendIds, editInDarktable, devicePick, closeDevicePick: () => setDevicePick(null), editOn, toast, toastMsg, viewer, setViewer, boardSeries, setBoardSeries,
