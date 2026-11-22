@@ -13,7 +13,18 @@ export const STATUS: Record<string, [string, string, string]> = {
   syncing: ['syncing', '#1c2a3a', '#8cb8e6'],
   synced: ['synced to NAS', '#1d2e1d', '#8fd08f'],
   error: ['error', '#3a1c1c', '#ff8b8e'],
+  // on the device, RAW and XMP both there, not opened yet (the Devices page says "on Laptop · ready to edit")
+  ready: ['ready to edit', '#1d2e1d', '#8fd08f'],
+  // other devices' words for "has edits that are not on the NAS yet"
+  edited: ['edited · not synced yet', '#1c2a3a', '#8cb8e6'],
 }
+
+/** Every status that means "this copy has edits that are not saved to the NAS yet" (or may have: a photo open
+ *  in darktable). dirty and editing are the PC agent's; edited, modified, "waiting to sync" are other devices'
+ *  words for dirty; a sync that failed left its edits unsaved too. */
+const UNSAVED = new Set(['dirty', 'editing', 'edited', 'modified', 'unsynced', 'waiting to sync', 'waiting_to_sync'])
+export const hasUnsavedEdits = (w: Pick<WorkItem, 'status' | 'error'>) =>
+  UNSAVED.has((w.status || '').toLowerCase()) || (w.status === 'error' && /sync/i.test(w.error || ''))
 
 /** The darktable phone app reports os "android"; it only gets jobs addressed to it. */
 export const isPhoneAgent = (a: Pick<Agent, 'os'>) => a.os === 'android'

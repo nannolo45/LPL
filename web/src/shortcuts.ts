@@ -12,6 +12,7 @@ export const ACTIONS: Action[] = [
   { id: 'nextTab', label: 'Next tab', scope: 'tabs', keys: ['Alt+]'] },
   { id: 'prevTab', label: 'Previous tab', scope: 'tabs', keys: ['Alt+['] },
   ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => ({ id: 'tab' + n, label: 'Go to tab ' + n, scope: 'tabs' as Scope, keys: ['Alt+' + n] })),
+  { id: 'devices', label: 'Open Devices (or switch to its tab)', scope: 'tabs', keys: ['Alt+D'] },
   { id: 'rate0', label: 'Rating: none', scope: 'photos', keys: ['0'] },
   { id: 'rate1', label: 'Rating: ★1', scope: 'photos', keys: ['1'] },
   { id: 'rate2', label: 'Rating: ★2', scope: 'photos', keys: ['2'] },

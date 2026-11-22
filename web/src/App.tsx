@@ -14,12 +14,12 @@ import { FullscreenPhoto } from './components/FullscreenPhoto'
 import { SettingsDialog, SettingsSection } from './components/Shortcuts'
 import { TabStrip, ViewSwitch } from './components/Tabs'
 import { actionFor, typingIn, useShortcutsVersion } from './shortcuts'
-import { agentLabel, takeDeepLink } from './devices'
+import { takeDeepLink } from './devices'
 import { DevicePicker } from './components/DevicePicker'
+import { DevicesIndicator, openDevices } from './components/DevicesIndicator'
 
 function TopBar() {
   const s = useStore()
-  const online = s.agents.filter(a => a.online)
   const [settings, setSettings] = useState<SettingsSection | null>(null)
   return (
     <>
@@ -27,15 +27,14 @@ function TopBar() {
         <span className="brand">LightPhotoLibrary</span>
         {s.isLocal && <span className="pill-ok" title="The library on this PC — works without the NAS" style={{ background: 'rgba(140,184,230,.14)', color: '#8cb8e6' }}><i style={{ background: '#8cb8e6' }} />this PC</span>}
         <TabStrip />
-        <button className="btn ghost" onClick={() => setSettings('board')} title="Settings: board options and keyboard shortcuts" aria-label="Settings">
+        {!s.isLocal && <DevicesIndicator />}
+        <button className="btn ghost" onClick={() => setSettings('board')} title="Settings: board options, keyboard shortcuts, devices and library" aria-label="Settings">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ verticalAlign: '-4px' }}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z" /></svg>
         </button>
         <button className="btn ghost" onClick={() => setSettings('keys')} title="Keyboard shortcuts: see and change them" aria-label="Keyboard shortcuts">
           <svg width="18" height="14" viewBox="0 0 24 18" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true" style={{ verticalAlign: '-2px' }}><rect x="1" y="1" width="22" height="16" rx="3" /><path d="M5 6h1M9 6h1M13 6h1M17 6h2M5 10h1M9 10h1M13 10h1M17 10h2M7 13.5h10" strokeLinecap="round" /></svg>
         </button>
         {settings && <SettingsDialog section={settings} onClose={() => setSettings(null)} />}
-        {s.isLocal ? null : online.length ? <span className="pill-ok" title={online.map(a => agentLabel(a, s.agents)).join(', ')}><i />{online.length === 1 ? agentLabel(online[0], s.agents) : `${online.length} devices`} ready</span>
-          : <span className="pill-off" title="Start the LightPhotoLibrary agent on your PC"><i />no device ready</span>}
       </div>
       <div className="topbar">
         <ViewSwitch />
@@ -63,6 +62,7 @@ function useShortcuts() {
         else if (ta === 'closeTab') s.closeTab(s.activeTab)
         else if (ta === 'nextTab') s.switchTab(s.tabs[(i + 1) % s.tabs.length].id)
         else if (ta === 'prevTab') s.switchTab(s.tabs[(i - 1 + s.tabs.length) % s.tabs.length].id)
+        else if (ta === 'devices') { if (!s.isLocal) openDevices(s) }
         else if (ta.startsWith('tab')) { const t = s.tabs[+ta.slice(3) - 1]; if (t) s.switchTab(t.id) }
         return
       }

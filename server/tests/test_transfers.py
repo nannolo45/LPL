@@ -506,8 +506,9 @@ def test_fold_choices_are_kept_per_device(c):
     assert c.put("/api/devices/fold", json={"folds": {PC["id"]: True}}).json() == {"folds": {PC["id"]: True}}
     c.put("/api/devices/fold", json={"folds": {OLDPC["id"]: False}})          # another browser: merged, not replaced
     assert (dev(c, PC)["folded"], dev(c, OLDPC)["folded"]) == (True, False)
-    c.put("/api/devices/fold", json={"folds": {PC["id"]: None}})
+    c.put("/api/devices/fold", json={"folds": {PC["id"]: None, "phone:" + PC["id"]: False}})
     assert dev(c, PC)["folded"] is None
+    assert (dev(c, PC)["folded_phone"], dev(c, OLDPC)["folded_phone"]) == (False, None)   # the phone layout's own choice
     assert c.put("/api/devices/fold", json={"folds": []}).status_code == 400
     assert c.get("/api/status").json()["agents"][0]["folded"] in (None, False)
 

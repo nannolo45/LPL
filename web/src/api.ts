@@ -99,7 +99,9 @@ export interface SeriesInfo { id: number; name: string; count: number; covers: {
 export interface Frame { id?: number; label: string; x: number; y: number; w: number; h: number; maybe: number; color?: string; border?: string }
 /** step and progress (0..1): what a device is doing with the photo right now, if it says (R16). */
 export interface WorkItem { id: number; filename: string; status: string; local_path?: string; error?: string; checkout_ts?: number; synced_ts?: number; step?: string; progress?: number }
-export interface Agent { id: string; name: string; os: string; last_seen: number; online: boolean; state: { working_set?: WorkItem[]; darktable_running?: boolean; bridge_alive?: boolean; bridge_status?: string; version?: string; message?: string; local_url?: string; local_error?: string } }
+export interface Agent { id: string; name: string; os: string; last_seen: number; online: boolean; state: { working_set?: WorkItem[]; darktable_running?: boolean; bridge_alive?: boolean; bridge_status?: string; version?: string; message?: string; local_url?: string; local_error?: string }
+  /** what the device says it can do (batch, cancel, open); what is being sent to it; a batch that was stopped; folded on the Devices page (null: never chosen) */
+  caps?: string[]; transfer?: import('./transfer').Transfer | null; stopped?: import('./transfer').StoppedRun | null; folded?: boolean | null; folded_phone?: boolean | null }
 
 export interface SendFolder { folder: string; n: number; sent: number; changed: number; first: string | null; last: string | null; descriptor: string }
 export interface SendRequest { ids?: number[]; folder?: string; parent: string; descriptor: string; split_by_day: boolean; delete_after?: boolean }
@@ -107,7 +109,7 @@ export interface SendState { running: boolean; phase: string; done: number; tota
 
 export class AuthError extends Error {}
 
-async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
+export async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
   const r = await fetch(url, {
     method,
     headers: body !== undefined ? { 'content-type': 'application/json' } : undefined,

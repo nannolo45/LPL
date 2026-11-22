@@ -407,6 +407,7 @@ class Agent:
         self.cancel_jobs = set()   # jobs the server said to stop, and photos (ids as text) it said not to send:
         self.skip_photos = set()   # both as in the last heartbeat answer
         self.quit = threading.Event()  # set: run() returns after the round it is in (tests)
+        self.wake = threading.Event()  # set: the main loop sends its next heartbeat now instead of after its pause
         for d in (WORK, BRIDGE / "outbox"):
             d.mkdir(parents=True, exist_ok=True)
         if STATE_FILE.is_file():
@@ -501,8 +502,8 @@ class Agent:
             self.srv.interrupt(lambda tag: bool(tag) and self._given_up(tag[0], tag[1]))
 
     def report_done(self, jid, status) -> bool:
-        """Tell the server a job ended. For an edit job with its lists, so the answer does not depend on which
-        of this and the next heartbeat arrives first. False: not delivered (the main loop tries again)."""
+        """Tell the server a job ended (for an edit job with its lists, as in the heartbeat). False: not delivered
+        (the main loop tries again after its next heartbeat)."""
         body = {"status": status}
         with self.lock:
             b = self.batches.get(jid)
@@ -515,6 +516,14 @@ class Agent:
         with self.lock:
             self.batches.pop(jid, None)
         return True
+
+    def confirm_ended(self):
+        """After a heartbeat that the server answered: /done for every edit job that has ended (the heartbeat
+        just said how; this takes it off this agent's list, or says it at all to a server from before batches)."""
+        with self.lock:
+            ended = [(jid, b["state"]) for jid, b in self.batches.items() if b["unsaid"]]
+        for jid, st in ended:
+            self.report_done(jid, st)
 
     # --- jobs
     def handle(self, job):
@@ -541,9 +550,14 @@ class Agent:
         with self.lock:
             b = self.batches.get(job["id"])
             if b:
-                b.update(state=status, photo=None, bytes=0)
-        if not self.report_done(job["id"], status) and b:
-            b["unsaid"] = True  # the server could not be reached: the main loop says it after its next heartbeat
+                b.update(state=status, photo=None, bytes=0, unsaid=True)
+        if b:
+            # An edit job's end goes with a heartbeat sent right now, so the server learns in one message how
+            # the batch ended and what the working set looks like after it (not "stopped" next to a row that
+            # still says "copying"). The main loop then confirms it with /done, as for every job.
+            self.wake.set()
+        else:
+            self.report_done(job["id"], status)
 
     def step(self, it: dict, step=None, progress=None):
         """What the agent is doing with a photo right now, reported with the next heartbeat (R16): step is
@@ -804,10 +818,7 @@ class Agent:
             try:
                 r = self.srv.json("POST", "/api/agents/heartbeat", self.heartbeat_body(), timeout=15)
                 self.take(r)
-                with self.lock:  # an edit job that ended while the server could not be reached: say so now
-                    unsaid = [(jid, b["state"]) for jid, b in self.batches.items() if b["unsaid"]]
-                for jid, st in unsaid:
-                    self.report_done(jid, st)
+                self.confirm_ended()
                 backoff = self.cfg.get("poll_seconds", 2)
                 if self.message.startswith("Server unreachable"):
                     self.message = ""
@@ -826,11 +837,13 @@ class Agent:
                 time.sleep(0.5)
                 try:  # report the final state
                     self.srv.json("POST", "/api/agents/heartbeat", self.heartbeat_body(), timeout=15)
+                    self.confirm_ended()
                 except Exception:
                     pass
                 return
             # while photos are being copied: more often, so progress is fresh and a Stop arrives within a second
-            self.quit.wait(min(backoff, 1.0) if self.batches else backoff)
+            self.wake.wait(min(backoff, 1.0) if self.batches else backoff)
+            self.wake.clear()
 
 
 # ------------------------------------------------------------------ cli

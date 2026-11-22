@@ -2,15 +2,17 @@
 // The phone layout shows the same tabs as the desktop; this says where on the phone a tab's view is shown.
 import type { View } from './store'
 
-export type PhoneTab = 'lib' | 'folders' | 'series' | 'pc'
+export type PhoneTab = 'lib' | 'folders' | 'series'
 
 /** Where the phone shows a tab with this view: the bottom-bar tab, the board to open, and a note when the
- *  phone cannot show that view (it then shows the grid; the tab itself keeps its view). */
-export function phoneSpot(view: View, boardSeries: number | null): { tab: PhoneTab; board: number | null; note?: string } {
+ *  phone cannot show that view (it then shows the grid; the tab itself keeps its view). devices: the Devices
+ *  page is opened (it is a page of its own with a back arrow, reached from the header; it used to be a
+ *  fourth bottom tab). */
+export function phoneSpot(view: View, boardSeries: number | null): { tab: PhoneTab; board: number | null; note?: string; devices?: boolean } {
   switch (view) {
     case 'grid': return { tab: 'lib', board: null }
     case 'folders': return { tab: 'folders', board: null }
-    case 'work': return { tab: 'pc', board: null }
+    case 'work': return { tab: 'lib', board: null, devices: true }
     case 'board': return boardSeries != null ? { tab: 'series', board: boardSeries } : { tab: 'series', board: null }
     case 'list': return { tab: 'lib', board: null, note: 'List: shown as the grid on the phone' }
     case 'timeline': return { tab: 'lib', board: null, note: 'Timeline: shown as the grid on the phone' }

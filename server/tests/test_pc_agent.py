@@ -163,6 +163,7 @@ def running_agent(clean, base_url, agent_mod, monkeypatch):
     t.start()
     yield a, launched, slow
     a.quit.set()
+    a.wake.set()
     a.cancel_jobs = {j for j in a.batches}  # whatever still copies ends at its next chunk
     t.join(10)
 
@@ -213,13 +214,17 @@ def test_batch_progress_stop_in_the_middle_of_a_file_and_resume(big, running_age
     print("Stop: partial file gone after %.2f s, shown as stopped after %.2f s" % (gone, took))
     assert took < 2.0
     assert (s["photos_done"], s["photos_total"], s["reason"]) == (1, 5, "user") and [u["id"] for u in s["unsent"]] == ids[1:]
-    assert device(c)["transfer"] is None
+    d = device(c)
+    assert d["transfer"] is None
+    # the same heartbeat that said "stopped" brought the working set as it is now: no row still "copying"
+    assert [(w["id"], w["status"], w.get("step")) for w in d["state"]["working_set"]] == [(ids[0], "ready", None)]
     time.sleep(0.6)
     assert sorted(p.name for p in work.iterdir()) == ["%d_BIG_0.RAF" % ids[0], "%d_BIG_0.RAF.xmp" % ids[0]]   # what arrived, nothing else
     assert list(a.items) == [str(ids[0])] and a.items[str(ids[0])]["status"] == "ready"
     assert [w["id"] for w in device(c)["state"]["working_set"]] == [ids[0]]
     assert launched == []                                    # darktable is not opened after a Stop
-    assert a.batches == {} and db.conn().execute("SELECT status FROM jobs WHERE id=?", (j,)).fetchone()["status"] == "stopped"
+    wait_for(lambda: a.batches == {}, 5)                     # confirmed with /done after the heartbeat that said it
+    assert db.conn().execute("SELECT status FROM jobs WHERE id=?", (j,)).fetchone()["status"] == "stopped"
 
     # "Don't send" one of the rest, then Resume: the others arrive, and now darktable is opened (once)
     c.post("/api/agents/pc-batch-test/dont-send", json={"ids": [ids[4]]})

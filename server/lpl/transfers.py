@@ -388,6 +388,7 @@ def decorate(agents: List[dict]) -> None:
             caps = []
         a["caps"] = caps
         a["folded"] = fold.get(a["id"])   # true / false as the user left it; null = never chosen
+        a["folded_phone"] = fold.get("phone:" + a["id"])   # the same for the phone layout, which folds by itself
         a.update(_summary(c, a, caps))
 
 
@@ -523,7 +524,8 @@ def job_cancel(jid: int):
 @router.put("/api/devices/fold")
 def fold_set(body: Dict[str, Any] = Body(...)):
     """Remember which devices are folded on the Devices page: {"folds": {"<device id>": true | false | null}},
-    merged into what is stored (null forgets a choice), so two browsers do not undo each other."""
+    merged into what is stored (null forgets a choice), so two browsers do not undo each other. The phone
+    layout keeps its own choices under "phone:<device id>" (a small screen starts with everything folded)."""
     v = body.get("folds")
     if not isinstance(v, dict) or len(v) > 500:
         raise HTTPException(400, "folds must be an object")
@@ -531,8 +533,8 @@ def fold_set(body: Dict[str, Any] = Body(...)):
         cur = folds()
         for k, x in v.items():
             if x is None:
-                cur.pop(str(k)[:80], None)
+                cur.pop(str(k)[:90], None)
             else:
-                cur[str(k)[:80]] = bool(x)
+                cur[str(k)[:90]] = bool(x)
         db.set_setting("pref.devices.fold", json.dumps(cur))
     return {"folds": cur}

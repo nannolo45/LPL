@@ -5,15 +5,16 @@ import { FRAME_COLORS, NOTE_COLORS } from './Board'
 import { useStore } from '../store'
 import { useInstall } from '../install'
 import { useBackLayer } from '../back'
+import { DevicesSettings } from './DevicesSettings'
 
 const pretty = (k: string) => k.replace('ArrowRight', '→').replace('ArrowLeft', '←').replace('ArrowUp', '↑').replace('ArrowDown', '↓')
 
-export type SettingsSection = 'board' | 'keys'
+export type SettingsSection = 'board' | 'keys' | 'devices'
 
 /** Settings: board options and keyboard shortcuts, saved in the library so every PC (and the phone) gets them. */
 export function SettingsDialog({ onClose, section = 'board' }: { onClose: () => void; section?: SettingsSection }) {
   const s = useStore()
-  const [sec, setSec] = useState<SettingsSection>(s.isMobile ? 'board' : section)
+  const [sec, setSec] = useState<SettingsSection>(s.isMobile && section === 'keys' ? 'board' : section)  // (no keyboard on the phone)
   const [rec, setRec] = useState<string | null>(null)   // shortcut waiting for a key
   const [note, setNote] = useState('')
   useBackLayer(s.isMobile, onClose)  // the phone's Back closes it
@@ -56,10 +57,17 @@ export function SettingsDialog({ onClose, section = 'board' }: { onClose: () => 
             <nav className="settings-nav" aria-label="Settings sections">
               <button className={sec === 'board' ? 'on' : ''} onClick={() => setSec('board')}>Board</button>
               <button className={sec === 'keys' ? 'on' : ''} onClick={() => setSec('keys')}>Keyboard shortcuts</button>
+              <button className={sec === 'devices' ? 'on' : ''} onClick={() => setSec('devices')}>Devices &amp; library</button>
             </nav>
           )}
           <div className="settings-main">
-            {sec === 'board' ? <BoardSettings phone={s.isMobile} /> : <ShortcutsPanel rec={rec} setRec={setRec} note={note} />}
+            {s.isMobile && (
+              <div className="seg" role="group" aria-label="Settings sections" style={{ marginBottom: 10 }}>
+                <button className={sec === 'board' ? 'on' : ''} aria-pressed={sec === 'board'} onClick={() => setSec('board')}>Board</button>
+                <button className={sec === 'devices' ? 'on' : ''} aria-pressed={sec === 'devices'} onClick={() => setSec('devices')}>Devices &amp; library</button>
+              </div>
+            )}
+            {sec === 'board' ? <BoardSettings phone={s.isMobile} /> : sec === 'devices' ? <DevicesSettings /> : <ShortcutsPanel rec={rec} setRec={setRec} note={note} />}
           </div>
         </div>
       </div>

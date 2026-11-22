@@ -32,7 +32,8 @@ test('install: what Settings offers', () => {
 test('tabs on the phone', () => {
   assert.deepEqual(phoneSpot('grid', null), { tab: 'lib', board: null })
   assert.deepEqual(phoneSpot('folders', 3), { tab: 'folders', board: null })
-  assert.deepEqual(phoneSpot('work', null), { tab: 'pc', board: null })
+  assert.deepEqual(phoneSpot('work', null), { tab: 'lib', board: null, devices: true })   // the Devices page, over the Library
+  assert.equal(phoneSpot('grid', null).devices, undefined)
   assert.deepEqual(phoneSpot('board', 4), { tab: 'series', board: 4 })
   assert.deepEqual(phoneSpot('board', null), { tab: 'series', board: null })
   assert.equal(phoneSpot('timeline', null).tab, 'lib')

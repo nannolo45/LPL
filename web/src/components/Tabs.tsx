@@ -18,6 +18,7 @@ const NAME: Record<View, string> = { grid: 'Grid', list: 'List', folders: 'Folde
 /** What a tab shows, in a few words: its own name if you gave one, else from its view and filters. */
 export function tabTitle(t: WTab, series: SeriesInfo[]): string {
   if (t.title) return t.title
+  if (t.st.view === 'work') return 'Devices'  // the Devices page, in a tab of its own
   const st: TabState = t.st, f = st.filters || {}
   const sname = (id?: number | null) => series.find(x => x.id === id)?.name
   if (st.view === 'board') return 'Board · ' + (sname(st.boardSeries) || series[0]?.name || 'series')
@@ -80,12 +81,13 @@ export function TabStrip() {
   )
 }
 
-/** Grid, List, Folders, Timeline, Board as one compact switch; Working set / Send to NAS apart. */
+/** Grid, List, Folders, Timeline, Board as one compact switch; Send to NAS apart (local library only).
+ *  The Devices page is not a view: it opens as a tab from the top bar's indicator. On that tab nothing
+ *  is selected here, and choosing a view turns the tab into that view. */
 export function ViewSwitch() {
   const s = useStore()
   const views: View[] = ['grid', 'list', 'folders', 'timeline', 'board']
-  const extra: View = s.isLocal ? 'send' : 'work'
-  const ws = s.agents.reduce((n, a) => n + (a.state?.working_set?.length || 0), 0)
+  const extra: View = 'send'
   return (
     <div className="row" style={{ gap: 8 }}>
       <div className="vswitch" role="group" aria-label="View">
@@ -95,9 +97,9 @@ export function ViewSwitch() {
           </button>
         ))}
       </div>
-      <button className={'vbtn' + (s.view === extra ? ' on' : '')} title={NAME[extra]} onClick={() => s.setView(extra)}>
-        {ICON[extra]}<span>{NAME[extra]}</span>{extra === 'work' && ws > 0 && <span className="vbadge">{ws}</span>}
-      </button>
+      {s.isLocal && <button className={'vbtn' + (s.view === extra ? ' on' : '')} title={NAME[extra]} onClick={() => s.setView(extra)}>
+        {ICON[extra]}<span>{NAME[extra]}</span>
+      </button>}
     </div>
   )
 }
