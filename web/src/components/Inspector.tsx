@@ -66,7 +66,7 @@ export function SeriesPicker({ ids }: { ids: number[] }) {
       <select className="input" value="" onChange={e => add(e.target.value)} aria-label="Add to series">
         <option value="">Add to series…</option>
         {(() => { const t = buildTree(s.series, s.seriesFolders); return <>
-          {t.folders.map(f => <optgroup key={f.folder.id} label={f.folder.name}>{f.series.map(x => <option key={x.id} value={x.id}>{x.name} ({x.count})</option>)}</optgroup>)}
+          {t.folders.filter(f => f.series.length).map(f => <optgroup key={f.folder.id} label={f.path.join(' › ')}>{f.series.map(x => <option key={x.id} value={x.id}>{x.name} ({x.count})</option>)}</optgroup>)}
           {t.top.map(x => <option key={x.id} value={x.id}>{x.name} ({x.count})</option>)}
         </> })()}
         <option value="__new">+ new series…</option>

@@ -36,7 +36,7 @@ export interface Photo {
   /** board and strip only: the number shown on the photo (its place among the series' visible photos) and its series */
   num?: number | null
   series_id?: number | null
-  series?: { id: number; name: string; folder_id?: number | null; folder?: string | null; color?: string; num?: number | null; count?: number }[]
+  series?: { id: number; name: string; folder_id?: number | null; folder?: string | null; path?: string[]; color?: string; num?: number | null; count?: number }[]
   // photo detail only (GET /api/photos/{id})
   last_edit?: EditEvent | null
 }
@@ -103,21 +103,33 @@ export interface Tag { path: string; synonyms: string; category: number; private
 export interface SeriesInfo { id: number; name: string; count: number; covers: { id: number; v: number }[]
   /** the series folder it is in (null: top level), its place there, its lane colour, and whether its own board gives its order */
   folder_id?: number | null; pos?: number | null; color?: string; linked?: boolean }
-export interface SeriesFolder { id: number; name: string; pos: number | null; linked: boolean; count: number; series_count: number }
+export interface SeriesFolder { id: number; name: string; pos: number | null; linked: boolean; count: number; series_count: number
+  /** nested folders: the folder it lies in (null: top level), its colour (group frame, strip heading), how deep it lies, the
+   *  top-level folder whose board it is on, and what is in it with its subfolders */
+  parent_id?: number | null; color?: string; depth?: number; root_id?: number; total_count?: number; total_series?: number }
+/** A subfolder as the board and the strip show it (a group frame / a group heading). */
+export interface GroupInfo { id: number; name: string; color: string; parent_id: number | null; depth: number; series_count: number; count: number }
 /** What is open in the Series view: one series, or a folder of series. */
 export interface Target { kind: 'series' | 'folder'; id: number }
 export interface Frame { id?: number; label: string; x: number; y: number; w: number; h: number; maybe: number; color?: string; border?: string
   /** on a folder's board: the series this frame is (null: only a visual group) */
-  series_id?: number | null }
-export interface LaneInfo { id: number; name: string; color: string; count: number }
-export interface BoardData { series?: { id: number; name: string }; folder?: { id: number; name: string; linked: boolean } | null; linked?: boolean; color?: string
+  series_id?: number | null
+  /** on a folder's board: the subfolder this group frame is; group: a new frame drawn as a subfolder */
+  sub_id?: number | null; group?: boolean }
+export interface LaneInfo { id: number; name: string; color: string; count: number; folder_id?: number | null; path?: string[] }
+export interface FolderHead { id: number; name: string; linked: boolean; parent_id?: number | null }
+export interface BoardData { series?: { id: number; name: string }; folder?: FolderHead | null; linked?: boolean; color?: string
+  root?: { id: number; name: string }; path?: { id: number; name: string }[]; groups?: GroupInfo[]; focus?: number | null
   lanes?: LaneInfo[]; frames: Frame[]; items: Photo[]; last_add?: LastAdd | null; shapes?: BoardShape[]; warnings?: string[] }
-export interface Lane { key: string; series: { id: number; name: string; color: string } | null; label: string; color: string; maybe: number; frame: boolean; photos: Photo[] }
-export interface StripData { series?: { id: number; name: string; folder_id: number | null; color: string }; folder?: { id: number; name: string; linked: boolean } | null; linked: boolean; lanes: Lane[] }
+export interface Lane { key: string; series: { id: number; name: string; color: string } | null; label: string; color: string; maybe: number; frame: boolean; photos: Photo[]
+  folder_id?: number | null; depth?: number }
+export interface StripData { series?: { id: number; name: string; folder_id: number | null; color: string }; folder?: FolderHead | null; linked: boolean; lanes: Lane[]
+  root?: { id: number; name: string }; path?: { id: number; name: string }[]; groups?: GroupInfo[]; tree?: { folder?: number; series?: number; depth: number }[] }
 /** How far a board and its strip are apart (GET …/link): what linking them again would do. */
 export interface LinkState { linked: boolean; same: boolean; frames: number; series?: number; photos?: number; in_folder?: boolean
   free_frames?: { id: number; label: string; photos: number }[]; missing_frames?: string[]; moves?: number; reordered?: number
-  loose?: { id: number; filename: string }[]; off_board?: number; outside?: number; maybe?: number; differs?: number }
+  loose?: { id: number; filename: string }[]; off_board?: number; outside?: number; maybe?: number; differs?: number
+  new_folders?: string[]; refiled?: number }
 export type LinkMode = 'strip' | 'board' | 'none'
 const tbase = (t: Target) => (t.kind === 'folder' ? `/api/series-folders/${t.id}` : `/api/series/${t.id}`)
 /** step and progress (0..1): what a device is doing with the photo right now, if it says (R16). */
@@ -198,11 +210,14 @@ export const api = {
   seriesAdd: (id: number, ids: number[]) => call<{ added: number; moved?: number }>('POST', `/api/series/${id}/items`, { ids }),
   seriesRemove: (id: number, ids: number[]) => call('POST', `/api/series/${id}/remove`, { ids }),
   // series folders, the strip and the board link (a Target is one series or a folder of series)
-  folderCreate: (name: string) => call<{ id: number }>('POST', '/api/series-folders', { name }),
+  folderCreate: (name: string, parent_id?: number | null) => call<{ id: number }>('POST', '/api/series-folders', { name, parent_id: parent_id ?? undefined }),
+  folderColor: (id: number, color: string) => call<{ ok: boolean }>('PATCH', `/api/series-folders/${id}`, { color }),
+  folderMove: (id: number, parent_id: number | null, before?: number | null, before_folder?: number | null) =>
+    call<{ ok: boolean; errors?: string[] }>('POST', `/api/series-folders/${id}/move`, { parent_id, before: before ?? undefined, before_folder: before_folder ?? undefined }),
   folderRename: (id: number, name: string) => call<{ ok: boolean; errors?: string[] }>('PATCH', `/api/series-folders/${id}`, { name }),
   folderDelete: (id: number) => call<{ ok: boolean; series: number[] }>('DELETE', `/api/series-folders/${id}`),
   seriesMove: (id: number, folder_id: number | null, before?: number | null, before_folder?: number | null) => call<{ ok: boolean; errors?: string[] }>('POST', `/api/series/${id}/move`, { folder_id, before: before ?? null, before_folder: before_folder ?? null }),
-  seriesTopOrder: (entries: ({ folder: number } | { series: number })[]) => call<{ ok: boolean }>('POST', '/api/series/top-order', { entries }),
+  seriesTopOrder: (entries: ({ folder: number } | { series: number })[], folder_id?: number | null) => call<{ ok: boolean }>('POST', '/api/series/top-order', { entries, folder_id: folder_id ?? undefined }),
   seriesOrder: (folder_id: number | null, ids: number[]) => call<{ ok: boolean }>('POST', '/api/series/order', { folder_id, ids }),
   tboard: (t: Target) => call<BoardData>('GET', `${tbase(t)}/board`),
   tboardSave: (t: Target, body: { items: { id: number; x: number; y: number }[]; frames?: Frame[]; remove?: number[]; restore?: boolean }) => call<BoardData>('PUT', `${tbase(t)}/board`, body),
@@ -216,7 +231,7 @@ export const api = {
     call<StripData>('POST', `${tbase(t)}/strip/move`, t.kind === 'folder' ? { ids, series: lane.series?.id, before } : { ids, lane: lane.key, before }),
   tlink: (t: Target) => call<LinkState>('GET', `${tbase(t)}/link`),
   tlinkSet: (t: Target, linked: boolean, mode?: LinkMode) =>
-    call<{ linked: boolean; removed_frames?: string[]; created?: string[]; loose?: { id: number; filename: string }[]; undo?: number }>('POST', `${tbase(t)}/link`, { linked, mode }),
+    call<{ linked: boolean; removed_frames?: string[]; created?: string[]; created_folders?: string[]; loose?: { id: number; filename: string }[]; undo?: number }>('POST', `${tbase(t)}/link`, { linked, mode }),
   tlinkRestore: (t: Target, token: number) => call<{ ok: boolean }>('POST', `${tbase(t)}/link/restore`, { token }),
   folderBoardRemove: (id: number, ids: number[]) => call<BoardData>('POST', `/api/series-folders/${id}/remove`, { ids }),
   prefGet: (key: string) => call<{ value: unknown }>('GET', `/api/prefs/${key}`),

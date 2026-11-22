@@ -12,17 +12,47 @@ export const keyOf = (t: Target): number => (t.kind === 'folder' ? -t.id : t.id)
 const byPos = <T extends { pos?: number | null; name: string }>(a: T, b: T) =>
   (a.pos ?? 1e9) - (b.pos ?? 1e9) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
 
-export type TreeEntry = { kind: 'folder'; folder: SeriesFolder; series: SeriesInfo[] } | { kind: 'series'; series: SeriesInfo }
-export interface Tree { folders: { folder: SeriesFolder; series: SeriesInfo[] }[]; top: SeriesInfo[]; entries: TreeEntry[] }
-/** Folders (each with its series in order), then the series at the top level. */
+export type TreeEntry = { kind: 'folder'; folder: SeriesFolder; series: SeriesInfo[]; kids: TreeEntry[]; depth: number } | { kind: 'series'; series: SeriesInfo }
+export interface FlatFolder { folder: SeriesFolder; series: SeriesInfo[]; depth: number; path: string[] }
+export interface Tree { folders: FlatFolder[]; top: SeriesInfo[]; entries: TreeEntry[] }
+const posOf = (e: TreeEntry) => (e.kind === 'folder' ? e.folder.pos : e.series.pos) ?? 1e9
+/** The tree of folders (to any depth) and series. `entries`: the top level; a folder entry has its `kids` (subfolders and
+ *  series in one order: the server's pos, a folder first on a tie) and `series` (those directly in it). `folders`:
+ *  every folder in tree order, with its depth and the names from the top-level folder down to it. */
 export function buildTree(series: SeriesInfo[], folders: SeriesFolder[]): Tree {
   const known = new Set(folders.map(f => f.id))
-  const fs = [...folders].sort(byPos).map(folder => ({ folder, series: series.filter(x => x.folder_id === folder.id).sort(byPos) }))
+  const flat: FlatFolder[] = []
+  const seen = new Set<number>()
+  const level = (parent: number | null, depth: number, path: string[]): TreeEntry[] => {
+    const out: TreeEntry[] = []
+    for (const folder of folders.filter(f => (f.parent_id != null && known.has(f.parent_id) ? f.parent_id : null) === parent).sort(byPos)) {
+      if (seen.has(folder.id)) continue
+      seen.add(folder.id)
+      const own = series.filter(x => x.folder_id === folder.id).sort(byPos)
+      const e = { kind: 'folder' as const, folder, series: own, kids: [] as TreeEntry[], depth }
+      flat.push({ folder, series: own, depth, path: [...path, folder.name] })
+      e.kids = level(folder.id, depth + 1, [...path, folder.name])
+      out.push(e)
+    }
+    for (const x of series.filter(x => (x.folder_id != null && known.has(x.folder_id) ? x.folder_id : null) === parent).sort(byPos)) out.push({ kind: 'series', series: x })
+    return out.sort((a, b) => posOf(a) - posOf(b) || (a.kind === b.kind ? 0 : a.kind === 'folder' ? -1 : 1))
+  }
+  const entries = level(null, 0, [])
   const top = series.filter(x => x.folder_id == null || !known.has(x.folder_id)).sort(byPos)
-  // folders and top-level series share one order (the server's pos); a folder comes first on a tie
-  const entries: TreeEntry[] = [...fs.map(f => ({ kind: 'folder' as const, ...f })), ...top.map(x => ({ kind: 'series' as const, series: x }))]
-    .sort((a, b) => ((a.kind === 'folder' ? a.folder.pos : a.series.pos) ?? 1e9) - ((b.kind === 'folder' ? b.folder.pos : b.series.pos) ?? 1e9) || (a.kind === b.kind ? 0 : a.kind === 'folder' ? -1 : 1))
-  return { folders: fs, top, entries }
+  return { folders: flat, top, entries }
+}
+
+/** A folder and every folder below it. */
+export function folderSubtree(folders: SeriesFolder[], id: number): Set<number> {
+  const out = new Set<number>([id])
+  for (let grew = true; grew;) { grew = false; for (const f of folders) if (f.parent_id != null && out.has(f.parent_id) && !out.has(f.id)) { out.add(f.id); grew = true } }
+  return out
+}
+/** The names from the top-level folder down to this one. */
+export function folderPath(folders: SeriesFolder[], id: number | null | undefined): string[] {
+  const out: string[] = []
+  for (let f = folders.find(x => x.id === id), n = 0; f && n < 50; f = folders.find(x => x.id === f!.parent_id), n++) out.unshift(f.name)
+  return out
 }
 
 /** What to show when a tab has nothing (valid) chosen: the first folder, else the first series. */

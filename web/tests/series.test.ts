@@ -2,7 +2,7 @@
 // Tests for the Series view's plain logic (src/seriesnav.ts): npm test.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildTree, dropBefore, firstTarget, keyOf, movedLanes, num2, numAtSlot, renumber, resolveTarget, slotAt, targetName, targetOf } from '../src/seriesnav.ts'
+import { buildTree, dropBefore, firstTarget, folderPath, folderSubtree, keyOf, movedLanes, num2, numAtSlot, renumber, resolveTarget, slotAt, targetName, targetOf } from '../src/seriesnav.ts'
 
 const S = (id: number, name: string, folder_id: number | null = null, pos: number | null = null) => ({ id, name, count: 0, covers: [], folder_id, pos })
 const F = (id: number, name: string, pos: number | null = null) => ({ id, name, pos, linked: true, count: 0, series_count: 0 })
@@ -79,4 +79,25 @@ test('tree: folders and top-level series share one order', () => {
   const t = buildTree([S(1, 'Solo', null, 1), S(2, 'In', 10, 1), S(3, 'Last', null, 4)], [F(10, 'Grecia', 2), F(11, 'Empty', 3)])
   assert.deepEqual(t.entries.map(e => (e.kind === 'folder' ? 'f' + e.folder.id : 's' + e.series.id)), ['s1', 'f10', 'f11', 's3'])
   assert.deepEqual(firstTarget(t), { kind: 'series', id: 1 })
+})
+
+test('nested folders: the tree to any depth, one order per folder', () => {
+  const sub = (id: number, name: string, pos: number, parent_id: number | null) => ({ ...F(id, name, pos), parent_id })
+  const folders = [sub(10, 'Grecia', 2, null), sub(11, 'Cicladi', 2, 10), sub(12, 'Naxos e Paros', 1, 11), sub(13, 'Italia', 1, null), sub(14, 'Lost', 1, 99)]
+  const series = [S(1, 'Atene', 10, 1), S(2, 'Milos', 11, 2), S(3, 'Chora', 12, 1), S(4, 'Rodi', 10, 3), S(5, 'Solo', null, 3)]
+  const t = buildTree(series, folders)
+  // Lost (its parent is gone) is shown at the top level; a folder comes first on a tie
+  assert.deepEqual(t.entries.map(e => (e.kind === 'folder' ? e.folder.name : e.series.name)), ['Italia', 'Lost', 'Grecia', 'Solo'])
+  const g = t.entries[2]
+  assert.ok(g.kind === 'folder')
+  assert.deepEqual(g.kids.map(e => (e.kind === 'folder' ? 'f:' + e.folder.name : e.series.name)), ['Atene', 'f:Cicladi', 'Rodi'])
+  assert.deepEqual(g.series.map(x => x.name), ['Atene', 'Rodi'])
+  const c = g.kids[1]
+  assert.ok(c.kind === 'folder' && c.depth === 1)
+  assert.deepEqual(c.kids.map(e => (e.kind === 'folder' ? 'f:' + e.folder.name : e.series.name)), ['f:Naxos e Paros', 'Milos'])
+  assert.deepEqual(t.folders.map(f => [f.folder.name, f.depth, f.path.join('/')]),
+    [['Italia', 0, 'Italia'], ['Lost', 0, 'Lost'], ['Grecia', 0, 'Grecia'], ['Cicladi', 1, 'Grecia/Cicladi'], ['Naxos e Paros', 2, 'Grecia/Cicladi/Naxos e Paros']])
+  assert.deepEqual([...folderSubtree(folders, 10)].sort(), [10, 11, 12])
+  assert.deepEqual(folderPath(folders, 12), ['Grecia', 'Cicladi', 'Naxos e Paros'])
+  assert.deepEqual(t.top.map(x => x.name), ['Solo'])
 })

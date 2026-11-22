@@ -21,7 +21,7 @@ export function SeriesLine({ id }: { id: number }) {
       {list.map(x => (
         <button key={x.id} className="linkbtn sline" title="Open this series" onClick={() => { s.setBoardSeries(x.id); s.setView('board') }}>
           <i className="st-chip" style={x.color ? { background: x.color } : undefined} />
-          <span className="ellipsis">{x.folder ? x.folder + ' / ' : ''}{x.name}</span>
+          <span className="ellipsis">{x.path?.length ? x.path.join(' / ') + ' / ' : x.folder ? x.folder + ' / ' : ''}{x.name}</span>
           <span className="small muted" style={{ whiteSpace: 'nowrap' }}>{x.num ? `position ${num2(x.num)} of ${x.count}` : 'not in the order'}</span>
         </button>
       ))}

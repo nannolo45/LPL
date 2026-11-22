@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, Lane, Photo, SeriesFolder, StripData, Target, thumbUrl } from '../api'
+import { api, GroupInfo, Lane, Photo, SeriesFolder, StripData, Target, thumbUrl } from '../api'
 import { useStore } from '../store'
 import { getSettings } from '../settings'
 import { actionFor, keysOf, typingIn, useShortcutsVersion } from '../shortcuts'
-import { dropBefore, movedLanes, num2, numAtSlot, renumber, slotAt } from '../seriesnav'
+import { buildTree, dropBefore, folderSubtree, movedLanes, num2, numAtSlot, renumber, slotAt } from '../seriesnav'
 import { bumpSeries, MenuButton, MenuItem, SeriesOps, seriesRev, useSeriesRev } from '../seriesops'
 import { useBackLayer } from '../back'
 import { selectionIds } from '../devices'
 import { EditOnPhone } from './PhoneEdit'
+import { FolderIcon } from './SeriesTree'
 
 const hexA = (hex: string, a: number) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})` }
 const LinkIcon = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 14a4.5 4.5 0 006.4 0l3-3a4.5 4.5 0 00-6.4-6.4l-1.2 1.2" /><path d="M14 10a4.5 4.5 0 00-6.4 0l-3 3a4.5 4.5 0 006.4 6.4l1.2-1.2" /></svg>
@@ -17,17 +18,18 @@ const Grip = () => <svg width="14" height="16" viewBox="0 0 14 16" fill="current
 export interface StripInfo { photos: number; hidden: number; lanes: number }
 
 type LaneProps = {
-  lane: Lane; shown: Photo[]; selKey: string; folder: boolean; linked: boolean; canReorder: boolean; phone: boolean; menu: MenuItem[] | null
+  lane: Lane; shown: Photo[]; selKey: string; folder: boolean; linked: boolean; canReorder: boolean; phone: boolean; menu: MenuItem[] | null; depth?: number
 }
 /** One lane: its header and its photos in a row that scrolls sideways. Drawn again only when its own photos,
  *  numbers or selection change; everything that happens while dragging is done on the page directly (StripView). */
-const LaneRow = memo(function LaneRow({ lane, shown, selKey, folder, linked, canReorder, phone, menu }: LaneProps) {
+const LaneRow = memo(function LaneRow({ lane, shown, selKey, folder, linked, canReorder, phone, menu, depth = 0 }: LaneProps) {
   const sel = useMemo(() => new Set(selKey ? selKey.split(',').map(Number) : []), [selKey])
   const c = lane.color
   const n = shown.length
   return (
     <section className={'lane' + (lane.maybe ? ' maybe' : '')} aria-label={lane.label} data-lane={lane.key}
-      style={c ? { borderColor: hexA(c, .55), background: hexA(c, .07) } : undefined}>
+      data-skey={folder && lane.series ? 's' + lane.series.id : undefined} data-parent={folder ? lane.folder_id ?? undefined : undefined} data-depth={depth || undefined}
+      style={{ ...(c ? { borderColor: hexA(c, .55), background: hexA(c, .07) } : {}), ...(depth ? { marginLeft: depth * (phone ? 10 : 22) } : {}) }}>
       <div className="lane-h">
         {canReorder && <button type="button" className="lane-grip" data-grip={lane.key} aria-label={`${phone ? 'Hold and drag' : 'Drag'} to reorder the series ${lane.label}`}><Grip /></button>}
         <span className="lane-chip" style={c ? { background: c } : undefined} />
@@ -57,7 +59,7 @@ type DragState = {
   from: string                // lane the grabbed photo (or the lane header) came from
   label: string; num: number | null
   x: number; y: number
-  drop: { lane: string; slot: number } | null
+  drop: { lane: string; slot: number; into?: number | null } | null
   touch: boolean
 }
 
@@ -73,6 +75,9 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries }: {
   const rev = useSeriesRev()
   const phone = s.isMobile
   const [data, setData] = useState<StripData | null>(null)
+  // group headings that are folded, remembered on this device
+  const [folded, setFolded] = useState<number[]>(() => { try { const v = JSON.parse(localStorage.getItem('lpl.strip.folded') || '[]'); return Array.isArray(v) ? v : [] } catch { return [] } })
+  const fold = (id: number) => setFolded(o => { const n = o.includes(id) ? o.filter(x => x !== id) : [...o, id]; try { localStorage.setItem('lpl.strip.folded', JSON.stringify(n)) } catch { /* ignore */ } return n })
   const [lifted, setLifted] = useState(false)   // a drag is on (the phone's Back lets go of it)
   const root = useRef<HTMLDivElement>(null)
   const ghost = useRef<HTMLDivElement>(null)
@@ -186,6 +191,7 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries }: {
 
   // ---- dragging, done on the page itself
   const rows = () => Array.from(root.current?.querySelectorAll<HTMLElement>('.srow') || [])
+  const srows = () => Array.from(root.current?.querySelectorAll<HTMLElement>('[data-skey]') || [])  // a folder's lanes and group headings, top to bottom
   const sections = () => Array.from(root.current?.querySelectorAll<HTMLElement>('section.lane') || [])
   const cellOf = (row: HTMLElement) => {
     const a = row.querySelector<HTMLElement>('.sth')
@@ -204,7 +210,20 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries }: {
     else if (d.y > rr.bottom - edge) r.scrollTop += Math.ceil((d.y - rr.bottom + edge) / 4)
     let again = d.y < rr.top + edge || d.y > rr.bottom - edge
     const m = mark.current
-    if (d.kind === 'lane') {
+    if (d.kind === 'lane' && isFolder) {
+      // a lane or a group heading among the rows of the tree: in front of the row the pointer is above (in that row's
+      // folder); on the middle of a group heading: into that folder, at its end; under everything: last in the open folder
+      const els = srows()
+      let slot = els.length, top = 0, into: number | null = null, left = 0
+      for (let i = 0; i < els.length; i++) {
+        const b = els[i].getBoundingClientRect(), key = els[i].dataset.skey!
+        if (key[0] === 'f' && key !== d.from && d.y > b.top + b.height * .25 && d.y < b.bottom - b.height * .25) { into = +key.slice(1); slot = i; top = b.bottom + 1; left = b.left - rr.left + 22; break }
+        if (d.y < b.top + b.height / 2) { slot = i; top = b.top - 6; left = b.left - rr.left; break }
+        top = b.bottom + 4
+      }
+      d.drop = { lane: '', slot, into }
+      if (m) { if (m.className !== 'strip-mark h') m.className = 'strip-mark h'; m.style.transform = `translate(${rr.left + Math.max(12, left)}px, ${top}px)`; m.style.width = rr.width - 12 - Math.max(12, left) + 'px'; m.style.height = ''; m.style.display = 'block' }
+    } else if (d.kind === 'lane') {
       const secs = sections()
       let slot = secs.length, top = 0
       for (let i = 0; i < secs.length; i++) { const b = secs[i].getBoundingClientRect(); if (d.y < b.top + b.height / 2) { slot = i; top = b.top - 6; break } top = b.bottom + 4 }
@@ -257,11 +276,13 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries }: {
     const st = state.current
     const g = ghost.current
     if (kind === 'lane') {
+      const grp = isFolder && String(id)[0] === 'f' ? (data?.groups || []).find(x => 'f' + x.id === id) : undefined  // a group heading: the subfolder moves
       const lane = st.lanes.find(l => l.key === id)
-      if (!lane || !g) return
-      drag.current = { kind, ids: [], from: lane.key, label: lane.label, num: null, x, y, drop: null, touch }
-      g.className = 'strip-ghost lane'; g.textContent = lane.label
-      root.current?.querySelector(`section.lane[data-lane="${lane.key}"]`)?.setAttribute('data-moving', '1')
+      if ((!lane && !grp) || !g) return
+      const key = grp ? 'f' + grp.id : lane!.key, label = grp ? grp.name : lane!.label
+      drag.current = { kind, ids: [], from: key, label, num: null, x, y, drop: null, touch }
+      g.className = 'strip-ghost lane'; g.textContent = label
+      root.current?.querySelector(grp ? `.strip-group[data-skey="${key}"]` : `section.lane[data-lane="${key}"]`)?.setAttribute('data-moving', '1')
     } else {
       const pid = id as number
       const p = st.byId.get(pid)
@@ -301,6 +322,20 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries }: {
     setLifted(false)
     if (!d || !commit || !d.drop) return
     const st = state.current
+    if (d.kind === 'lane' && isFolder) {  // a series or a subfolder to another place in the tree (the server moves frames and tags)
+      const els = srows(), key = d.from, id = +key.slice(1)
+      const el = d.drop.into == null ? els[d.drop.slot] : undefined
+      const parent = d.drop.into != null ? d.drop.into : el ? +(el.dataset.parent || target.id) : target.id
+      const before = el ? el.dataset.skey! : null
+      if (before === key) return
+      const own = els.findIndex(x => x.dataset.skey === key), ownParent = own >= 0 ? +(els[own].dataset.parent || target.id) : null
+      if (key[0] === 'f' && folderSubtree(s.seriesFolders, id).has(parent)) return  // (not into itself)
+      if (key[0] === 's' && d.drop.into == null && ownParent === parent && d.drop.slot === own + 1) return  // dropped where it is
+      const bs = before && before[0] === 's' ? +before.slice(1) : null, bf = before && before[0] === 'f' ? +before.slice(1) : null
+      const p = key[0] === 'f' ? api.folderMove(id, parent, bs, bf) : api.seriesMove(id, parent, bs, bf)
+      p.then(() => { s.reloadSeries(); if (ownParent !== parent) s.reloadTags(); load(); told() }).catch(e => { s.toast(e.message); load() })
+      return
+    }
     if (d.kind === 'lane') {
       const keys = st.lanes.map(l => l.key), i = keys.indexOf(d.from)
       const rest = keys.filter(k => k !== d.from)
@@ -334,7 +369,7 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries }: {
     const th = t?.closest?.<HTMLElement>('.sth')
     if (th) return { kind: 'photos', id: +th.dataset.id! }
     const grip = t?.closest?.<HTMLElement>('.lane-grip')
-    return grip ? { kind: 'lane', id: grip.dataset.grip! } : null
+    return grip ? { kind: 'lane', id: grip.dataset.grip! } : null  // (a group heading's grip names its folder: "f<id>")
   }
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.pointerType === 'touch' || e.button !== 0) return
@@ -437,26 +472,68 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries }: {
     if (!l.series) return null
     const x = s.series.find(y => y.id === l.series!.id)
     if (!x) return null
-    const others = s.seriesFolders.filter(f => f.id !== x.folder_id)
+    const others = buildTree(s.series, s.seriesFolders).folders.filter(f => f.folder.id !== x.folder_id)
     return [
       { label: 'Open this series alone', onClick: () => ops.open({ kind: 'series', id: x.id }) },
       { label: 'Rename', onClick: () => ops.renameSeries(x) },
       { label: 'Colour', swatches: { value: l.color, pick: c => ops.colorSeries(x, c) } },
-      { label: 'Move to folder…', sub: [{ label: 'Top level (out of the folder)', onClick: () => ops.moveSeries(x, null) }, ...others.map(f => ({ label: f.name, onClick: () => ops.moveSeries(x, f.id) }))] },
+      { label: 'Move to folder…', sub: [{ label: 'Top level (out of the folder)', onClick: () => ops.moveSeries(x, null) }, ...others.map(f => ({ label: '\u2003'.repeat(f.depth) + f.folder.name, onClick: () => ops.moveSeries(x, f.folder.id) }))] },
       { label: 'Delete series', danger: true, onClick: () => { ops.deleteSeries(x) } },
     ]
   }
+  const groupMenu = (g: GroupInfo): MenuItem[] => {
+    const f = s.seriesFolders.find(x => x.id === g.id)
+    if (!f) return []
+    return [
+      { label: 'Open this folder alone', onClick: () => ops.open({ kind: 'folder', id: f.id }) },
+      { label: `New series in ${f.name}`, onClick: () => { ops.newSeries(f) } },
+      { label: `New folder in ${f.name}`, onClick: () => { ops.newFolder(f) } },
+      { label: 'Rename', onClick: () => ops.renameFolder(f) },
+      { label: 'Colour', swatches: { value: g.color, pick: c => { api.folderColor(f.id, c).then(() => ops.done()).catch(e => ops.fail(e)) } } },
+      { label: 'Delete folder', danger: true, onClick: () => { ops.deleteFolder(f) } },
+    ]
+  }
   const linked = !!data?.linked
+  const groups = data?.groups || []
   const sel = new Set(s.sel)
   const where = isFolder ? name : 'this series'
   return (
     <div className={'strip' + (phone ? ' phone' : '')} ref={root} onPointerDown={onPointerDown}>
       {!data && <div className="muted" style={{ padding: 20 }}>Loading…</div>}
-      {lanes.map(l => {
-        const shown = shownOf.get(l.key) || []
-        return <LaneRow key={l.key} lane={l} shown={shown} selKey={shown.filter(p => sel.has(p.id)).map(p => p.id).join(',')} folder={isFolder} linked={linked}
-          canReorder={isFolder ? lanes.length > 1 : linked && l.frame && !l.maybe && lanes.filter(x => x.frame && !x.maybe).length > 1} phone={phone} menu={laneMenu(l)} />
-      })}
+      {(() => {
+        const row = (l: Lane, depth = 0) => {
+          const shown = shownOf.get(l.key) || []
+          return <LaneRow key={l.key} lane={l} shown={shown} selKey={shown.filter(p => sel.has(p.id)).map(p => p.id).join(',')} folder={isFolder} linked={linked} depth={depth}
+            canReorder={isFolder ? lanes.length > 1 || groups.length > 0 : linked && l.frame && !l.maybe && lanes.filter(x => x.frame && !x.maybe).length > 1} phone={phone} menu={laneMenu(l)} />
+        }
+        if (!isFolder || !data?.tree || !groups.length) return lanes.map(l => row(l))
+        // a folder with subfolders: each subfolder's lanes together under a heading that folds, indented per depth
+        const out: React.ReactNode[] = []
+        let hide = -1  // rows deeper than this are inside a folded group
+        for (const e of data.tree) {
+          if (hide >= 0 && e.depth > hide) continue
+          hide = -1
+          if (e.series != null) { const l = lanes.find(x => x.series?.id === e.series); if (l) out.push(row(l, e.depth)); continue }
+          const g = groups.find(x => x.id === e.folder)
+          if (!g) continue
+          const isFolded = folded.includes(g.id)
+          if (isFolded) hide = e.depth
+          out.push(
+            <div key={'g' + g.id} className={'strip-group' + (isFolded ? ' folded' : '')} role="group" aria-label={`Folder ${g.name}`} data-skey={'f' + g.id} data-parent={g.parent_id ?? undefined} data-depth={e.depth}
+              style={{ marginLeft: e.depth * (phone ? 10 : 22), ...(g.color ? { borderColor: hexA(g.color, .6), background: hexA(g.color, .1) } : {}) }}>
+              <button type="button" className="lane-grip" data-grip={'f' + g.id} aria-label={`${phone ? 'Hold and drag' : 'Drag'} to move the folder ${g.name}`}><Grip /></button>
+              <button type="button" className="sg-fold" aria-expanded={!isFolded} aria-label={`${isFolded ? 'Unfold' : 'Fold'} ${g.name}`} onClick={() => fold(g.id)}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: isFolded ? 'none' : 'rotate(90deg)', transition: 'transform .12s' }}><path d="M9 6l6 6-6 6" /></svg>
+              </button>
+              <span className="sg-icon" style={g.color ? { color: g.color } : undefined}><FolderIcon size={16} /></span>
+              <span className="sg-name display">{g.name}</span>
+              <span className="lane-n">{phone ? `${g.series_count} · ${g.count}` : `${g.series_count} series · ${g.count} photo${g.count === 1 ? '' : 's'}`}</span>
+              <div className="grow" />
+              <MenuButton label={`More for the folder ${g.name}: open, rename, colour, new series, delete`} items={groupMenu(g)} className="smore lane-more" />
+            </div>)
+        }
+        return out
+      })()}
       {data && isFolder && <button type="button" className="strip-new" onClick={onNewSeries}>+ New series in {name}</button>}
       {data && !isFolder && !all.length && <div className="muted" style={{ padding: '6px 2px' }}>No photos in this series yet. “+ Add photos” brings them in.</div>}
       {data && !(phone && selHere.length > 0) && (

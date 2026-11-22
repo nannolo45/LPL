@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { api, BoardArrow, BoardData, BoardEnd, BoardNote, BoardShape, Frame, LaneInfo, Photo, Target, thumbUrl } from '../api'
+import { api, BoardArrow, BoardData, BoardEnd, BoardNote, BoardShape, Frame, GroupInfo, LaneInfo, Photo, Target, thumbUrl } from '../api'
 import { useStore } from '../store'
 import { keyOf, num2 } from '../seriesnav'
-import { takePendingUndo, useSeriesRev } from '../seriesops'
+import { bumpSeries, takePendingUndo, useSeriesRev } from '../seriesops'
 import { useAsk } from './Ask'
-import { LinkIcon } from './SeriesTree'
+import { FolderIcon, LinkIcon } from './SeriesTree'
 import { actionFor, comboOf, keysOf, typingIn, useShortcutsVersion } from '../shortcuts'
 import { getSettings, setSetting, Settings, useSettings } from '../settings'
 import { LABELS } from '../fields'
@@ -118,6 +118,12 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
   const [selShapes, setSelShapes] = useState<string[]>([])
   const [editing, setEditing] = useState<string | null>(null)
   const [tool, setTool] = useState<Tool>('select')
+  // nested folders: a subfolder is a group frame on its top-level folder's board (what is in it, for its name bar);
+  // asGroup: the next frame drawn is a new subfolder; focus: the group frame to show when a subfolder is opened alone
+  const [groups, setGroups] = useState<Map<number, GroupInfo>>(new Map())
+  const [asGroup, setAsGroup] = useState(false)
+  const focusFrame = useRef<number | null>(null)
+  useEffect(() => { if (tool !== 'frame') setAsGroup(false) }, [tool])
   const [marquee, setMarquee] = useState<Rect | null>(null)
   const [ghost, setGhost] = useState<{ a: Pt; b: Pt } | null>(null)
   const [space, setSpace] = useState(false)
@@ -232,6 +238,7 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
     setItems(prev => prev.map(it => { const p = by.get(it.id); return p && (p.num !== it.num || p.ord !== it.ord || p.series_id !== it.series_id) ? { ...it, num: p.num, ord: p.ord, series_id: p.series_id } : it }))
     if (withFrames) { setFrames(r.frames); framesDirty.current = false }
     if (r.lanes) setLanes(r.lanes)
+    if (r.groups) setGroups(new Map(r.groups.map(g => [g.id, g])))
     if (r.warnings?.length) s.toast(r.warnings[0])
   }
   const load = useCallback(() => {
@@ -241,6 +248,7 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
       setFrames(r.frames); setItems(its); setName(r.folder && isFolder ? r.folder.name : r.series?.name || '')
       setLinked(!!r.linked); linkedRef.current = !!r.linked
       setLanes(r.lanes || []); setParent(!isFolder && r.folder ? r.folder.name : null)
+      setGroups(new Map((r.groups || []).map(g => [g.id, g]))); focusFrame.current = isFolder ? r.focus ?? null : null
       shapesDirty.current = false; setShapesRaw(r.shapes || [])
       return { items: its, frames: r.frames }
     }).catch(e => { if (!/not found/.test(e.message)) s.toast(e.message); return null })  // not found: it was just deleted, the view is about to change
@@ -751,13 +759,15 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
     const cx = w ? (w.scrollLeft + w.clientWidth / 2) / zoom + ox : 490, cy = w ? (w.scrollTop + w.clientHeight / 2) / zoom + oy : 190
     const nums = frames.map(f => parseInt(f.label, 10)).filter(n => !isNaN(n))
     let label = String((nums.length ? Math.max(...nums) : 0) + 1).padStart(2, '0')
+    const group = isFolder && linked && asGroup  // drawn with "New subfolder": a group frame, which is a new folder in this one
     if (isFolder && linked) {  // here a frame is a series: it gets a name of its own at once (and is renamed as you type the real one)
-      const taken = new Set([...s.series.map(x => x.name), ...frames.map(f => f.label)])
-      label = 'New series'
-      for (let k = 2; taken.has(label); k++) label = 'New series ' + k
+      const taken = new Set([...s.series.map(x => x.name), ...s.seriesFolders.map(x => x.name), ...frames.map(f => f.label)])
+      const base = group ? 'New folder' : 'New series'
+      label = base
+      for (let k = 2; taken.has(label); k++) label = base + ' ' + k
     }
     const rect = r || { x: Math.round(sn(cx - 450)), y: Math.round(sn(cy - 150)), w: 900, h: 300 }
-    const nf = [...frames, { label, ...rect, maybe: 0, color: getSettings().boardFrameColor || '' }]
+    const nf: Frame[] = [...frames, { label, ...rect, maybe: 0, color: group ? '' : getSettings().boardFrameColor || '', ...(group ? { group: true } : {}) }]
     checkpoint(); setFrames(nf); save(items, nf, true); setEditFrame(nf.length - 1); setSelFrames([nf.length - 1])
   }
   const styleFrames = (p: Partial<Frame>) => {
@@ -767,7 +777,21 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
   }
   const deleteFrames = async (idx: number[]) => {
     if (!idx.length) return
-    if (isFolder && linked) {  // here a frame is a series: removing it deletes the series (never the photos), after asking
+    if (isFolder && linked) {  // a group frame is a subfolder: removing it dissolves the folder (nothing is deleted), after asking
+      const subs = idx.map(i => frames[i]).filter(f => f?.sub_id)
+      if (subs.length) {
+        const f = subs[0], g = groups.get(f.sub_id!)
+        const yes = await ask({ title: `Dissolve the folder “${f.label}”?`, ok: 'Dissolve folder', danger: true,
+          text: `This frame is the folder ${f.label}. Removing it dissolves the folder: its ${g?.series_count ?? ''} series move up one level and keep their frames, photos and order (their tags lose “${f.label}”). No series and no photo is deleted.` })
+        if (!yes) return
+        checkpoint()
+        try { await api.folderDelete(f.sub_id!) } catch (e: any) { s.toast(e.message) }
+        setSelFrames([])
+        if (target.id === f.sub_id) s.setBoardSeries(-(s.seriesFolders.find(x => x.id === f.sub_id)?.parent_id ?? 0) || null)
+        s.reloadSeries(); s.reloadTags(); bumpSeries()
+        await load()
+        return
+      }
       const hit = idx.map(i => frames[i]).filter(f => f?.series_id)
       if (hit.length) {
         const n = items.filter(it => hit.some(f => f.series_id === it.series_id)).length
@@ -839,6 +863,8 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
     if (!w) return
     if (needInitialScroll.current && (items.length || frames.length)) {  // back where you were on this board, or its start at the top left
       needInitialScroll.current = false
+      const fg = focusFrame.current != null ? frames.find(f => f.id === focusFrame.current) : null
+      if (fg) { origin.current = { ox, oy }; showRect(fg, 1); return }  // a subfolder opened alone: the same board, at its group frame
       const v = readView(viewKey)
       if (v) {
         w.scrollLeft = (v.cx - ox) * zoom - w.clientWidth / 2
@@ -855,6 +881,12 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
     origin.current = { ox, oy }
   })
   const seriesCount = useMemo(() => { const m = new Map<number, number>(); for (const it of items) if (it.series_id != null && !it.hidden) m.set(it.series_id, (m.get(it.series_id) || 0) + 1); return m }, [items])
+  // group frames lie under the frames in them (the larger first), so the frames inside stay within reach
+  const frameOrder = useMemo(() => {
+    const idx = frames.map((_, i) => i)
+    const isG = (f: Frame) => isFolder && (f.sub_id != null || !!f.group)
+    return [...idx.filter(i => isG(frames[i])).sort((a, b) => frames[b].w * frames[b].h - frames[a].w * frames[a].h), ...idx.filter(i => !isG(frames[i]))]
+  }, [frames, isFolder])
   const insideCount = (f: Frame) => shown.filter(it => centerIn(itemRect(it), f)).length
   const selSet = new Set(s.sel), shSet = new Set(selShapes)
   const selNotes = notes.filter(n => shSet.has(n.key))
@@ -876,15 +908,18 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
                 <div className="canvas" data-bg="1" style={{ width: W * zoom, height: H * zoom }} onPointerDown={onBgDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
                   onDoubleClick={e => { if (tool === 'select' && (e.target as HTMLElement).dataset?.bg) addNote(toBoard(e)) }}>
                   <div ref={inner} data-bg="1" style={{ transform: `scale(${zoom}) translate(${-ox}px, ${-oy}px)`, transformOrigin: '0 0', width: W, height: H, position: 'absolute', left: 0, top: 0 }}>
-                    {frames.map((f, i) => (
-                      <div key={f.id ?? 'n' + i} data-bg="1" className={'frame' + (f.maybe ? ' maybe' : '') + (moving?.frames.has(i) ? ' moving' : '') + (selFrames.includes(i) ? ' fsel' : '')}
+                    {frameOrder.map(i => { const f = frames[i]; const grp = isFolder && (f.sub_id != null || f.group) ? groups.get(f.sub_id ?? -1) ?? null : undefined; return (
+                      <div key={f.id ?? 'n' + i} data-bg="1" data-sub={f.sub_id ?? undefined} className={'frame' + (grp !== undefined ? ' group' + (linked ? '' : ' loose') : '') + (f.maybe ? ' maybe' : '') + (moving?.frames.has(i) ? ' moving' : '') + (selFrames.includes(i) ? ' fsel' : '')}
                         style={{ left: f.x, top: f.y, width: f.w, height: f.h, ...frameLook(f) }}>
                         {(['l', 'r', 'b'] as const).map(side => <span key={side} className={'fedge ' + side} onPointerDown={e => onFrameDown(e, i, 'frame')} />)}
                         {editFrame === i
                           ? <input className="fl fl-in" autoFocus defaultValue={f.label} aria-label="Frame name" onPointerDown={e => e.stopPropagation()} onFocus={e => e.target.select()}
                               onBlur={e => renameFrame(i, e.target.value)} onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditFrame(null) }} />
                           : <span className="fl" onPointerDown={e => onFrameDown(e, i, 'frame')} onDoubleClick={e => { e.stopPropagation(); setEditFrame(i) }} title="Drag here or by the edges to move the frame with what's inside; double-click the name to rename">
+                              {grp !== undefined && <span className="fl-folder"><FolderIcon size={15} /></span>}
                               <span className="fl-t">{f.label}{f.maybe ? ' · not in series' : ''}</span>
+                              {grp && <span className="fchip" title={`This frame is the folder ${f.label}: the frames in it are its series`} style={f.color ? { background: hexA(f.color, .22), borderColor: hexA(f.color, .6) } : undefined}>
+                                {grp.series_count} series · {grp.count} photo{grp.count === 1 ? '' : 's'}</span>}
                               {isFolder && linked && f.series_id != null && (
                                 <span className="fchip" title={`This frame is the series ${f.label} in ${name}`} style={f.color ? { background: hexA(f.color, .22), borderColor: hexA(f.color, .6) } : undefined}>
                                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="7" width="13" height="13" rx="2" /><path d="M8 7V5a1 1 0 011-1h11a1 1 0 011 1v11a1 1 0 01-1 1h-2" /></svg>
@@ -896,7 +931,7 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
                         <button className="fx" aria-label={`Remove frame ${f.label}`} onPointerDown={e => e.stopPropagation()} onClick={() => deleteFrame(i)}>×</button>
                         <span className="rs" onPointerDown={e => onFrameDown(e, i, 'resize')} />
                       </div>
-                    ))}
+                    ) })}
                     {shown.map(it => {
                       const { w, h } = size(it)
                       const n = pos.get(it.id)
@@ -952,7 +987,9 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
                   const title = `${label} (${keysOf(act).join(', ') || 'no key'})`
                   return <button key={t} className={tool === t ? 'on' : ''} title={title} aria-label={title} aria-pressed={tool === t} onClick={() => setTool(t)}>{TOOL_ICONS[t]}</button>
                 })}
-                <button className={tool === 'frame' ? 'on' : ''} aria-pressed={tool === 'frame'} title={`${isFolder && linked ? `Frame tool: draw a frame to create a series in ${name}` : 'Frame: drag to draw one (around photos and notes to put them in it), or click for the usual size'} (${keysOf('newFrame').join(', ') || 'no key'})`} aria-label={isFolder && linked ? `Frame tool: draw a frame to create a series in ${name}` : 'Frame tool'} onClick={() => setTool(t => (t === 'frame' ? 'select' : 'frame'))}>{TOOL_ICONS.frame}</button>
+                <button className={tool === 'frame' && !asGroup ? 'on' : ''} aria-pressed={tool === 'frame' && !asGroup} title={`${isFolder && linked ? `Frame tool: draw a frame to create a series in ${name}` : 'Frame: drag to draw one (around photos and notes to put them in it), or click for the usual size'} (${keysOf('newFrame').join(', ') || 'no key'})`} aria-label={isFolder && linked ? `Frame tool: draw a frame to create a series in ${name}` : 'Frame tool'} onClick={() => setTool(t => (t === 'frame' ? 'select' : 'frame'))}>{TOOL_ICONS.frame}</button>
+                {isFolder && linked && <button className={tool === 'frame' && asGroup ? 'on' : ''} aria-pressed={tool === 'frame' && asGroup} title={`New subfolder: draw a frame to create a folder in ${name} (around series' frames to put them in it)`} aria-label="New subfolder"
+                  onClick={() => { const on = tool === 'frame' && asGroup; setTool(on ? 'select' : 'frame'); window.setTimeout(() => setAsGroup(!on), 0) }}><FolderIcon size={18} /></button>}
                 <span className="sep" />
                 <button title={`Fit everything on screen (${keysOf('fitAll').join(', ') || 'no key'})`} aria-label="Fit everything" onClick={fitAll}>{TOOL_ICONS.fit}</button>
                 <div className="bt-pop">

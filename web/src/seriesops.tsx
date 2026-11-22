@@ -40,11 +40,15 @@ export function useSeriesOps() {
       return r.id
     } catch (e) { fail(e); return null }
   }
-  const newFolder = async () => {
-    const name = await ask({ title: 'New folder', field: 'Name of the folder', ok: 'Create folder',
-      text: 'A folder holds several series and has one board for all of them.' })
+  const newFolder = async (parent?: SeriesFolder | null) => {
+    const name = await ask({ title: parent ? `New folder in ${parent.name}` : 'New folder', field: 'Name of the folder', ok: 'Create folder',
+      text: parent ? `A folder inside ${parent.name}: on the board it is a frame around the frames of its series.` : 'A folder holds several series and has one board for all of them.' })
     if (!name) return null
-    try { const r = await api.folderCreate(name); done(); open({ kind: 'folder', id: r.id }); return r.id } catch (e) { fail(e); return null }
+    try { const r = await api.folderCreate(name, parent?.id); done(); if (!parent) open({ kind: 'folder', id: r.id }); return r.id } catch (e) { fail(e); return null }
+  }
+  /** Put a folder into another one (null: the top level), in front of a series or a folder there (else last). */
+  const moveFolder = async (f: SeriesFolder, parentId: number | null, before?: number | null, beforeFolder?: number | null) => {
+    try { await api.folderMove(f.id, parentId, before, beforeFolder); done() } catch (e) { fail(e) }
   }
   const renameSeries = async (x: SeriesInfo) => {
     const name = await ask({ title: `Rename “${x.name}”`, field: 'Name of the series', initial: x.name, ok: 'Rename', text: 'Its tag on the photos is renamed too.' })
@@ -53,7 +57,7 @@ export function useSeriesOps() {
   }
   const renameFolder = async (f: SeriesFolder) => {
     const name = await ask({ title: `Rename “${f.name}”`, field: 'Name of the folder', initial: f.name, ok: 'Rename',
-      text: `The tags of its ${f.count} photo${f.count === 1 ? '' : 's'} are renamed too (series|${f.name}|… becomes series|new name|…).` })
+      text: `The tags of its ${f.total_count ?? f.count} photo${(f.total_count ?? f.count) === 1 ? '' : 's'} are renamed too (series|${f.name}|… becomes series|new name|…).` })
     if (!name || name === f.name) return
     try { await api.folderRename(f.id, name); done() } catch (e) { fail(e) }
   }
@@ -69,10 +73,13 @@ export function useSeriesOps() {
     } catch (e) { fail(e); return false }
   }
   const deleteFolder = async (f: SeriesFolder) => {
+    const up = s.seriesFolders.find(x => x.id === f.parent_id)
     const yes = await ask({ title: `Delete the folder “${f.name}”?`, ok: 'Delete folder', danger: true,
-      text: `Its ${f.series_count} series move to the top level with their photos and their order; no series and no photo is deleted. The folder's shared board (its layout and notes) goes away with it.` })
+      text: up
+        ? `What is in it (${f.series_count} series${(f.total_series ?? 0) > f.series_count ? ' and its folders' : ''}) moves up into ${up.name} with photos, order and frames; no series and no photo is deleted. On the board only its group frame goes.`
+        : `Its ${f.series_count} series move to the top level with their photos and their order; no series and no photo is deleted. The folder's shared board (its layout and notes) goes away with it${(f.total_series ?? 0) > f.series_count ? '; its folders become top-level folders and keep their part of the board' : ''}.` })
     if (!yes) return
-    try { await api.folderDelete(f.id); if (s.boardSeries === -f.id) s.setBoardSeries(null); done() } catch (e) { fail(e) }
+    try { await api.folderDelete(f.id); if (s.boardSeries === -f.id) s.setBoardSeries(up ? -up.id : null); done() } catch (e) { fail(e) }
   }
   const moveSeries = async (x: SeriesInfo, folderId: number | null, before?: number | null) => {
     try {
@@ -84,7 +91,7 @@ export function useSeriesOps() {
   const colorSeries = async (x: SeriesInfo, color: string) => {
     try { await api.seriesColor(x.id, color); done() } catch (e) { fail(e) }
   }
-  return { node, ask, open, newSeries, newFolder, renameSeries, renameFolder, deleteSeries, deleteFolder, moveSeries, colorSeries, done, fail }
+  return { node, ask, open, newSeries, newFolder, moveFolder, renameSeries, renameFolder, deleteSeries, deleteFolder, moveSeries, colorSeries, done, fail }
 }
 export type SeriesOps = ReturnType<typeof useSeriesOps>
 

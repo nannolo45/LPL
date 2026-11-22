@@ -625,3 +625,21 @@ a { color: var(--accent); }
 .devacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .devacts > .btn { flex: 1 1 calc(50% - 6px); white-space: nowrap; }
 .devacts > .btn.danger { flex-basis: 100%; }
+
+/* nested series folders: a subfolder is a group frame on the board, a group heading in the strip, a level in the tree */
+.frame.group { border-width: 1.5px; border-radius: 14px; background: rgba(255,255,255,.035); }
+.frame.group > .fl { height: 36px; border-radius: 14px 14px 0 0; background: rgba(255,255,255,.05); font-weight: 600; color: var(--text); }
+.frame.group.loose { border-style: dashed; }
+.fl-folder { display: inline-flex; flex: 0 0 auto; opacity: .9; }
+.strip-group { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 5px 12px; margin-top: 4px; border: 1px solid var(--line2); border-radius: 10px; background: rgba(255,255,255,.05); min-width: 0; }
+.strip-group[data-moving] { opacity: .35; }
+.strip-group .sg-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.strip-group .sg-icon { display: inline-flex; color: var(--accent); }
+.strip-group .sg-fold { display: inline-flex; border: 0; background: transparent; color: var(--muted, #9a9aa2); padding: 4px; border-radius: 5px; cursor: pointer; }
+.strip-group .sg-fold:hover { background: rgba(255,255,255,.08); }
+.strip.phone .strip-group { padding: 8px 10px; }
+.st-folder.sub > .st-row.folder .st-fname { font-weight: 500; }
+.st-kids .st-kids { margin-left: 12px; }
+.st-folder.line-a { box-shadow: inset 0 -2px 0 var(--accent); }
+.sv-crumb { white-space: nowrap; }
+.sv-crumbs { flex-wrap: wrap; }

@@ -10,7 +10,7 @@ import { FoldersView } from './Folders'
 import { WorkView } from './Work'
 import { SeriesView } from './SeriesView'
 import { FolderIcon, SeriesTree } from './SeriesTree'
-import { buildTree, targetName, targetOf } from '../seriesnav'
+import { buildTree, folderSubtree, targetName, targetOf } from '../seriesnav'
 import { useSeriesOps } from '../seriesops'
 import { DevicesIndicatorPhone } from './DevicesIndicator'
 import { SettingsDialog } from './Shortcuts'
@@ -139,11 +139,11 @@ function SeriesTab({ open, board }: { open: (key: number) => void; board: (key: 
     <div className="scroll">
       <div className="col" style={{ padding: '0 14px', gap: 12 }}>
         {tree.entries.map(e => e.kind === 'folder'
-          ? card(-e.folder.id, e.folder.name, `${e.folder.series_count} series · ${e.folder.count}`, e.series.flatMap(x => x.covers.slice(0, 2)).slice(0, 6), true)
+          ? card(-e.folder.id, e.folder.name, `${e.folder.total_series ?? e.folder.series_count} series · ${e.folder.total_count ?? e.folder.count}`, s.series.filter(x => x.folder_id != null && folderSubtree(s.seriesFolders, e.folder.id).has(x.folder_id)).flatMap(x => x.covers.slice(0, 2)).slice(0, 6), true)
           : card(e.series.id, e.series.name, String(e.series.count), e.series.covers, false))}
         {!s.series.length && !s.seriesFolders.length && <span className="muted">No series yet. Select photos and use “Add to series”.</span>}
         <button className="btn dashed big" onClick={() => ops.newFolder()}>+ New folder</button>
-        <span className="small muted">A folder holds several series. In a folder or a series, “Strip” shows the photos in order: press and hold one to move it. On the board: drag empty space to move around, pinch to zoom, tap a photo to select it and drag it to move it. What happens on a double-tap and more are in Settings (⚙ at the top).</span>
+        <span className="small muted">A folder holds several series (and folders: “Series” at the top of an open folder lists them). In a folder or a series, “Strip” shows the photos in order: press and hold one to move it. On the board: drag empty space to move around, pinch to zoom, tap a photo to select it and drag it to move it. What happens on a double-tap and more are in Settings (⚙ at the top).</span>
       </div>
       {ops.node}
     </div>

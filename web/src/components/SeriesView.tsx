@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useMemo, useState } from 'react'
-import { api, LinkState, Target } from '../api'
+import { api, LinkState, SeriesFolder, Target } from '../api'
 import { useStore } from '../store'
 import { keyOf, resolveTarget } from '../seriesnav'
 import { bumpSeries, setPendingUndo, MenuButton, MenuItem, useSeriesOps } from '../seriesops'
@@ -34,11 +34,14 @@ function LinkDialog({ target, name, st, canUndo, onPick, onClose }: {
   const folder = target.kind === 'folder'
   const free = st.free_frames || [], loose = st.loose || [], missing = st.missing_frames || []
   const quote = (xs: string[]) => xs.map(x => `“${x}”`).join(', ')
+  const nf = st.new_folders || []
   let intro: string, a: string, b: string
   if (folder) {
     const parts = [
       free.length || missing.length ? `the board has ${plural(st.frames, 'frame')}, the strip has ${st.series} series` : '',
       st.moves ? `${plural(st.moves, 'photo')} ${st.moves === 1 ? 'lies' : 'lie'} in another series' frame` : '',
+      st.refiled ? `${st.refiled} frame${st.refiled === 1 ? ' lies' : 's lie'} in another folder's group frame than in the tree` : '',
+      nf.length ? `${quote(nf)} hold${nf.length === 1 ? 's' : ''} frames but ${nf.length === 1 ? 'is' : 'are'} no folder yet` : '',
       !free.length && !missing.length && !st.moves && st.reordered ? `the photos of ${plural(st.reordered!, 'series', 'series')} stand in another order on the board` : '',
     ].filter(Boolean)
     intro = `The board and the strip of ${name} no longer match: ${parts.join('; ') || 'they differ'}. Which one wins?`
@@ -46,10 +49,13 @@ function LinkDialog({ target, name, st, canUndo, onPick, onClose }: {
     a = 'One frame per series, photos placed in strip order.'
       + (free.length ? ` The frame${free.length > 1 ? 's' : ''} ${quote(free.map(f => f.label))} ${free.length > 1 ? 'are' : 'is'} removed${fp ? `; ${fp === 1 ? 'its photo goes' : `${free.length > 1 ? 'their' : 'its'} ${fp} photos go`} back to ${fp === 1 ? 'its series' : 'their series'}` : ''}.` : '')
       + (missing.length ? ` ${quote(missing)} get${missing.length === 1 ? 's' : ''} a frame.` : '')
+      + (st.refiled || nf.length ? ' Group frames are rebuilt from the folder tree: every subfolder gets its frame around its series.' + (nf.length ? ` ${quote(nf)} ${nf.length === 1 ? 'is' : 'are'} removed.` : '') : '')
       + (loose.length ? ` ${plural(loose.length, 'photo')} on the board ${loose.length === 1 ? 'is' : 'are'} in no series (${loose.slice(0, 4).map(p => p.filename).join(', ')}${loose.length > 4 ? ', …' : ''}): ${loose.length === 1 ? 'it stays' : 'they stay'} on the board, outside the frames.` : '')
     b = 'Each frame becomes a series, photos in board order.'
       + (free.length ? ` ${quote(free.map(f => f.label))} become${free.length === 1 ? `s a ${ORD[st.series!] || 'new'} series` : ' new series'} in ${name}.` : '')
       + (st.moves ? ` ${plural(st.moves, 'photo')} change${st.moves === 1 ? 's' : ''} series (their tags follow).` : '')
+      + (nf.length ? ` ${quote(nf)} become${nf.length === 1 ? 's a subfolder' : ' subfolders'} of ${name}.` : '')
+      + (st.refiled ? ` ${st.refiled} series or folder${st.refiled === 1 ? '' : 's'} move${st.refiled === 1 ? 's' : ''} to the folder whose group frame ${st.refiled === 1 ? 'it lies' : 'they lie'} in (their tags follow).` : '')
       + (missing.length ? ` ${quote(missing)} get${missing.length === 1 ? 's' : ''} a frame.` : '')
   } else {
     intro = `The board and the strip of ${name} no longer match: ${plural(st.differs || 0, 'photo')} ${st.differs === 1 ? 'stands' : 'stand'} in another place. Which one wins?`
@@ -102,6 +108,13 @@ export function SeriesView() {
   const parent = series?.folder_id != null ? s.seriesFolders.find(f => f.id === series.folder_id) || null : null
   const name = folder?.name || series?.name || ''
   const linked = folder ? folder.linked : !!series?.linked
+  // nested folders: the folders above what is open (the way back), and the top-level folder whose board a subfolder is on
+  const crumbs = useMemo(() => {
+    const out: SeriesFolder[] = []
+    for (let f = s.seriesFolders.find(x => x.id === (folder ? folder.parent_id : series?.folder_id)), n = 0; f && n < 50; f = s.seriesFolders.find(x => x.id === f!.parent_id), n++) out.unshift(f)
+    return out
+  }, [folder, series, s.seriesFolders])
+  const rootFolder = folder && crumbs.length ? crumbs[0] : folder
   const showHidden = !!s.filters.show_hidden
 
   const tree = !phone && (
@@ -145,7 +158,7 @@ export function SeriesView() {
         changed()
       } else {
         const st = await api.tlink(target)
-        if (st.same) { await api.tlinkSet(target, true, 'board'); s.toast(`Board linked to ${name} again; nothing had changed.`); changed() }
+        if (st.same) { await api.tlinkSet(target, true, 'board'); s.toast(`Board linked to ${rootFolder?.name || name} again; nothing had changed.`); changed() }
         else setDlg(st)
       }
     } catch (e: any) { s.toast(e.message) }
@@ -160,6 +173,7 @@ export function SeriesView() {
         m === 'strip' ? 'Board arranged from the strip.' : 'Order taken from the board.',
         r.removed_frames?.length ? `Removed: ${r.removed_frames.map(x => `“${x}”`).join(', ')}.` : '',
         r.created?.length ? `New series: ${r.created.map(x => `“${x}”`).join(', ')}.` : '',
+        r.created_folders?.length ? `New folder${r.created_folders.length > 1 ? 's' : ''}: ${r.created_folders.map(x => `“${x}”`).join(', ')}.` : '',
         r.loose?.length ? `${plural(r.loose.length, 'photo')} in no series left outside the frames.` : '',
       ]
       s.toast(bits.filter(Boolean).join(' '))
@@ -174,15 +188,16 @@ export function SeriesView() {
   }
   const menu: MenuItem[] = [
     { label: s.sel.length === 1 ? "Show the selected photo's folder in the library" : `Show ${folder ? 'the folder' : 'the series'} in the library, in order`, onClick: showInLibrary },
-    ...(folder ? [{ label: `New series in ${folder.name}`, onClick: () => { ops.newSeries(folder) } }] : []),
+    ...(folder ? [{ label: `New series in ${folder.name}`, onClick: () => { ops.newSeries(folder) } }, { label: `New folder in ${folder.name}`, onClick: () => { ops.newFolder(folder) } }] : []),
+    ...(folder && crumbs.length ? [{ label: `Open the folder ${crumbs[crumbs.length - 1].name}`, onClick: () => ops.open({ kind: 'folder', id: crumbs[crumbs.length - 1].id }) }] : []),
     { label: 'Rename', onClick: () => (folder ? ops.renameFolder(folder) : ops.renameSeries(series!)) },
     ...(series && parent ? [{ label: `Open the folder ${parent.name}`, onClick: () => ops.open({ kind: 'folder', id: parent.id }) }] : []),
     { label: folder ? 'Delete folder' : 'Delete', danger: true, onClick: () => { folder ? ops.deleteFolder(folder) : ops.deleteSeries(series!) } },
   ]
-  const counts = folder ? `${folder.series_count} series · ${plural(folder.count, 'photo')}` : plural(series!.count, 'photo') + (info.maybe ? ` · ${info.maybe} in maybe piles` : '')
+  const counts = folder ? `${folder.total_series ?? folder.series_count} series · ${plural(folder.total_count ?? folder.count, 'photo')}` : plural(series!.count, 'photo') + (info.maybe ? ` · ${info.maybe} in maybe piles` : '')
   const linkTitle = parent ? `Inside a folder the order of a series comes from the folder: ${parent.name}'s board${parent.linked ? '' : ' or strip'}. This board is free.`
     : `Link or unlink the board and the ${folder ? 'series of ' + name : 'order of ' + name}`
-  const linkText = parent ? (phone ? `Order from ${parent.name}` : `Order follows ${parent.name}`) : linked ? (phone ? 'Board linked' : `Board linked to ${name}`) : phone ? 'Not linked' : 'Board not linked'
+  const linkText = parent ? (phone ? `Order from ${parent.name}` : `Order follows ${parent.name}`) : linked ? (phone ? 'Board linked' : `Board linked to ${rootFolder?.name || name}`) : phone ? 'Not linked' : 'Board not linked'
   const seg = (
     <div className="sv-seg" role="group" aria-label={`Show ${name} as`}>
       <button type="button" className={mode === 'board' ? 'on' : ''} aria-pressed={mode === 'board'} onClick={() => setMode('board')}><BoardIcon /><span>Board</span></button>
@@ -208,6 +223,7 @@ export function SeriesView() {
       <div className="center">
         {phone ? (
           <div className="sv-head phone">
+            {crumbs.length > 0 && <div className="row sv-crumbs" style={{ gap: 6 }}>{crumbs.map(f => <button key={f.id} className="linkbtn muted sv-crumb" onClick={() => ops.open({ kind: 'folder', id: f.id })}>{f.name} /</button>)}<span className="small">{name}</span></div>}
             <div className="row" style={{ gap: 8 }}>{seg}{link}</div>
             <div className="row" style={{ gap: 8 }}>
               <span className="small muted grow">{counts}{folder ? ' · numbers are the order in each series' : ''}</span>
@@ -217,7 +233,7 @@ export function SeriesView() {
         ) : (
           <div className="ctxbar sv-head">
             {folder && <span className="sv-ficon"><FolderIcon size={18} /></span>}
-            {parent && <button className="linkbtn muted" onClick={() => ops.open({ kind: 'folder', id: parent.id })} title={`Open the folder ${parent.name}`}>{parent.name} /</button>}
+            {crumbs.map(f => <button key={f.id} className="linkbtn muted sv-crumb" onClick={() => ops.open({ kind: 'folder', id: f.id })} title={`Open the folder ${f.name}`}>{f.name} /</button>)}
             <span className="display" style={{ fontSize: 17, fontWeight: 500 }}>{name}</span>
             <span className="muted" style={{ whiteSpace: 'nowrap' }}>{counts}</span>
             {seg}{link}{hiddenChip}

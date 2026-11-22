@@ -258,7 +258,7 @@ function AddPhotosInner({ where, name, frames, lanes, lastAdd, onClose, onAdded 
             <label className="col" style={{ gap: 6 }}>
               <span className="caps">Put them in</span>
               <select className="input" value={target} onChange={e => setTarget(e.target.value)}>
-                {isFolder ? lanes.map(l => <option key={l.id} value={'s' + l.id}>{l.name}</option>)
+                {isFolder ? lanes.map(l => <option key={l.id} value={'s' + l.id}>{l.path?.length ? l.path.join(' › ') + ' › ' : ''}{l.name}</option>)
                   : frames.filter(f => f.id).map(f => <option key={f.id} value={'f' + f.id}>{frameName(f)}</option>)}
                 <option value="new">A new {isFolder ? 'series' : 'frame'}</option>
                 <option value="per">A new {isFolder ? 'series' : 'frame'} for each folder{m && m.folders > 1 ? ` (${m.folders})` : ''}</option>
