@@ -216,7 +216,8 @@ export const api = {
     call<StripData>('POST', `${tbase(t)}/strip/move`, t.kind === 'folder' ? { ids, series: lane.series?.id, before } : { ids, lane: lane.key, before }),
   tlink: (t: Target) => call<LinkState>('GET', `${tbase(t)}/link`),
   tlinkSet: (t: Target, linked: boolean, mode?: LinkMode) =>
-    call<{ linked: boolean; removed_frames?: string[]; created?: string[]; loose?: { id: number; filename: string }[] }>('POST', `${tbase(t)}/link`, { linked, mode }),
+    call<{ linked: boolean; removed_frames?: string[]; created?: string[]; loose?: { id: number; filename: string }[]; undo?: number }>('POST', `${tbase(t)}/link`, { linked, mode }),
+  tlinkRestore: (t: Target, token: number) => call<{ ok: boolean }>('POST', `${tbase(t)}/link/restore`, { token }),
   folderBoardRemove: (id: number, ids: number[]) => call<BoardData>('POST', `/api/series-folders/${id}/remove`, { ids }),
   prefGet: (key: string) => call<{ value: unknown }>('GET', `/api/prefs/${key}`),
   prefSet: (key: string, value: unknown) => call<{ ok: boolean }>('PUT', `/api/prefs/${key}`, { value }),

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, LinkState, Target } from '../api'
 import { useStore } from '../store'
 import { keyOf, resolveTarget } from '../seriesnav'
-import { bumpSeries, MenuButton, MenuItem, useSeriesOps } from '../seriesops'
+import { bumpSeries, setPendingUndo, MenuButton, MenuItem, useSeriesOps } from '../seriesops'
 import { useBackLayer } from '../back'
 import { BoardView } from './Board'
 import { StripView } from './Strip'
@@ -70,7 +70,7 @@ function LinkDialog({ target, name, st, canUndo, onPick, onClose }: {
         </button>
         <button type="button" className="lk-choice" onClick={() => onPick('board')}>
           <span className="lk-how">{board}<span className="lk-arrow">→</span>{strip}</span>
-          <span className="col" style={{ gap: 3 }}><b>Take the order from the board</b><span className="small soft">{b}</span></span>
+          <span className="col" style={{ gap: 3 }}><b>Take the order from the board</b><span className="small soft">{b}{canUndo ? ' Undo on the board puts the old order, series and tags back (unlinked again).' : ''}</span></span>
         </button>
         <div className="row">
           <span className="small muted grow">After linking, board and strip change together.</span>
@@ -155,6 +155,7 @@ export function SeriesView() {
     setDlg(null)
     try {
       const r = await api.tlinkSet(target, true, m)
+      if (m === 'board' && r.undo != null && boardSeen) setPendingUndo(target, r.undo)
       const bits = [
         m === 'strip' ? 'Board arranged from the strip.' : 'Order taken from the board.',
         r.removed_frames?.length ? `Removed: ${r.removed_frames.map(x => `“${x}”`).join(', ')}.` : '',

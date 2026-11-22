@@ -15,6 +15,10 @@ let rev = 0
 const subs = new Set<() => void>()
 export function bumpSeries() { rev++; subs.forEach(f => f()) }
 export const seriesRev = () => rev
+/** The server's undo token of the last "Take the order from the board": the board, when it loads again, makes it one undo step. */
+let pendingUndo: { key: string; token: number } | null = null
+export const setPendingUndo = (t: { kind: string; id: number }, token: number) => { pendingUndo = { key: t.kind + t.id, token } }
+export const takePendingUndo = (t: { kind: string; id: number }) => { const p = pendingUndo && pendingUndo.key === t.kind + t.id ? pendingUndo.token : undefined; pendingUndo = null; return p }
 export const useSeriesRev = () => useSyncExternalStore(cb => { subs.add(cb); return () => { subs.delete(cb) } }, () => rev)
 
 export function useSeriesOps() {

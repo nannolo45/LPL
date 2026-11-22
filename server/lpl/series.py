@@ -369,6 +369,82 @@ class Board:
             self.set_pos(pid, 40 + (k % 8) * 165, base + (k // 8) * 140)
 
 
+# ---------------------------------------------------------------- undo of "Take the order from the board"
+# Before that relink the server keeps what it can change (membership, order, frames, places, notes, the link, and the
+# series it may create from extra frames); POST …/link/restore puts it all back. Kept in memory: a few, newest last.
+_snaps: Dict[int, dict] = {}
+_snap_seq = [0]
+
+
+def _rows(c, sql: str, args: tuple = ()) -> list:
+    return [dict(r) for r in c.execute(sql, args).fetchall()]
+
+
+def _put(c, table: str, rows: list) -> None:
+    for r in rows:
+        c.execute("INSERT OR REPLACE INTO %s(%s) VALUES(%s)" % (table, ",".join(r), ",".join("?" * len(r))), tuple(r.values()))
+
+
+def link_snapshot(c, kind: str, tid: int) -> int:
+    """kind "s" (a top-level series) or "f" (a folder). Returns the token for restore."""
+    if kind == "s":
+        snap = {"kind": "s", "id": tid, "linked": api._series(tid)["linked"], "items": _rows(c, "SELECT * FROM series_items WHERE series_id=?", (tid,))}
+    else:
+        sids = [x["id"] for x in series_in(c, tid)]
+        q = ",".join("?" * len(sids))
+        snap = {"kind": "f", "id": tid, "linked": folder_row(tid)["linked"], "sids": sids,
+                "items": _rows(c, "SELECT * FROM series_items WHERE series_id IN (%s)" % q, tuple(sids)),
+                "sframes": _rows(c, "SELECT * FROM series_frames WHERE series_id IN (%s)" % q, tuple(sids)),
+                "frames": _rows(c, "SELECT * FROM folder_frames WHERE folder_id=?", (tid,)),
+                "fitems": _rows(c, "SELECT * FROM folder_items WHERE folder_id=?", (tid,)),
+                "shapes": _rows(c, "SELECT * FROM folder_shapes WHERE folder_id=?", (tid,))}
+    _snap_seq[0] += 1
+    _snaps[_snap_seq[0]] = snap
+    for k in sorted(_snaps)[:-30]:
+        del _snaps[k]
+    return _snap_seq[0]
+
+
+def link_restore(c, kind: str, tid: int, token: int) -> tuple:
+    """Put back what link_snapshot kept (caller holds the lock and commits); returns the tag changes and the tags
+    of series that are gone (to be dropped once nobody carries them)."""
+    snap = _snaps.get(token)
+    if not snap or snap["kind"] != kind or snap["id"] != tid:
+        raise HTTPException(410, "this can not be undone any more (the server was restarted or newer changes came in)")
+    moves: list = []
+    orphans: list = []
+    if kind == "s":
+        c.execute("DELETE FROM series_items WHERE series_id=?", (tid,))
+        _put(c, "series_items", snap["items"])
+        c.execute("UPDATE series SET linked=? WHERE id=?", (snap["linked"], tid))
+    else:
+        now = series_in(c, tid)
+        tags = {x["id"]: tag_of(x) for x in now}
+        cur_mem = {r["photo_id"]: r["series_id"] for r in c.execute("SELECT photo_id, series_id FROM series_items WHERE series_id IN (%s)" % (",".join(str(x["id"]) for x in now) or "0"))}
+        for x in now:
+            if x["id"] not in snap["sids"]:  # made from a free frame by the relink: gone again
+                for t in ("series_items", "series_frames", "series_shapes"):
+                    c.execute("DELETE FROM %s WHERE series_id=?" % t, (x["id"],))
+                c.execute("DELETE FROM settings WHERE key=?", (api._add_criteria_key(x["id"]),))
+                c.execute("DELETE FROM series WHERE id=?", (x["id"],))
+        keep = ",".join(str(i) for i in snap["sids"]) or "0"
+        c.execute("DELETE FROM series_items WHERE series_id IN (%s)" % keep)
+        c.execute("DELETE FROM series_frames WHERE series_id IN (%s)" % keep)
+        _put(c, "series_items", snap["items"])
+        _put(c, "series_frames", snap["sframes"])
+        for t in ("folder_frames", "folder_items", "folder_shapes"):
+            c.execute("DELETE FROM %s WHERE folder_id=?" % t, (tid,))
+        _put(c, "folder_frames", snap["frames"])
+        _put(c, "folder_items", snap["fitems"])
+        _put(c, "folder_shapes", snap["shapes"])
+        c.execute("UPDATE series_folders SET linked=? WHERE id=?", (snap["linked"], tid))
+        was = {r["photo_id"]: r["series_id"] for r in snap["items"]}
+        moves = [(pid, tags.get(cur_mem.get(pid)), tags.get(was.get(pid))) for pid in set(cur_mem) | set(was) if cur_mem.get(pid) != was.get(pid)]
+        orphans = [tags[x["id"]] for x in now if x["id"] not in snap["sids"]]
+    del _snaps[token]
+    return moves, orphans
+
+
 # ---------------------------------------------------------------- order from a board (the link)
 def sync_series(c, sid: int) -> None:
     """A linked single series: its order is its board's reading order. Frames in order, rows inside a frame,
@@ -1375,6 +1451,7 @@ def folder_link(fid: int, body: Dict[str, Any] = Body(...)):
             c.execute("UPDATE series_folders SET linked=1 WHERE id=?", (fid,))
             moves += sync_folder(c, fid, b)
         elif want and mode == "board":
+            res["undo"] = link_snapshot(c, "f", fid)
             b = Board(c, "f", fid)
             c.execute("UPDATE series_folders SET linked=1 WHERE id=?", (fid,))
             res["created"] = adopt_free_frames(c, fid, b)
@@ -1429,6 +1506,7 @@ def series_link(sid: int, body: Dict[str, Any] = Body(...)):
     "board": take the order from the board; "none": only the switch (undo/redo)."""
     want = bool(body.get("linked"))
     mode = body.get("mode") or "strip"
+    undo = None
     with db.write_lock:
         c = db.conn()
         s = api._series(sid)
@@ -1455,6 +1533,7 @@ def series_link(sid: int, body: Dict[str, Any] = Body(...)):
             c.execute("UPDATE series SET linked=1 WHERE id=?", (sid,))
             sync_series(c, sid)
         elif want and mode == "board":
+            undo = link_snapshot(c, "s", sid)
             c.execute("UPDATE series SET linked=1 WHERE id=?", (sid,))
             sync_series(c, sid)
         else:
@@ -1462,7 +1541,34 @@ def series_link(sid: int, body: Dict[str, Any] = Body(...)):
             if not want:
                 write_order(c, sid, order_of(c, sid))  # from here on the strip is the order: every photo has a place
         c.commit()
-    return {"linked": want}
+    return {"linked": want, **({"undo": undo} if want and mode == "board" else {})}
+
+
+def _restore(kind: str, tid: int, body: Dict[str, Any]) -> dict:
+    with db.write_lock:
+        c = db.conn()
+        moves, orphans = link_restore(c, kind, tid, int(body.get("token") or 0))
+        c.commit()
+    retag(moves)
+    if orphans:
+        with db.write_lock:
+            for t in orphans:
+                db.conn().execute("DELETE FROM tags WHERE path=? AND id NOT IN (SELECT tag_id FROM photo_tags)", (t,))
+            db.conn().commit()
+    return {"ok": True, "moved": len(moves)}
+
+
+@router.post("/api/series/{sid}/link/restore")
+def series_link_restore(sid: int, body: Dict[str, Any] = Body(...)):
+    """Undo "Take the order from the board" (token: the "undo" of that answer): order, membership, frames, notes, the link."""
+    api._series(sid)
+    return _restore("s", sid, body)
+
+
+@router.post("/api/series-folders/{fid}/link/restore")
+def folder_link_restore(fid: int, body: Dict[str, Any] = Body(...)):
+    folder_row(fid)
+    return _restore("f", fid, body)
 
 
 # ---------------------------------------------------------------- Send to NAS (see transfer.py and /api/import/index)

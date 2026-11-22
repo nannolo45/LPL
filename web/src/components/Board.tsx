@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { api, BoardArrow, BoardData, BoardEnd, BoardNote, BoardShape, Frame, LaneInfo, Photo, Target, thumbUrl } from '../api'
 import { useStore } from '../store'
 import { keyOf, num2 } from '../seriesnav'
-import { useSeriesRev } from '../seriesops'
+import { takePendingUndo, useSeriesRev } from '../seriesops'
 import { useAsk } from './Ask'
 import { LinkIcon } from './SeriesTree'
 import { actionFor, comboOf, keysOf, typingIn, useShortcutsVersion } from '../shortcuts'
@@ -81,7 +81,9 @@ function edgePoint(r: Rect, toward: Pt): Pt {
 // place for board and strip: server/lpl/series.py. The board shows the numbers the server sends back.
 
 // linked: whether the board gave the order when the snapshot was taken (undo puts that back too)
-type Snap = { items: (Photo & { x: number; y: number })[]; frames: Frame[]; shapes: BoardShape[]; linked?: boolean }
+// restoreToken: the server kept what "Take the order from the board" changes; going back to this snapshot asks it to put that back.
+// redoRelink: going to this snapshot (a redo) does that relink again.
+type Snap = { items: (Photo & { x: number; y: number })[]; frames: Frame[]; shapes: BoardShape[]; linked?: boolean; restoreToken?: number; redoRelink?: boolean }
 const snapSig = (x: Snap) => JSON.stringify([x.items.map(i => [i.id, Math.round(i.x), Math.round(i.y)]), x.frames.map(f => [f.label, Math.round(f.x), Math.round(f.y), Math.round(f.w), Math.round(f.h), f.maybe]), x.shapes, !!x.linked])
 
 type MoveOrig = { photos: Map<number, Pt>; notes: Map<string, Pt>; ends: { key: string; end: 'a' | 'b'; x: number; y: number }[] }
@@ -163,8 +165,21 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
     redoStack.current = []
     setHist(h => h + 1)
   }
-  const restore = async (to: Snap) => {
+  const restore = async (to: Snap): Promise<number | undefined> => {
     if (sid == null) return
+    if (to.restoreToken != null || to.redoRelink) {  // "Take the order from the board": the server puts back (or does again) what it changed, then the board loads again
+      try {
+        let tok: number | undefined
+        if (to.redoRelink) tok = (await api.tlinkSet(target, true, 'board')).undo
+        else await api.tlinkRestore(target, to.restoreToken!)
+        window.clearTimeout(saveTimer.current)
+        await load()
+        setEditing(null); setSelShapes([]); setSelFrames([])
+        s.reloadSeries(); s.reloadTags()
+        return tok
+      } catch (e: any) { s.toast(e.message); await load() }
+      return
+    }
     const have = new Set(cur.current.items.map(i => i.id)), want = new Set(to.items.map(i => i.id))
     const gone = [...have].filter(id => !want.has(id)), back = [...want].filter(id => !have.has(id))
     setItems(to.items); setFrames(to.frames); setShapes(() => to.shapes)
@@ -196,9 +211,11 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
     chain.current = chain.current.then(async () => {
       const target = from.current.pop()
       if (!target) { s.toast(`Nothing to ${what}`); return }
-      to.current.push(cur.current)
+      const pushed: Snap = from === undoStack && !target.restoreToken ? cur.current : from === undoStack ? { ...cur.current, redoRelink: true } : cur.current
+      to.current.push(pushed)
       setHist(h => h + 1)
-      await restore(target)
+      const tok = await restore(target)
+      if (tok != null) pushed.restoreToken = tok  // a redo of the relink: undoing it again asks the server for what it kept this time
       await new Promise(r => window.setTimeout(r, 30))  // let the board redraw before the next step
     })
   }
@@ -235,7 +252,7 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
     if (!active || seenRev.current === rev) return
     seenRev.current = rev
     const before = cur.current
-    chain.current = chain.current.then(async () => { window.clearTimeout(saveTimer.current); const r = await load(); if (r && (before.items.length || before.frames.length)) checkpoint(before) })
+    chain.current = chain.current.then(async () => { window.clearTimeout(saveTimer.current); const r = await load(); if (r && (before.items.length || before.frames.length)) { const tk = takePendingUndo(target); checkpoint(tk != null ? { ...before, restoreToken: tk } : before) } })
   }, [rev, active])
 
   // photos hidden from the library: off the board too (they stay in the series and keep their place),

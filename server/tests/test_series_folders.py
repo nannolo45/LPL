@@ -764,3 +764,49 @@ def test_manual_order_of_top_level_entries(lib):
     db.migrate(cn)
     t = top()
     assert [k for k, _ in t] == ["f", "f", "f", "s", "s"] and t[-2:] == [("s", s1), ("s", s2)]
+
+
+def test_undo_take_the_order_from_the_board(lib):
+    c, ids = lib
+    g, a, b = uniq("Grecia"), uniq("Atene"), uniq("Naxos")
+    fid, s = new_folder(c, g, {a: ids[0:5], b: ids[5:10]})
+    ok(c.post("/api/series-folders/%d/link" % fid, json={"linked": False}))
+    bd = board(c, fid)
+    fb = next(f for f in bd["frames"] if f["series_id"] == s[b])
+    cover = {"label": "Cover candidates", "x": 3000, "y": 40, "w": 520, "h": 200, "maybe": 0, "color": ""}
+    items = [{"id": ids[0], "x": fb["x"] + 30, "y": fb["y"] + 60}, {"id": ids[1], "x": 3020, "y": 80}, {"id": ids[6], "x": 3200, "y": 80}]
+    ok(c.put("/api/series-folders/%d/board" % fid, json={"items": items, "frames": bd["frames"] + [cover]}))
+    ok(c.put("/api/series-folders/%d/shapes" % fid, json={"shapes": [{"key": "n", "kind": "note", "x": 5, "y": 5, "w": 80, "h": 40}]}))
+    before = (lanes(c, fid), sorted((f["label"], f["series_id"], f["x"], f["y"]) for f in board(c, fid)["frames"]),
+              sorted((p["id"], p["x"], p["y"]) for p in board(c, fid)["items"]), [tags_of(c, i) for i in ids[:10]])
+    nseries = len(ok(c.get("/api/series"))["series"])
+    r = ok(c.post("/api/series-folders/%d/link" % fid, json={"linked": True, "mode": "board"}))
+    assert r["created"] == ["Cover candidates"] and r["undo"]
+    assert lanes(c, fid) != before[0] and tags_of(c, ids[1]) == ["series|%s|Cover candidates" % g]
+    ok(c.post("/api/series-folders/%d/link/restore" % fid, json={"token": r["undo"]}))
+    bd = board(c, fid)
+    assert bd["linked"] is False
+    assert lanes(c, fid) == before[0]                      # membership and order
+    assert (sorted((f["label"], f["series_id"], f["x"], f["y"]) for f in bd["frames"]), sorted((p["id"], p["x"], p["y"]) for p in bd["items"])) == before[1:3]
+    assert [tags_of(c, i) for i in ids[:10]] == before[3]  # tags
+    assert len(ok(c.get("/api/series"))["series"]) == nseries  # the series made from the extra frame is gone again
+    assert bd["shapes"][0]["key"] == "n"
+    assert c.post("/api/series-folders/%d/link/restore" % fid, json={"token": r["undo"]}).status_code == 410  # once
+    # and it can be done again
+    r = ok(c.post("/api/series-folders/%d/link" % fid, json={"linked": True, "mode": "board"}))
+    assert r["created"] == ["Cover candidates"]
+
+
+def test_undo_take_the_order_from_the_board_single(lib):
+    c, ids = lib
+    sid = three_frames(c, ids)
+    ok(c.post("/api/series/%d/link" % sid, json={"linked": False, "mode": "none"}))
+    ok(c.put("/api/series/%d/board" % sid, json={"items": [{"id": ids[30], "x": 60, "y": 810}, {"id": ids[32], "x": 60, "y": 90}]}))
+    strip = ok(c.get("/api/series/%d/strip" % sid))
+    order = [p["id"] for la in strip["lanes"] for p in la["photos"]]
+    r = ok(c.post("/api/series/%d/link" % sid, json={"linked": True, "mode": "board"}))
+    now = [p["id"] for la in ok(c.get("/api/series/%d/strip" % sid))["lanes"] for p in la["photos"]]
+    assert now != order and ids[32] in now[:2]
+    ok(c.post("/api/series/%d/link/restore" % sid, json={"token": r["undo"]}))
+    st = ok(c.get("/api/series/%d/strip" % sid))
+    assert st["linked"] is False and [p["id"] for la in st["lanes"] for p in la["photos"]] == order
