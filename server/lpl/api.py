@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import db, edits, media, query, scanner, xmp
+from .config import RAW_EXTS  # which formats are RAW (the Format filter groups by it)
 from .config import config
 
 log = logging.getLogger("lpl.api")
@@ -257,7 +258,7 @@ def facets():
     for r in c.execute("SELECT ext, COUNT(*) n FROM photos WHERE missing=0 AND ext<>'' GROUP BY ext").fetchall():
         k = query.format_of(r["ext"])
         fm[k] = fm.get(k, 0) + r["n"]
-    formats = [{"v": k, "n": n} for k, n in sorted(fm.items(), key=lambda kv: (-kv[1], kv[0]))]
+    formats = [{"v": k, "n": n, "raw": k.lower() in RAW_EXTS} for k, n in sorted(fm.items(), key=lambda kv: (-kv[1], kv[0]))]
     hidden = c.execute("SELECT COUNT(*) n FROM photos WHERE missing=0 AND hidden=1").fetchone()["n"]
     return {"lenses": lenses, "cameras": cams, "formats": formats, "hidden_photos": hidden}
 

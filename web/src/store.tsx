@@ -52,7 +52,7 @@ export interface Store {
   mergePhotos: (ps: Photo[]) => void
   meta: (body: Record<string, unknown>, ids?: number[]) => Promise<void>
   tags: Tag[]; reloadTags: () => void
-  facets: { lenses: { v: string; n: number }[]; cameras: { v: string; n: number }[]; formats: { v: string; n: number }[]; hidden_photos?: number }
+  facets: { lenses: { v: string; n: number }[]; cameras: { v: string; n: number }[]; formats: { v: string; n: number; raw?: boolean }[]; hidden_photos?: number }
   /** Hide photos from the library views (or show them again); LPL only, files untouched. */
   hidePhotos: (ids: number[], hidden: boolean) => Promise<void>
   series: SeriesInfo[]; reloadSeries: () => void

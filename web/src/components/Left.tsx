@@ -132,8 +132,26 @@ export function FilterPanel() {
       </Section>
       <Section id="format" title="Format" defaultOpen={false} summary={picked(formats.length)}
         right={formats.length > 0 && <button className="btn ghost tiny" onClick={() => s.patchFilters({ formats: [] })}>clear</button>}>
-        <div className="row wrap" style={{ gap: 4 }}>
-          {s.facets.formats.map(l => <button key={l.v} className={'chip' + (formats.includes(l.v) ? ' on' : '')} title={`${l.n} photos`} onClick={() => s.patchFilters({ formats: toggle(formats, l.v) })}>{l.v} <span className="muted">{l.n}</span></button>)}
+        {/* RAW and everything else as two groups: the group chip takes or drops all its formats, the ones under it pick singly */}
+        <div className="col" style={{ gap: 8 }}>
+          {([['RAW', true], ['Not RAW', false]] as const).map(([name, raw]) => {
+            const g = s.facets.formats.filter(l => !!l.raw === raw)
+            if (!g.length) return null
+            const vs = g.map(l => l.v), on = vs.filter(v => formats.includes(v)).length
+            const all = on === vs.length
+            return (
+              <div key={name} className="col" style={{ gap: 4 }}>
+                <button className={'chip' + (all ? ' on' : '')} style={{ alignSelf: 'flex-start', fontWeight: 600, borderStyle: on && !all ? 'dashed' : undefined }} aria-pressed={all}
+                  title={all ? `Showing every ${name} format: click to drop them` : `Show all ${name} photos`}
+                  onClick={() => s.patchFilters({ formats: all ? formats.filter(v => !vs.includes(v)) : [...formats.filter(v => !vs.includes(v)), ...vs] })}>
+                  {name} <span className="muted">{g.reduce((n, l) => n + l.n, 0)}</span>{on > 0 && !all && <span className="muted"> · {on} of {vs.length}</span>}
+                </button>
+                <div className="row wrap" style={{ gap: 4, paddingLeft: 12 }}>
+                  {g.map(l => <button key={l.v} className={'chip' + (formats.includes(l.v) ? ' on' : '')} title={`${l.n} photos`} onClick={() => s.patchFilters({ formats: toggle(formats, l.v) })}>{l.v} <span className="muted">{l.n}</span></button>)}
+                </div>
+              </div>
+            )
+          })}
         </div>
       </Section>
       <Section id="darktable" title="darktable" summary={f.edited === 'yes' ? 'edited' : f.edited === 'no' ? 'not edited' : ''}>
