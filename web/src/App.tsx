@@ -5,7 +5,7 @@ import { LeftPanel } from './components/Left'
 import { ContextBar, GridView, ListView } from './components/Library'
 import { FoldersView, TimelineView } from './components/Folders'
 import { Inspector } from './components/Inspector'
-import { BoardView } from './components/Board'
+import { SeriesView } from './components/SeriesView'
 import { WorkView } from './components/Work'
 import { SendView } from './components/Send'
 import { Viewer } from './components/Viewer'
@@ -119,7 +119,7 @@ function Desktop() {
       <TopBar />
       <div className="main" key={s.activeTab}>
         {libView && <LeftPanel />}
-        {s.view === 'board' ? <BoardView /> : (
+        {s.view === 'board' ? <SeriesView /> : (
           <div className="center">
             {libView && <ContextBar />}
             {s.view === 'grid' && <GridView />}

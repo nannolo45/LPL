@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AddTarget, api, coverUrl, Filters, Folder, Frame, LastAdd, MatchResult } from '../api'
+import { AddTarget, api, coverUrl, Filters, Folder, Frame, LaneInfo, LastAdd, MatchResult, Target } from '../api'
 import { useStore } from '../store'
 import { LABELS } from '../fields'
 import { RATINGS, toggle } from './Left'
@@ -31,23 +31,41 @@ function extras(f: Filters): string[] {
   return x
 }
 
-const targetKey = (t?: AddTarget | null) => (t?.frame ? 'f' + t.frame : t?.per_folder ? 'per' : 'new')
-const keyTarget = (k: string): AddTarget => (k.startsWith('f') ? { frame: +k.slice(1) } : k === 'per' ? { per_folder: true } : { new: true })
+// where the photos go: a frame of a series' board ('f<id>'), a series of a folder ('s<id>'), a new one, one per folder
+const targetKey = (t?: AddTarget | null) => (t?.frame ? 'f' + t.frame : t?.series ? 's' + t.series : t?.per_folder ? 'per' : 'new')
+const keyTarget = (k: string, label?: string): AddTarget => (k.startsWith('f') ? { frame: +k.slice(1) } : k.startsWith('s') ? { series: +k.slice(1) } : k === 'per' ? { per_folder: true } : { new: true, label: label || undefined })
 const lastSeg = (p: string) => p.slice(p.lastIndexOf('/') + 1) || p
 const tagLeaf = (t: string) => t.slice(t.lastIndexOf('|') + 1) || t
 
-export function AddPhotosDialog({ sid, name, frames, lastAdd, onClose, onAdded }: {
-  sid: number; name: string; frames: Frame[]; lastAdd: LastAdd | null | undefined
+/** "+ Add photos" for a series (into one of its frames, a new frame, a frame per folder) or for a folder of
+ *  series (into one of its series, a new series, a series per folder). It reads the board first, for the
+ *  frames or series to choose from and last time's criteria. */
+export function AddPhotosDialog({ target, name, onClose, onAdded }: { target: Target; name: string; onClose: () => void; onAdded: (n: number) => void }) {
+  const s = useStore()
+  const [b, setB] = useState<{ frames: Frame[]; lanes: LaneInfo[]; lastAdd: LastAdd | null } | null>(null)
+  useEffect(() => {
+    api.tboard(target).then(r => setB({ frames: r.frames, lanes: r.lanes || [], lastAdd: r.last_add || null })).catch(e => { s.toast(e.message); onClose() })
+  }, [target.kind, target.id])
+  if (!b) return <div className="backdrop" />
+  return <AddPhotosInner where={target} name={name} frames={b.frames} lanes={b.lanes} lastAdd={b.lastAdd} onClose={onClose} onAdded={onAdded} />
+}
+
+function AddPhotosInner({ where, name, frames, lanes, lastAdd, onClose, onAdded }: {
+  where: Target; name: string; frames: Frame[]; lanes: LaneInfo[]; lastAdd: LastAdd | null | undefined
   onClose: () => void; onAdded: (n: number) => void
 }) {
   const s = useStore()
+  const isFolder = where.kind === 'folder'
   const [crit, setCrit] = useState<Filters>(() => ({ ...EMPTY, ...(lastAdd?.filters || {}) }))
-  const firstFrame = frames.find(f => !f.maybe && f.id)
+  // what can be chosen: a folder's series, or a series' frames
+  const places = isFolder ? lanes.map(l => 's' + l.id) : frames.filter(f => f.id).map(f => 'f' + f.id)
+  const first = isFolder ? places[0] : (() => { const f = frames.find(x => !x.maybe && x.id); return f ? 'f' + f.id : undefined })()
   const [target, setTarget] = useState<string>(() => {
     const k = targetKey(lastAdd?.target)
-    if (k.startsWith('f') && !frames.some(f => 'f' + f.id === k)) return firstFrame ? 'f' + firstFrame.id : 'new'
-    return lastAdd ? k : firstFrame ? 'f' + firstFrame.id : 'new'
+    if ((k.startsWith('f') || k.startsWith('s')) && !places.includes(k)) return first || 'new'
+    return lastAdd ? k : first || 'new'
   })
+  const [newName, setNewName] = useState('')
   const [folders, setFolders] = useState<Folder[]>(() => readCached()?.folders || [])
   const [fq, setFq] = useState('')
   const [open, setOpen] = useState<Set<string>>(() => new Set())
@@ -69,11 +87,11 @@ export function AddPhotosDialog({ sid, name, frames, lastAdd, onClose, onAdded }
     if (!hasCriteria(f)) { setM(null); setMErr(''); return }
     const id = ++reqId.current
     const t = window.setTimeout(() => {
-      api.seriesMatch(sid, f).then(r => { if (id === reqId.current) { setM(r); setMErr('') } })
+      api.tmatch(where, f).then(r => { if (id === reqId.current) { setM(r); setMErr('') } })
         .catch(e => { if (id === reqId.current) setMErr(e.message) })
     }, 250)
     return () => window.clearTimeout(t)
-  }, [crit, sid])
+  }, [crit, where.kind, where.id])
 
   // folder tree (parents added even when they hold no photos themselves)
   const tree = useMemo(() => {
@@ -140,7 +158,7 @@ export function AddPhotosDialog({ sid, name, frames, lastAdd, onClose, onAdded }
     if (n > 400 && !window.confirm(`Add ${n} photos to “${name}”? That's a lot for one board.`)) return
     setBusy(true)
     try {
-      const r = await api.seriesAddMatching(sid, clean(crit), keyTarget(target))
+      const r = await api.taddMatching(where, clean(crit), keyTarget(target, newName.trim()))
       onAdded(r.added)
     } catch (e: any) { s.toast(e.message); setBusy(false) }
   }
@@ -240,11 +258,13 @@ export function AddPhotosDialog({ sid, name, frames, lastAdd, onClose, onAdded }
             <label className="col" style={{ gap: 6 }}>
               <span className="caps">Put them in</span>
               <select className="input" value={target} onChange={e => setTarget(e.target.value)}>
-                {frames.filter(f => f.id).map(f => <option key={f.id} value={'f' + f.id}>{frameName(f)}</option>)}
-                <option value="new">A new frame</option>
-                <option value="per">A new frame for each folder{m && m.folders > 1 ? ` (${m.folders})` : ''}</option>
+                {isFolder ? lanes.map(l => <option key={l.id} value={'s' + l.id}>{l.name}</option>)
+                  : frames.filter(f => f.id).map(f => <option key={f.id} value={'f' + f.id}>{frameName(f)}</option>)}
+                <option value="new">A new {isFolder ? 'series' : 'frame'}</option>
+                <option value="per">A new {isFolder ? 'series' : 'frame'} for each folder{m && m.folders > 1 ? ` (${m.folders})` : ''}</option>
               </select>
             </label>
+            {target === 'new' && <input className="input" placeholder={isFolder ? 'Name of the new series' : 'Name of the new frame (else the next number)'} aria-label={isFolder ? 'Name of the new series' : 'Name of the new frame'} value={newName} onChange={e => setNewName(e.target.value)} />}
           </div>
         </div>
 
@@ -256,7 +276,7 @@ export function AddPhotosDialog({ sid, name, frames, lastAdd, onClose, onAdded }
             {mErr ? <span style={{ color: '#ff8b8e' }}>{mErr}</span>
               : !hasCriteria(clean(crit)) ? 'Pick folders or criteria'
               : !m ? 'Counting…'
-              : <>{m.total} match{m.total !== m.new ? ` · ${m.total - m.new} already on the board` : ''}{m.new > m.limit ? ` · first ${m.limit} are added` : ''}</>}
+              : <>{m.total} match{m.total !== m.new ? ` · ${m.total - m.new} already ${isFolder ? 'in ' + name : 'on the board'}` : ''}{m.new > m.limit ? ` · first ${m.limit} are added` : ''}</>}
           </span>
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={busy || !m || !m.new} onClick={go}>

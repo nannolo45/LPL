@@ -155,6 +155,37 @@ CREATE TABLE IF NOT EXISTS edit_baseline (
     history TEXT NOT NULL,
     xmp_mtime REAL
 );
+
+-- series folders (see series.py): a folder holds several series and has one shared board, where (while
+-- linked) each frame is one of its series. folder_frames.series_id NULL: a frame that is only a visual group.
+CREATE TABLE IF NOT EXISTS series_folders (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    pos INTEGER,
+    linked INTEGER DEFAULT 1,
+    created REAL
+);
+CREATE TABLE IF NOT EXISTS folder_frames (
+    id INTEGER PRIMARY KEY,
+    folder_id INTEGER NOT NULL,
+    series_id INTEGER,
+    label TEXT NOT NULL,
+    x REAL, y REAL, w REAL, h REAL,
+    maybe INTEGER DEFAULT 0,
+    color TEXT DEFAULT '',
+    border TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS folder_items (
+    folder_id INTEGER NOT NULL,
+    photo_id INTEGER NOT NULL,
+    x REAL DEFAULT 0,
+    y REAL DEFAULT 0,
+    PRIMARY KEY (folder_id, photo_id)
+);
+CREATE TABLE IF NOT EXISTS folder_shapes (
+    folder_id INTEGER PRIMARY KEY,
+    data TEXT NOT NULL DEFAULT '[]'
+);
 """
 
 
@@ -195,6 +226,12 @@ def migrate(c: sqlite3.Connection) -> None:
     jcols = {r[1] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
     if "attempts" not in jcols:  # how often a job was handed out (a taken job is handed out again after a while)
         c.execute("ALTER TABLE jobs ADD COLUMN attempts INTEGER DEFAULT 0")
+    scols = {r[1] for r in c.execute("PRAGMA table_info(series)").fetchall()}
+    # series folders and the board link: a series is at the top level (folder_id NULL) or in one folder, has a place
+    # among its neighbours (pos), a lane colour, and says whether its own board gives its order (linked, default yes)
+    for col, decl in (("folder_id", "INTEGER"), ("pos", "INTEGER"), ("color", "TEXT DEFAULT ''"), ("linked", "INTEGER DEFAULT 1")):
+        if col not in scols:
+            c.execute("ALTER TABLE series ADD COLUMN %s %s" % (col, decl))
     c.commit()
 
 
