@@ -45,6 +45,8 @@ export interface Store {
   thumb: number; setThumb: (n: number) => void
   seed: number; reshuffle: () => void
   items: Photo[]; total: number; loading: boolean; loadMore: () => void; reload: () => void
+  /** Which sort and filters `items` were loaded for (queryKey); '' while another tab's are on their way. */
+  itemsKey: string
   sel: number[]; setSel: (ids: number[]) => void; clickSelect: (id: number, e?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => void
   selPhotos: Photo[]; selectAll: () => void
   mergePhotos: (ps: Photo[]) => void
@@ -86,6 +88,12 @@ function useMedia(q: string) {
 
 const PAGE = 300
 
+/** The photos a grid or list shows, as one text: same sort, filters and shuffle, same photos in the same order. */
+export const queryKey = (sort: SortLevel[], filters: Filters, seed: number) => JSON.stringify([sort, filters, seed])
+/** Where each tab's grid and list were scrolled (see useScrollResume in Library.tsx): for which photos (q) and
+ *  layout, how far down, and how many photos were loaded by then, so coming back loads as far again. */
+export const libScroll = new Map<string, { q: string; lay: string; top: number; n: number }>()
+
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const saved = useMemo(loadSaved, [])
   const isMobile = useMedia('(max-width: 760px)')
@@ -98,6 +106,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [seed, setSeed] = useState(1)
   const [items, setItems] = useState<Photo[]>([])
   const [total, setTotal] = useState(0)
+  const [itemsKey, setItemsKey] = useState('')
   const [loading, setLoading] = useState(false)
   const [sel, setSel] = useState<number[]>([])
   const [cache, setCache] = useState<Map<number, Photo>>(new Map())
@@ -133,11 +142,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const id = ++reqId.current
     setLoading(true)
     const want = revealRef.current
+    const key = queryKey(sort, filters, seed)
     ;(async () => {
       let need = PAGE
+      for (const k of libScroll.values()) if (k.q === key) need = Math.max(need, k.n)  // as far as it was scrolled
       if (want != null) {  // load far enough to include the photo we're going to
         const r = await api.position(sort, filters, seed, want)
-        if (r.index >= 0) need = Math.max(PAGE, r.index + 60)
+        if (r.index >= 0) need = Math.max(need, r.index + 60)
         else toast("That photo isn't in this view")
       }
       let got: Photo[] = [], total = 0
@@ -147,7 +158,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         got = got.concat(r.items); total = r.total
         if (!r.items.length || got.length >= total) break
       }
-      setItems(got); setTotal(total)
+      setItems(got); setTotal(total); setItemsKey(key)
       if (want != null && revealRef.current === want) { revealRef.current = null; setRevealId(want) }
     })().catch(e => toast(String(e.message || e))).finally(() => { if (id === reqId.current) setLoading(false) })
   }, [sort, filters, seed, toast, revealTick])
@@ -295,6 +306,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const applyTab = (st: TabState) => {
     setView(st.view); setSort(st.sort); setGroup(st.group); setGran(st.gran)
     setFilters({ ...DEFAULTS.filters, ...st.filters }); setBoardSeries(st.boardSeries ?? null); setSel([])
+    setItemsKey('')  // the photos on screen are the other tab's until this one's arrive
   }
   const switchTab = (id: string) => {
     if (id === activeTab) return
@@ -315,6 +327,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const i = tabs.findIndex(t => t.id === id)
     const rest = tabs.filter(t => t.id !== id)
     try { localStorage.removeItem('lpl.folder.' + id) } catch { /* ignore */ }
+    for (const k of libScroll.keys()) if (k.startsWith(id + ' ')) libScroll.delete(k)
     if (id === activeTab) { const next = rest[Math.min(i, rest.length - 1)]; setTabs(rest); setActiveTab(next.id); applyTab(next.st) }
     else setTabs(rest)
   }
@@ -337,7 +350,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const value: Store = {
     isMobile, tabs, activeTab, switchTab, newTab, closeTab, renameTab, moveTab, liveTab, view, setView, sort, setSort, group, setGroup, gran, setGran, filters, patchFilters, clearFilters,
-    thumb, setThumb, seed, reshuffle: () => setSeed(s => s + 1), items, total, loading, loadMore, reload,
+    thumb, setThumb, seed, reshuffle: () => setSeed(s => s + 1), items, total, loading, loadMore, reload, itemsKey,
     sel, setSel, clickSelect, selPhotos, selectAll, mergePhotos, meta, tags, reloadTags, facets, hidePhotos, series, reloadSeries,
     agents, status, isLocal: status?.mode === 'local', sendIds, setSendIds, editInDarktable, devicePick, closeDevicePick: () => setDevicePick(null), editOn, toast, toastMsg, viewer, setViewer, boardSeries, setBoardSeries,
     reveal, revealId, clearReveal: () => setRevealId(null), fullscreen, setFullscreen,

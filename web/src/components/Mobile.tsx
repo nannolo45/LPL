@@ -5,7 +5,7 @@ import { exifLine, fmtDay, stars } from '../fields'
 import { FilterPanel, SortPanel } from './Left'
 import { HideButton, RatingLabels, SeriesPicker, TagPanel, WhereLine } from './Inspector'
 import { LastEdit } from './EditRecord'
-import { Thumb, useGroups, useReveal } from './Library'
+import { photoShown, Thumb, useGroups, useReveal, useScrollResume } from './Library'
 import { FoldersView } from './Folders'
 import { WorkView } from './Work'
 import { BoardView } from './Board'
@@ -38,6 +38,7 @@ function MobileGrid({ selecting, onOpen }: { selecting: boolean; onOpen: (p: Pho
   const { groups, canGroup } = useGroups(s.items)
   const selSet = new Set(s.sel)
   useReveal()
+  const resume = useScrollResume('phone')  // the photo page takes the grid's place: back from it, resume
   useEffect(() => {
     const el = document.getElementById('m-sentinel')
     if (!el) return
@@ -45,7 +46,7 @@ function MobileGrid({ selecting, onOpen }: { selecting: boolean; onOpen: (p: Pho
     io.observe(el); return () => io.disconnect()
   }, [s.loadMore, s.items.length])
   return (
-    <div className="scroll">
+    <div className="scroll" {...resume}>
       {groups.map((g, gi) => (
         <div key={gi + g.label} style={{ marginBottom: 8 }}>
           {canGroup && <div className="group-h" style={{ marginBottom: 4 }}><b>{g.label}</b><span className="small muted">{g.items.length}</span></div>}
@@ -149,6 +150,7 @@ export function MobileApp() {
   const [newSeries, setNewSeries] = useState(false)
   const [cameFrom, setCameFrom] = useState<'folders' | 'series' | null>(null)  // a folder or series opened from its overview
   useEffect(() => { if (photo != null && s.sel.length === 1 && s.sel[0] !== photo) setPhoto(s.sel[0]) }, [s.sel])
+  useEffect(() => { if (photo != null) photoShown(s.activeTab, photo) }, [photo])  // the grid shows it when you go back
   // show what the open tab shows (also a tab made or changed on the desktop); a view the phone has no
   // screen for is shown as the grid, without changing the tab
   useEffect(() => {

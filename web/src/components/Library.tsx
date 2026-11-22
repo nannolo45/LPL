@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { Photo, thumbUrl } from '../api'
-import { useStore } from '../store'
+import { libScroll, queryKey, useStore } from '../store'
 import { RetryImg } from './RetryImg'
 import { captionValue, field, fmtMonth, groupLabel, LABELS, leaf, stars } from '../fields'
 
@@ -84,14 +84,58 @@ export function useReveal() {
   }, [s.revealId, s.items])
 }
 
+// the photo last opened on the phone's photo page, and in which tab: back in the grid it is brought into view
+let shown: { tab: string; id: number } | null = null
+export const photoShown = (tab: string, id: number) => { shown = { tab, id } }
+
+/** Keeps a grid's or list's place. The view is taken off the page when you go to another view or tab (and, on
+ *  the phone, to a photo's page), and a tab's photos are loaded afresh when you come back to it. Coming back to
+ *  the same photos resumes where it was; other photos (new filters, sort or folder) start at the top. Closing
+ *  the large or full screen view brings the photo you ended on into view, if it isn't already.
+ *  `kind` keeps the grid's, the list's and the phone grid's places apart. */
+export function useScrollResume(kind: string) {
+  const s = useStore()
+  const ref = useRef<HTMLDivElement>(null)
+  const at = s.activeTab + ' ' + kind
+  const q = queryKey(s.sort, s.filters, s.seed)
+  const lay = [s.group, s.gran, s.thumb].join()
+  const ready = s.itemsKey === q  // the photos on the page are the ones asked for
+  const placed = useRef('')       // the photos the position was last set for
+  const bring = (id?: number) => {
+    const el = ref.current, t = el && id != null ? el.querySelector(`[data-pid="${id}"]`) : null
+    if (!el || !t) return
+    const a = el.getBoundingClientRect(), b = t.getBoundingClientRect()
+    if (b.top < a.top || b.bottom > a.bottom) t.scrollIntoView({ block: 'center' })
+  }
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || !ready || placed.current === q) return
+    const k = libScroll.get(at)
+    const back = !placed.current && k && k.q === q && k.lay === lay ? k : null  // just opened, on the photos it was left on
+    if (back && s.items.length < Math.min(back.n, s.total)) return  // not loaded that far yet
+    placed.current = q
+    el.scrollTop = back ? back.top : 0
+    if (!back) libScroll.set(at, { q, lay, top: 0, n: 0 })
+    if (shown && shown.tab === s.activeTab) { bring(shown.id); shown = null }
+  }, [ready, q, s.items.length])
+  const viewing = s.viewer != null || !!s.fullscreen
+  const was = useRef(viewing)
+  useEffect(() => { if (was.current && !viewing) bring(s.sel[0]); was.current = viewing }, [viewing])
+  const onScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    if (ready && placed.current === q) libScroll.set(at, { q, lay, top: e.currentTarget.scrollTop, n: s.items.length })
+  }
+  return { ref, onScroll }
+}
+
 export function GridView() {
   const s = useStore()
   useReveal()
+  const resume = useScrollResume('grid')
   const { groups, canGroup } = useGroups(s.items)
   const capFields = (canGroup ? s.sort.slice(1, 3) : s.sort.slice(0, 2)).map(l => l.f)
   const selSet = new Set(s.sel)
   return (
-    <div className="scroll" style={{ ['--thumb' as any]: s.thumb + 'px' }}>
+    <div className="scroll" {...resume} style={{ ['--thumb' as any]: s.thumb + 'px' }}>
       {groups.map((g, gi) => (
         <div className="group" key={gi + g.label}>
           {canGroup && <div className="group-h"><span className="display">{g.label}</span><span className="small muted">{g.items.length}{g.items.length === 1 ? ' photo' : ' photos'}</span></div>}
@@ -124,6 +168,7 @@ const COLS: [string, string][] = [['name', 'filename'], ['taken', 'taken'], ['pa
 export function ListView() {
   const s = useStore()
   useReveal()
+  const resume = useScrollResume('list')
   const { groups, canGroup } = useGroups(s.items)
   const selSet = new Set(s.sel)
   const sortBy = (f: string) => {
@@ -133,7 +178,7 @@ export function ListView() {
   }
   const addLevel = (f: string) => { if (!s.sort.some(l => l.f === f)) s.setSort([...s.sort, { f, d: 'asc' }]) }
   return (
-    <div className="scroll">
+    <div className="scroll" {...resume}>
       <div className="list">
         <table>
           <thead>
