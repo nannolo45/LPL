@@ -267,6 +267,13 @@ local function tick(from_activity)
   busy = false
 end
 
+-- Linux: the agent calls this over D-Bus (org.darktable.service.Remote.Lua) right after it has written a request,
+-- so a photo opens at once instead of waiting for the mouse to move over darktable's window
+_G.lpl_bridge_poke = function()
+  status("woken by the agent")
+  tick(true)
+end
+
 status("loaded in darktable " .. tostring(dt.configuration.version) .. ", Lua API " .. tostring(dt.configuration.api_version_string))
 write_file(ALIVE, tostring(os.time()))
 

@@ -301,6 +301,25 @@ class BridgeQueue:
             tmp.write_text("\n".join(self.pending) + "\n", encoding="utf-8")
             os.replace(tmp, req)
             self.pending = []
+        poke_darktable()
+
+
+def poke_darktable():
+    """Linux: ask the running darktable over D-Bus to carry out what the bridge was just sent. Without this darktable
+    only acts on its next own event (the mouse moving over its window). Best effort: no gdbus, no D-Bus service or an
+    older bridge script just means it waits for that event, as before."""
+    if IS_WIN or not shutil.which("gdbus"):
+        return
+
+    def run():
+        try:
+            subprocess.run(["gdbus", "call", "--session", "--dest", "org.darktable.service", "--object-path", "/darktable",
+                            "--method", "org.darktable.service.Remote.Lua", "if lpl_bridge_poke then lpl_bridge_poke() end"],
+                           capture_output=True, timeout=10)
+        except Exception as e:
+            log.debug("could not wake darktable over D-Bus: %s", e)
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 def install_bridge(cfg: dict) -> Path:
