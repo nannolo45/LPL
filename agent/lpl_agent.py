@@ -11,7 +11,9 @@ Only needs Python 3.9+ standard library.
 
 What it does, in a loop every couple of seconds:
   1. heartbeat to the server: reports its working set; receives jobs ("edit", "sync", "release", "open")
-  2. edit: downloads RAW + XMP from the server into the local working set and opens it in darktable
+  2. edit: downloads RAW + XMP from the server into the local working set and opens it in darktable.
+     An edit job is a batch: the agent reports how far it is with every heartbeat, and stops it (or leaves
+     single photos out) when the heartbeat answer says so; see docs/devices-stop-estimate.md
   3. watches the local XMP files; when darktable changes one (or the bridge says you left the image),
      uploads it to the server, which writes it next to the original on the NAS
 """
@@ -35,6 +37,11 @@ from pathlib import Path
 from queue import Queue
 
 VERSION = "0.1.0"
+# What this agent can do beyond the first protocol, announced in every heartbeat (docs/devices-stop-estimate.md):
+# batch = reports how far each edit job is; cancel = stops a job or leaves out photos when the heartbeat answer
+# says so; open = honours "open": false in an edit job (copy the photos, do not open darktable).
+CAPS = ["batch", "cancel", "open"]
+CHUNK = 256 * 1024  # most bytes taken from a download at once; a Stop is noticed between two of them
 IS_WIN = os.name == "nt"
 NO_WINDOW = 0x08000000 if IS_WIN else 0  # CREATE_NO_WINDOW
 
@@ -121,10 +128,15 @@ def save_config(cfg: dict) -> None:
 
 
 # ------------------------------------------------------------------ http
+class Cancelled(Exception):
+    """A download was given up on request: Stop, or "Don't send" for that photo."""
+
+
 class Server:
     def __init__(self, cfg: dict):
         self.base = cfg["server"].rstrip("/")
         self.headers = {"x-lpl-token": cfg["password"]} if cfg.get("password") else {}
+        self.current = None  # (response, tag) of the download under way, for interrupt()
 
     def _req(self, method, path, data=None, ctype=None, timeout=30):
         h = dict(self.headers)
@@ -138,24 +150,61 @@ class Server:
         with self._req(method, path, data, "application/json" if data else None, timeout) as r:
             return json.loads(r.read().decode() or "{}")
 
-    def download(self, path, dest: Path, progress=None):
-        """progress(fraction) is called while the file arrives, when the server says how big it is."""
+    def download(self, path, dest: Path, progress=None, cancel=None, tag=None):
+        """progress(fraction, bytes) is called while the file arrives (fraction None when the server does not
+        say how big it is). cancel() is asked between chunks: when it says yes the download ends with Cancelled.
+        The file appears at dest only when it is complete; whatever ends the download early, the partial file
+        (dest + ".part") is removed. tag names the download for interrupt()."""
         tmp = dest.with_name(dest.name + ".part")
-        with self._req("GET", path, timeout=300) as r, open(tmp, "wb") as f:
+        try:
+            with self._req("GET", path, timeout=300) as r, open(tmp, "wb") as f:
+                try:
+                    total = int(r.headers.get("Content-Length") or 0)
+                except ValueError:
+                    total = 0
+                done = 0
+                self.current = (r, tag)
+                read = getattr(r, "read1", None) or r.read  # read1: what has arrived, without waiting for a full chunk
+                while True:
+                    if cancel and cancel():
+                        raise Cancelled()
+                    try:
+                        chunk = read(CHUNK)
+                    except Exception:
+                        if cancel and cancel():  # interrupt() cut the connection
+                            raise Cancelled()
+                        raise
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    done += len(chunk)
+                    if progress:
+                        progress(min(1.0, done / total) if total else None, done)
+                if cancel and cancel():
+                    raise Cancelled()
+                if total and done != total:
+                    raise IOError("the connection ended after %d of %d bytes" % (done, total))
+            os.replace(tmp, dest)
+        except BaseException:
             try:
-                total = int(r.headers.get("Content-Length") or 0)
-            except ValueError:
-                total = 0
-            done = 0
-            while True:
-                chunk = r.read(1024 * 1024)
-                if not chunk:
-                    break
-                f.write(chunk)
-                done += len(chunk)
-                if progress and total:
-                    progress(min(1.0, done / total))
-        os.replace(tmp, dest)
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
+        finally:
+            self.current = None
+
+    def interrupt(self, wanted) -> None:
+        """Wake the download under way if wanted(tag) says it is to be given up: a read that waits for data on a
+        slow or stalled connection would otherwise notice a Stop only when the next bytes arrive. Best effort
+        (http.client has no public handle to its socket): without it the Stop takes effect at the next chunk."""
+        cur = self.current
+        if not cur or not wanted(cur[1]):
+            return
+        try:
+            cur[0].fp.raw._sock.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
 
     def upload(self, path, data: bytes, ctype: str):
         with self._req("POST", path, data, ctype, timeout=120) as r:
@@ -354,6 +403,10 @@ class Agent:
         self.bridge = BridgeQueue()
         self.message = ""
         self.lock = threading.RLock()
+        self.batches = {}          # edit job id -> how far it is (reported with every heartbeat, see batch())
+        self.cancel_jobs = set()   # jobs the server said to stop, and photos (ids as text) it said not to send:
+        self.skip_photos = set()   # both as in the last heartbeat answer
+        self.quit = threading.Event()  # set: run() returns after the round it is in (tests)
         for d in (WORK, BRIDGE / "outbox"):
             d.mkdir(parents=True, exist_ok=True)
         if STATE_FILE.is_file():
@@ -380,6 +433,89 @@ class Agent:
                 "bridge_status": bridge_status(running), "version": VERSION, "message": self.message,
                 "local_url": LOCAL["url"], "local_error": LOCAL["error"]}
 
+    def recover(self):
+        """At start: whatever was being copied when the agent last stopped never arrived. Its partial file goes,
+        and so does its entry, so the working set lists only photos that are really here. (The server sees that
+        this agent no longer has the job and shows the batch as stopped, with what did arrive.)"""
+        with self.lock:
+            for pid, it in list(self.items.items()):
+                if it.get("status") != "downloading":
+                    continue
+                p = Path(it["local_path"])
+                if p.is_file() and not Path(str(p) + ".xmp").exists():
+                    try:  # the photo without its XMP: nothing was edited, the copy is only half of a hand-off
+                        p.unlink()
+                    except OSError:
+                        pass
+                self.items.pop(pid, None)
+        for part in WORK.glob("*.part"):
+            try:
+                part.unlink()
+            except OSError:
+                pass
+        self.save()
+
+    def heartbeat_body(self):
+        return {"id": self.cfg["id"], "name": self.cfg["name"], "os": platform.system().lower(), "state": self.state(),
+                "caps": CAPS, "transfers": self.transfers()}
+
+    # --- batches: how far each edit job is
+    def transfers(self):
+        """Every edit job this agent holds, for the heartbeat: waiting for its turn ("queued"), being copied
+        ("running"), or ended ("stopped", "done", "failed") but not yet confirmed to the server."""
+        with self.lock:
+            return [{"job": jid, "state": b["state"], "arrived": list(b["arrived"]), "present": list(b["present"]),
+                     "failed": list(b["failed"]), "skipped": list(b["skipped"]), "photo": b["photo"], "bytes": b["bytes"]}
+                    for jid, b in self.batches.items()]
+
+    def _mark(self, b, key, pid):
+        if b is not None:
+            with self.lock:
+                b[key].append(int(pid))
+
+    def _copying(self, b, pid=None, nbytes=0):
+        if b is not None:
+            with self.lock:
+                b["photo"], b["bytes"] = (int(pid) if pid is not None else None), int(nbytes)
+
+    def _given_up(self, jid, pid) -> bool:
+        """Did the server say to stop this job, or not to send this photo?"""
+        return (jid is not None and jid in self.cancel_jobs) or str(pid) in self.skip_photos
+
+    def take(self, answer: dict):
+        """A heartbeat answer: new jobs, and what to stop. Stop does not wait in the job queue (the worker is
+        busy with the very batch it is about): it is noted here and the copy loop looks at it between files and
+        between chunks."""
+        for j in answer.get("jobs", []):
+            if j.get("kind") == "edit":
+                with self.lock:
+                    if j["id"] in self.batches:
+                        continue  # handed out again while this agent still has it
+                    self.batches[j["id"]] = {"state": "queued", "arrived": [], "present": [], "failed": [], "skipped": [],
+                                             "photo": None, "bytes": 0, "unsaid": False}
+            self.jobs.put(j)
+        c = answer.get("cancel")
+        if isinstance(c, dict):  # the whole list every time: what is not in it any more is not to be stopped
+            self.cancel_jobs = set(c.get("jobs") or [])
+            self.skip_photos = {str(i) for i in c.get("photos") or []}
+            self.srv.interrupt(lambda tag: bool(tag) and self._given_up(tag[0], tag[1]))
+
+    def report_done(self, jid, status) -> bool:
+        """Tell the server a job ended. For an edit job with its lists, so the answer does not depend on which
+        of this and the next heartbeat arrives first. False: not delivered (the main loop tries again)."""
+        body = {"status": status}
+        with self.lock:
+            b = self.batches.get(jid)
+            if b:
+                body.update({k: list(b[k]) for k in ("arrived", "present", "failed", "skipped")})
+        try:
+            self.srv.json("POST", "/api/jobs/%s/done" % jid, body)
+        except Exception:
+            return False
+        with self.lock:
+            self.batches.pop(jid, None)
+        return True
+
     # --- jobs
     def handle(self, job):
         kind, ids = job["kind"], [str(i) for i in (job.get("payload") or {}).get("ids") or []]
@@ -389,7 +525,7 @@ class Agent:
         status = "done"
         try:
             if kind == "edit":
-                self.edit(ids)
+                status = self.edit(ids, job) or "done"
             elif kind == "open":
                 self.open_local(ids)
             elif kind == "sync":
@@ -402,10 +538,12 @@ class Agent:
             log.exception("job failed")
             self.message = "Last job failed: %s" % e
             status = "failed"
-        try:
-            self.srv.json("POST", "/api/jobs/%s/done" % job["id"], {"status": status})
-        except Exception:
-            pass
+        with self.lock:
+            b = self.batches.get(job["id"])
+            if b:
+                b.update(state=status, photo=None, bytes=0)
+        if not self.report_done(job["id"], status) and b:
+            b["unsaid"] = True  # the server could not be reached: the main loop says it after its next heartbeat
 
     def step(self, it: dict, step=None, progress=None):
         """What the agent is doing with a photo right now, reported with the next heartbeat (R16): step is
@@ -423,35 +561,90 @@ class Agent:
     def local_path(self, pid: str, filename: str) -> Path:
         return WORK / ("%s_%s" % (pid, filename))
 
-    def edit(self, ids):
+    def edit(self, ids, job=None):
+        """Copy these photos (RAW + XMP) into the working set, then open them in darktable. job: the server's
+        edit job, when this is one (a batch: reported with every heartbeat, and it can be stopped).
+        Returns "stopped" when the server said Stop: what arrived stays, the photo that was being copied leaves
+        no trace, and darktable is not opened. A photo is "ready" from the moment its RAW and XMP are both here."""
+        jid = job["id"] if job else None
+        with self.lock:
+            b = self.batches.get(jid) if jid is not None else None
+            if b:
+                b["state"] = "running"
+        want_open = (job.get("payload") or {}).get("open", True) is not False if job else True
         opened = []
         for pid in ids:
+            if jid is not None and jid in self.cancel_jobs:
+                return "stopped"
+            if str(pid) in self.skip_photos:
+                self._mark(b, "skipped", pid)
+                continue
             with self.lock:
                 it = self.items.get(pid)
-            if it and Path(it["local_path"]).is_file():
+            if it and Path(it["local_path"]).is_file() and it.get("status") != "downloading":
                 opened.append(Path(it["local_path"]))
+                self._mark(b, "present", pid)
                 continue
-            info = self.srv.json("GET", "/api/photos/%s/checkout" % pid)
+            try:
+                info = self.srv.json("GET", "/api/photos/%s/checkout" % pid)
+            except Exception as e:
+                if b is None:
+                    raise  # (an "open" of a photo that is not here: as before, the job fails)
+                log.warning("photo %s: %s", pid, e)
+                self.message = "Could not copy photo %s: %s" % (pid, e)
+                self._mark(b, "failed", pid)
+                continue
             dest = self.local_path(pid, info["filename"])
             it = {"id": int(pid), "filename": info["filename"], "local_path": str(dest), "status": "downloading",
                   "checkout_ts": info["server_time"], "synced_mtime": 0, "synced_ts": 0, "error": ""}
             with self.lock:
                 self.items[pid] = it
+            made = False  # this call put the RAW there (a copy found complete from before is left alone)
+            given_up = lambda jid=jid, pid=pid: self._given_up(jid, pid)
+
+            def progress(f, n, it=it, pid=pid):
+                self.step(it, "downloading", f)
+                self._copying(b, pid, n)
             try:
                 if not (dest.is_file() and dest.stat().st_size == info.get("size")):
                     self.step(it, "downloading", 0.0)
-                    self.srv.download("/api/photos/%s/original" % pid, dest, lambda f, it=it: self.step(it, "downloading", f))
+                    self._copying(b, pid, 0)
+                    made = True
+                    self.srv.download("/api/photos/%s/original" % pid, dest, progress, given_up, (jid, str(pid)))
                 xmp = Path(str(dest) + ".xmp")
-                self.srv.download("/api/photos/%s/xmp" % pid, xmp)
+                self.srv.download("/api/photos/%s/xmp" % pid, xmp, None, given_up, (jid, str(pid)))
                 it["synced_mtime"] = xmp.stat().st_mtime
-                it["status"] = "opening"
+                it["status"] = "ready"
                 opened.append(dest)
+                self._mark(b, "arrived", pid)
+            except Cancelled:
+                # it did not arrive: no entry, no partial file (download removed it), no RAW without its XMP
+                if made:
+                    try:
+                        dest.unlink()
+                    except OSError:
+                        pass
+                with self.lock:
+                    self.items.pop(pid, None)
+                self._copying(b)
+                self.save()
+                if jid is not None and jid in self.cancel_jobs:
+                    log.info("job %s stopped while copying %s", jid, info["filename"])
+                    return "stopped"
+                self._mark(b, "skipped", pid)
+                continue
             except Exception as e:
                 it.update(status="error", error=str(e))
+                self._mark(b, "failed", pid)
             finally:
                 self.step(it)
+                self._copying(b)
             self.save()
-        self.open_paths(opened)
+        if jid is not None and jid in self.cancel_jobs:
+            return "stopped"
+        if want_open:
+            self.open_paths(opened)
+        return None
 
     def open_local(self, ids):
         paths = []
@@ -491,10 +684,12 @@ class Agent:
                 self.bridge.add("open", paths[0])  # darktable is starting: the bridge picks it up once it's ready
             for p in paths[1:]:
                 self.bridge.add("import", p)
-        with self.lock:
+        with self.lock:  # the first one is opened in the darkroom; the others are imported and wait to be opened
             for it in self.items.values():
-                if it["status"] == "opening":
+                if it["status"] in ("opening", "ready") and it["local_path"] == str(paths[0]):
                     it["status"] = "editing"
+                elif it["status"] == "opening":
+                    it["status"] = "ready"
         self.save()
 
     def sync(self, pid: str, force=False, preview: Path = None):
@@ -599,18 +794,20 @@ class Agent:
             self.handle(job)
 
     def run(self, once=False):
+        self.recover()
         threading.Thread(target=self.worker, daemon=True).start()
         if not once:
             start_local_library(self.cfg)
         log.info("agent %s (%s) talking to %s", self.cfg["name"], self.cfg["id"], self.srv.base)
         backoff = self.cfg.get("poll_seconds", 2)
-        while True:
+        while not self.quit.is_set():
             try:
-                r = self.srv.json("POST", "/api/agents/heartbeat",
-                                  {"id": self.cfg["id"], "name": self.cfg["name"], "os": platform.system().lower(), "state": self.state()},
-                                  timeout=15)
-                for j in r.get("jobs", []):
-                    self.jobs.put(j)
+                r = self.srv.json("POST", "/api/agents/heartbeat", self.heartbeat_body(), timeout=15)
+                self.take(r)
+                with self.lock:  # an edit job that ended while the server could not be reached: say so now
+                    unsaid = [(jid, b["state"]) for jid, b in self.batches.items() if b["unsaid"]]
+                for jid, st in unsaid:
+                    self.report_done(jid, st)
                 backoff = self.cfg.get("poll_seconds", 2)
                 if self.message.startswith("Server unreachable"):
                     self.message = ""
@@ -628,12 +825,12 @@ class Agent:
                     time.sleep(0.2)
                 time.sleep(0.5)
                 try:  # report the final state
-                    self.srv.json("POST", "/api/agents/heartbeat", {"id": self.cfg["id"], "name": self.cfg["name"],
-                                                                     "os": platform.system().lower(), "state": self.state()}, timeout=15)
+                    self.srv.json("POST", "/api/agents/heartbeat", self.heartbeat_body(), timeout=15)
                 except Exception:
                     pass
                 return
-            time.sleep(backoff)
+            # while photos are being copied: more often, so progress is fresh and a Stop arrives within a second
+            self.quit.wait(min(backoff, 1.0) if self.batches else backoff)
 
 
 # ------------------------------------------------------------------ cli

@@ -870,6 +870,11 @@ def series_add_matching(sid: int, body: Dict[str, Any] = Body(...)):
 
 
 # ---------------------------------------------------------------- agents + jobs (hand-off to darktable)
+from . import transfers  # noqa: E402  batches of photos sent to a device: totals, Stop, Resume (see transfers.py)
+
+app.include_router(transfers.router)
+
+
 def list_agents() -> List[dict]:
     """Every agent, in a stable order that does not change with heartbeats: by name (case-insensitive), then id.
     (Ordered by last_seen, two devices swapped places on every refresh.)"""
@@ -886,6 +891,7 @@ def list_agents() -> List[dict]:
                     it.pop("step", None)
                     it.pop("progress", None)
         out.append(d)
+    transfers.decorate(out)  # caps, transfer, stopped, folded
     return out
 
 
@@ -950,8 +956,9 @@ def heartbeat(body: Dict[str, Any] = Body(...)):
             c.execute("UPDATE jobs SET status='taken', taken=?, agent_id=?, attempts=COALESCE(attempts,0)+1 WHERE id=?",
                       (now, aid, j["id"]))
             out.append({"id": j["id"], "kind": j["kind"], "payload": json.loads(j["payload"] or "{}")})
+        extra = transfers.on_heartbeat(c, aid, body, out, now)  # nothing for a device that announces no caps
         c.commit()
-    return {"jobs": out, "server_time": time.time()}
+    return {"jobs": out, "server_time": time.time(), **extra}
 
 
 @app.post("/api/jobs")
@@ -975,6 +982,8 @@ def job_create(body: Dict[str, Any] = Body(...)):
         c = db.conn()
         cur = c.execute("INSERT INTO jobs(agent_id,kind,payload,created) VALUES(?,?,?,?)",
                         (agent_id, kind, json.dumps(body.get("payload") or {}), time.time()))
+        if kind == "edit":
+            transfers.register(c, cur.lastrowid, agent_id, body.get("payload") or {})
         c.commit()
     return {"id": cur.lastrowid, "agent_id": agent_id}
 
@@ -989,6 +998,7 @@ def jobs_list():
 def job_done(jid: int, body: Dict[str, Any] = Body(default={})):
     with db.write_lock:
         db.conn().execute("UPDATE jobs SET status=? WHERE id=?", (body.get("status") or "done", jid))
+        transfers.on_done(db.conn(), jid, body)
         db.conn().commit()
     return {"ok": True}
 

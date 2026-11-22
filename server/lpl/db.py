@@ -195,6 +195,8 @@ def migrate(c: sqlite3.Connection) -> None:
     jcols = {r[1] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
     if "attempts" not in jcols:  # how often a job was handed out (a taken job is handed out again after a while)
         c.execute("ALTER TABLE jobs ADD COLUMN attempts INTEGER DEFAULT 0")
+    from . import transfers  # batches sent to devices: its own tables, and agents.caps
+    transfers.migrate(c)
     c.commit()
 
 
