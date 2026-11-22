@@ -147,9 +147,12 @@ def build_where(f: Dict[str, Any]) -> Tuple[str, List[Any], str]:
     if series:
         join = " JOIN series_items si ON si.photo_id=p.id AND si.series_id=%d" % int(series)
     sfolder = f.get("series_folder")
-    if sfolder and not series:  # every series of a series folder, one after the other, each in its own order
-        join = (" JOIN (SELECT si0.photo_id, MIN(COALESCE(s0.pos, 9999) * 1000000 + COALESCE(si0.ord, 999999)) AS ord FROM series_items si0 "
-                "JOIN series s0 ON s0.id=si0.series_id WHERE s0.folder_id=%d GROUP BY si0.photo_id) si ON si.photo_id=p.id" % int(sfolder))
+    if sfolder and not series:  # every series of a series folder and of its subfolders, in tree order, each in its own order
+        from . import series as series_mod
+        sids = [x["id"] for x in series_mod.series_under(series_mod.db.conn(), int(sfolder))]
+        rank = " ".join("WHEN %d THEN %d" % (sid, k) for k, sid in enumerate(sids)) or "WHEN 0 THEN 0"
+        join = (" JOIN (SELECT si0.photo_id, MIN((CASE si0.series_id %s END) * 1000000 + COALESCE(si0.ord, 999999)) AS ord FROM series_items si0 "
+                "WHERE si0.series_id IN (%s) GROUP BY si0.photo_id) si ON si.photo_id=p.id" % (rank, ",".join(str(i) for i in sids) or "0"))
     ids = f.get("ids")
     if ids:
         ids = [int(i) for i in ids][:5000]

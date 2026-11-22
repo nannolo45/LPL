@@ -235,7 +235,15 @@ def migrate(c: sqlite3.Connection) -> None:
     # the top level of the series tree has one order for folders and series together (series_folders.pos and series.pos
     # of the top-level series share it). Older libraries had two numberings (folders first, then series): where
     # they collide, number them again in that order. Nothing is rewritten once the numbers are distinct.
-    fs = c.execute("SELECT id, pos FROM series_folders ORDER BY pos NULLS LAST, name COLLATE NOCASE").fetchall()
+    # nested folders: a folder can lie in another (parent_id; NULL = top level) and has its own colour; on the board of
+    # its top-level folder it is a group frame (folder_frames.sub_id). Older libraries: every folder is top-level.
+    fcols2 = {r[1] for r in c.execute("PRAGMA table_info(series_folders)").fetchall()}
+    for col, decl in (("parent_id", "INTEGER"), ("color", "TEXT DEFAULT ''")):
+        if col not in fcols2:
+            c.execute("ALTER TABLE series_folders ADD COLUMN %s %s" % (col, decl))
+    if "sub_id" not in {r[1] for r in c.execute("PRAGMA table_info(folder_frames)").fetchall()}:
+        c.execute("ALTER TABLE folder_frames ADD COLUMN sub_id INTEGER")
+    fs = c.execute("SELECT id, pos FROM series_folders WHERE parent_id IS NULL ORDER BY pos NULLS LAST, name COLLATE NOCASE").fetchall()
     ss = c.execute("SELECT id, pos FROM series WHERE folder_id IS NULL ORDER BY pos NULLS LAST, name COLLATE NOCASE").fetchall()
     if {r[1] for r in fs} & {r[1] for r in ss}:
         for n, r in enumerate(fs):

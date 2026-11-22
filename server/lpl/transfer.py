@@ -188,6 +188,11 @@ def overview() -> dict:
 
 
 # ------------------------------------------------------------------ sending
+def _series_mod():
+    from . import series  # (imported late: series imports api, which may import this module)
+    return series
+
+
 def _series_payload(dest_by_id: Dict[int, str]) -> list:
     c = db.conn()
     out = []
@@ -202,9 +207,12 @@ def _series_payload(dest_by_id: Dict[int, str]) -> list:
         # series folders (a NAS that does not know them ignores these and gets the series at the top level, as before)
         entry.update(color=s["color"] or "", linked=bool(s["linked"]), pos=s["pos"])
         if s["folder_id"]:
-            f = c.execute("SELECT name, linked FROM series_folders WHERE id=?", (s["folder_id"],)).fetchone()
-            if f:
-                entry.update(folder=f["name"], folder_linked=bool(f["linked"]))
+            # `folder` is the top-level folder (a NAS that knows one level of folders gets the series flattened into
+            # it); folder_path names the folders down to the series' own, folder_meta their place and colour
+            path = [c.execute("SELECT name, linked, pos, color FROM series_folders WHERE id=?", (p["id"],)).fetchone() for p in _series_mod().folder_path(c, s["folder_id"])]
+            if path:
+                entry.update(folder=path[0]["name"], folder_linked=bool(path[0]["linked"]), folder_path=[f["name"] for f in path],
+                             folder_meta=[{"pos": f["pos"], "color": f["color"] or ""} for f in path])
         out.append(entry)
     return out
 
@@ -220,10 +228,13 @@ def _folders_payload(dest_by_id: Dict[int, str], series: list) -> list:
             continue
         frames = [dict(r) for r in c.execute(
             "SELECT ff.label, ff.x, ff.y, ff.w, ff.h, ff.color, ff.border, s.name series FROM folder_frames ff LEFT JOIN series s ON s.id=ff.series_id "
+            "WHERE ff.folder_id=? AND ff.sub_id IS NULL ORDER BY ff.id", (f["id"],)).fetchall()]
+        groups = [dict(r) for r in c.execute(  # the group frames of its subfolders (apart, so that an older NAS does not take them for frames)
+            "SELECT ff.label, ff.x, ff.y, ff.w, ff.h, ff.color, ff.border, sf.name sub FROM folder_frames ff JOIN series_folders sf ON sf.id=ff.sub_id "
             "WHERE ff.folder_id=? ORDER BY ff.id", (f["id"],)).fetchall()]
         items = [{"dest": dest_by_id[r["photo_id"]], "x": r["x"], "y": r["y"]}
                  for r in c.execute("SELECT photo_id, x, y FROM folder_items WHERE folder_id=?", (f["id"],)).fetchall() if r["photo_id"] in dest_by_id]
-        out.append({"name": f["name"], "linked": bool(f["linked"]), "frames": frames, "items": items,
+        out.append({"name": f["name"], "linked": bool(f["linked"]), "frames": frames, "groups": groups, "items": items,
                     "shapes": _shapes_payload(f["id"], dest_by_id, "folder_shapes", "folder_id")})
     return out
 
