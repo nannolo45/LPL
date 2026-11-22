@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { api, BoardArrow, BoardEnd, BoardNote, BoardShape, Frame, LastAdd, Photo, thumbUrl } from '../api'
+import { api, BoardArrow, BoardData, BoardEnd, BoardNote, BoardShape, Frame, LaneInfo, Photo, Target, thumbUrl } from '../api'
 import { useStore } from '../store'
-import { AddPhotosDialog } from './AddPhotos'
+import { keyOf, num2 } from '../seriesnav'
+import { useSeriesRev } from '../seriesops'
+import { useAsk } from './Ask'
+import { LinkIcon } from './SeriesTree'
 import { actionFor, comboOf, keysOf, typingIn, useShortcutsVersion } from '../shortcuts'
 import { getSettings, setSetting, Settings, useSettings } from '../settings'
 import { LABELS } from '../fields'
@@ -27,7 +30,7 @@ const TOOL_ICONS = {
 
 // frame looks: a soft fill and a matching border in the chosen colour
 export const FRAME_COLORS: [string, string][] = [['', 'None'], ['#8a8a92', 'Grey'], ['#e5c547', 'Yellow'], ['#f0a35a', 'Orange'], ['#e5636a', 'Red'], ['#e07bb0', 'Pink'], ['#a07be0', 'Purple'], ['#5b9be6', 'Blue'], ['#5cc08a', 'Green']]
-const hexA = (hex: string, a: number) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})` }
+export const hexA = (hex: string, a: number) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})` }
 function frameLook(f: Frame): React.CSSProperties {
   const st: React.CSSProperties = {}
   if (f.color) { st.background = hexA(f.color, .13); st.borderColor = hexA(f.color, .8) }
@@ -92,8 +95,9 @@ export function readingOrder(items: Item[], frames: Frame[]) {
     .map(o => o.it)
 }
 
-type Snap = { items: (Photo & { x: number; y: number })[]; frames: Frame[]; shapes: BoardShape[] }
-const snapSig = (x: Snap) => JSON.stringify([x.items.map(i => [i.id, Math.round(i.x), Math.round(i.y)]), x.frames.map(f => [f.label, Math.round(f.x), Math.round(f.y), Math.round(f.w), Math.round(f.h), f.maybe]), x.shapes])
+// linked: whether the board gave the order when the snapshot was taken (undo puts that back too)
+type Snap = { items: (Photo & { x: number; y: number })[]; frames: Frame[]; shapes: BoardShape[]; linked?: boolean }
+const snapSig = (x: Snap) => JSON.stringify([x.items.map(i => [i.id, Math.round(i.x), Math.round(i.y)]), x.frames.map(f => [f.label, Math.round(f.x), Math.round(f.y), Math.round(f.w), Math.round(f.h), f.maybe]), x.shapes, !!x.linked])
 
 type MoveOrig = { photos: Map<number, Pt>; notes: Map<string, Pt>; ends: { key: string; end: 'a' | 'b'; x: number; y: number }[] }
 type Drag =
@@ -107,9 +111,20 @@ type Drag =
   | { kind: 'arrow'; a: BoardEnd }
   | { kind: 'pinch'; d0: number; z0: number }
 
-export function BoardView() {
+export interface BoardInfo { hidden: number; maybe: number }
+
+/** The board of one series, or the shared board of a folder of series (each frame is then one of its series).
+ *  `active` false: kept but not shown (the Series view is in Strip mode): keys are not listened to. */
+export function BoardView({ target, active = true, onInfo }: { target: Target; active?: boolean; onInfo?: (i: BoardInfo) => void }) {
   const s = useStore()
-  const sid = s.boardSeries ?? s.series[0]?.id ?? null
+  const sid: number | null = target.id
+  const isFolder = target.kind === 'folder'
+  const viewKey = keyOf(target)
+  const rev = useSeriesRev()
+  const [askNode, ask] = useAsk()
+  const [linked, setLinked] = useState(true)
+  const [lanes, setLanes] = useState<LaneInfo[]>([])   // a folder's series, in their order
+  const [parent, setParent] = useState<string | null>(null)   // the folder a single series is in
   const [frames, setFrames] = useState<Frame[]>([])
   const [items, setItems] = useState<Item[]>([])
   const [shapes, setShapesRaw] = useState<BoardShape[]>([])
@@ -123,8 +138,6 @@ export function BoardView() {
   const opt = useSettings()
   const [zoom, setZoom] = useState(() => { const st = getSettings(); return (s.isMobile ? st.boardZoomPhone : st.boardZoom) / 100 })
   const sn = (v: number) => (opt.boardSnap ? Math.round(v / 20) * 20 : v)  // snap to the grid when that's on
-  const [lastAdd, setLastAdd] = useState<LastAdd | null>(null)
-  const [adding, setAdding] = useState(false)
   const drag = useRef<Drag | null>(null)
   // while dragging, the moving things are shifted with a CSS variable instead of redrawing the whole board
   // on every mouse move (that made photos trail far behind the pointer on a big board); saved on release
@@ -149,7 +162,7 @@ export function BoardView() {
   // ---- undo / redo: snapshots of the whole board (photos on it and their places, frames, notes, arrows).
   // A snapshot is taken just before each change; going back to one adds/removes photos on the server as needed.
   const cur = useRef<Snap>({ items: [], frames: [], shapes: [] })
-  cur.current = { items, frames, shapes }
+  cur.current = { items, frames, shapes, linked }
   const undoStack = useRef<Snap[]>([])
   const redoStack = useRef<Snap[]>([])
   const [, setHist] = useState(0)
@@ -157,7 +170,6 @@ export function BoardView() {
   const dragCp = useRef(false)      // this drag already saved its "before"
   const editCp = useRef(false)      // this note-typing session already saved its "before"
   const newNote = useRef<string | null>(null)
-  const preAdd = useRef<Snap | null>(null)
   const checkpoint = (snap: Snap = cur.current) => {
     const u = undoStack.current
     if (u.length && snapSig(u[u.length - 1]) === snapSig(snap)) return
@@ -176,6 +188,18 @@ export function BoardView() {
     setSelFrames([])
     s.setSel(s.sel.filter(id => want.has(id)))
     try {
+      if (to.linked !== undefined && to.linked !== linkedRef.current) {  // the link as it was then; the save below then says what that means
+        await api.tlinkSet(target, to.linked, 'none')
+        setLinked(to.linked); linkedRef.current = to.linked
+      }
+      if (isFolder) {  // a folder's board is saved whole: what came back, what left, the frames (linked: the series follow)
+        window.clearTimeout(saveTimer.current)
+        const n = ++saveSeq.current
+        const r = await api.tboardSave(target, { items: to.items.map(it => ({ id: it.id, x: Math.round(it.x), y: Math.round(it.y) })), frames: to.frames, remove: gone, restore: true })
+        if (n === saveSeq.current) applySaved(r, true)
+        s.reloadSeries(); s.reloadTags()
+        return
+      }
       if (gone.length) await api.seriesRemove(sid, gone)
       if (back.length) await api.seriesAdd(sid, back)
       framesDirty.current = true
@@ -196,35 +220,69 @@ export function BoardView() {
   const undo = () => step(undoStack, redoStack, 'undo')
   const redo = () => step(redoStack, undoStack, 'redo')
 
+  const linkedRef = useRef(true)
+  const saveSeq = useRef(0)
+  /** What the server says after a save: every photo's series and number (it works them out, see server/lpl/series.py),
+   *  the folder's series, and the frames when they were sent (new ones have their ids and, on a linked folder
+   *  board, their series). The places on screen are not touched: they may have moved on since. */
+  const applySaved = (r: BoardData, withFrames: boolean) => {
+    const by = new Map(r.items.map(p => [p.id, p]))
+    setItems(prev => prev.map(it => { const p = by.get(it.id); return p && (p.num !== it.num || p.ord !== it.ord || p.series_id !== it.series_id) ? { ...it, num: p.num, ord: p.ord, series_id: p.series_id } : it }))
+    if (withFrames) { setFrames(r.frames); framesDirty.current = false }
+    if (r.lanes) setLanes(r.lanes)
+    if (r.warnings?.length) s.toast(r.warnings[0])
+  }
   const load = useCallback(() => {
     if (sid == null) return Promise.resolve(null)
-    return api.board(sid).then(r => {
+    return api.tboard(target).then(r => {
       const its = r.items.map(p => ({ ...p, x: p.x || 0, y: p.y || 0 }))
-      setFrames(r.frames); setItems(its); setName(r.series.name); setLastAdd(r.last_add || null)
+      setFrames(r.frames); setItems(its); setName(r.folder && isFolder ? r.folder.name : r.series?.name || '')
+      setLinked(!!r.linked); linkedRef.current = !!r.linked
+      setLanes(r.lanes || []); setParent(!isFolder && r.folder ? r.folder.name : null)
       shapesDirty.current = false; setShapesRaw(r.shapes || [])
       return { items: its, frames: r.frames }
-    }).catch(e => { s.toast(e.message); return null })
-  }, [sid])
-  useEffect(() => { needInitialScroll.current = true; origin.current = null; const v = readView(sid); if (v) setZoom(v.z); setAdding(false); setSelShapes([]); setSelFrames([]); setEditing(null); undoStack.current = []; redoStack.current = []; setHist(h => h + 1); load() }, [load])
+    }).catch(e => { if (!/not found/.test(e.message)) s.toast(e.message); return null })  // not found: it was just deleted, the view is about to change
+  }, [target.kind, target.id])
+  useEffect(() => { needInitialScroll.current = true; origin.current = null; const v = readView(viewKey); if (v) setZoom(v.z); setSelShapes([]); setSelFrames([]); setEditing(null); undoStack.current = []; redoStack.current = []; setHist(h => h + 1); load() }, [load])
+  // something changed elsewhere (the strip, the tree, the link, Add photos): load again; what was here before is one undo step
+  const seenRev = useRef(rev)
+  useEffect(() => {
+    if (!active || seenRev.current === rev) return
+    seenRev.current = rev
+    const before = cur.current
+    chain.current = chain.current.then(async () => { window.clearTimeout(saveTimer.current); const r = await load(); if (r && (before.items.length || before.frames.length)) checkpoint(before) })
+  }, [rev, active])
 
   // photos hidden from the library: off the board too (they stay in the series and keep their place),
   // unless "Show hidden" is on; even then they're dimmed and don't count in the reading order
   const showHidden = !!s.filters.show_hidden
   const shown = useMemo(() => (showHidden ? items : items.filter(it => !it.hidden)), [items, showHidden])
   const hiddenCount = useMemo(() => items.filter(it => it.hidden).length, [items])
-  const order = useMemo(() => readingOrder(items.filter(it => !it.hidden), frames), [items, frames])
-  const pos = useMemo(() => new Map(order.map((it, i) => [it.id, i + 1])), [order])
+  // the order and the numbers are the server's (a photo's num: its place in its series); in a folder the series follow each other
+  const order = useMemo(() => {
+    const lane = new Map(lanes.map((l, i) => [l.id, i]))
+    return items.filter(it => !it.hidden && it.num != null).sort((a, b) => (lane.get(a.series_id ?? -1) ?? 0) - (lane.get(b.series_id ?? -1) ?? 0) || a.num! - b.num!)
+  }, [items, lanes])
+  const pos = useMemo(() => new Map(order.map(it => [it.id, it.num!])), [order])
+  useEffect(() => { onInfo?.({ hidden: hiddenCount, maybe: isFolder ? 0 : items.length - hiddenCount - order.length }) }, [hiddenCount, items.length, order.length])
 
   const save = useCallback((its: Item[], frs: Frame[], withFrames: boolean) => {
     if (sid == null) return
     window.clearTimeout(saveTimer.current)
     saveTimer.current = window.setTimeout(() => {
-      const ord = new Map(readingOrder(its.filter(it => !it.hidden), frs).map((it, i) => [it.id, i + 1]))
-      api.boardSave(sid, its.map(it => ({ id: it.id, x: Math.round(it.x), y: Math.round(it.y), ord: ord.get(it.id) ?? null })), withFrames || framesDirty.current ? frs : undefined)
-        .then(r => { if (withFrames || framesDirty.current) { setFrames(r.frames); framesDirty.current = false } s.reloadSeries() })
+      const wf = withFrames || framesDirty.current
+      const n = ++saveSeq.current
+      const before = new Map(its.map(it => [it.id, it.series_id]))
+      api.tboardSave(target, { items: its.map(it => ({ id: it.id, x: Math.round(it.x), y: Math.round(it.y) })), frames: wf ? frs : undefined })
+        .then(r => {
+          if (n !== saveSeq.current) return  // a later save is on its way: its answer counts
+          applySaved(r, wf)
+          s.reloadSeries()
+          if (isFolder && (wf || r.items.some(p => before.get(p.id) !== p.series_id))) s.reloadTags()
+        })
         .catch(e => s.toast(e.message))
-    }, 500)
-  }, [sid])
+    }, 150)
+  }, [target.kind, target.id])
 
   // where each arrow end is right now: on the photo or note it's attached to, else its own point
   const byPhoto = useMemo(() => new Map(items.map(it => [it.id, it])), [items])
@@ -248,7 +306,7 @@ export function BoardView() {
     shapesTimer.current = window.setTimeout(() => {
       shapesDirty.current = false
       const out = shapes.map(x => (x.kind === 'arrow' ? { ...x, a: { ...x.a, ...round(center(x.a)) }, b: { ...x.b, ...round(center(x.b)) } } : x))
-      api.shapesSave(sid, out).catch(e => s.toast(e.message))
+      api.tshapesSave(target, out).catch(e => s.toast(e.message))
     }, 600)
   }, [shapes])
 
@@ -568,7 +626,7 @@ export function BoardView() {
   useShortcutsVersion()
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (adding || s.viewer != null || typingIn(e.target)) return
+      if (!active || s.viewer != null || typingIn(e.target)) return
       const a = actionFor(e, ['board', 'photos'])
       if (a === 'pan') { e.preventDefault(); setSpace(true); return }
       if (a === 'selectAll') { e.preventDefault(); s.setSel(shown.map(i => i.id)); setSelShapes(shapes.map(x => x.key)); return }
@@ -690,7 +748,12 @@ export function BoardView() {
     const w = wrap.current
     const cx = w ? (w.scrollLeft + w.clientWidth / 2) / zoom + ox : 490, cy = w ? (w.scrollTop + w.clientHeight / 2) / zoom + oy : 190
     const nums = frames.map(f => parseInt(f.label, 10)).filter(n => !isNaN(n))
-    const label = String((nums.length ? Math.max(...nums) : 0) + 1).padStart(2, '0')
+    let label = String((nums.length ? Math.max(...nums) : 0) + 1).padStart(2, '0')
+    if (isFolder && linked) {  // here a frame is a series: it gets a name of its own at once (and is renamed as you type the real one)
+      const taken = new Set([...s.series.map(x => x.name), ...frames.map(f => f.label)])
+      label = 'New series'
+      for (let k = 2; taken.has(label); k++) label = 'New series ' + k
+    }
     const rect = r || { x: Math.round(sn(cx - 450)), y: Math.round(sn(cy - 150)), w: 900, h: 300 }
     const nf = [...frames, { label, ...rect, maybe: 0, color: getSettings().boardFrameColor || '' }]
     checkpoint(); setFrames(nf); save(items, nf, true); setEditFrame(nf.length - 1); setSelFrames([nf.length - 1])
@@ -700,8 +763,23 @@ export function BoardView() {
     checkpoint()
     const nf = frames.map((f, i) => (selFrames.includes(i) ? { ...f, ...p } : f)); setFrames(nf); save(items, nf, true)
   }
-  const deleteFrames = (idx: number[]) => {
+  const deleteFrames = async (idx: number[]) => {
     if (!idx.length) return
+    if (isFolder && linked) {  // here a frame is a series: removing it deletes the series (never the photos), after asking
+      const hit = idx.map(i => frames[i]).filter(f => f?.series_id)
+      if (hit.length) {
+        const n = items.filter(it => hit.some(f => f.series_id === it.series_id)).length
+        const yes = await ask({ title: hit.length > 1 ? `Delete ${hit.length} series?` : `Delete the series “${hit[0].label}”?`, ok: hit.length > 1 ? 'Delete series' : 'Delete series', danger: true,
+          text: `On this board a frame is a series of ${name}. Removing ${hit.length > 1 ? 'these frames deletes those series' : 'this frame deletes that series'}: ${n === 1 ? 'its photo leaves' : `${hit.length > 1 ? 'their' : 'its'} ${n} photos leave`} the board and ${n === 1 ? 'loses its' : 'lose their'} series tag. No photo is deleted. Undo on the board brings ${hit.length > 1 ? 'them' : 'it'} back as ${hit.length > 1 ? 'new series' : 'a new series'}. To keep the series and only stop frames being series, unlink the board first.` })
+        if (!yes) return
+        checkpoint()
+        try { for (const f of hit) await api.seriesDelete(f.series_id!) } catch (e: any) { s.toast(e.message) }
+        setSelFrames([])
+        s.reloadSeries(); s.reloadTags()
+        await load()
+        return
+      }
+    }
     checkpoint()
     const names = idx.map(i => frames[i]?.label).filter(Boolean)
     const nf = frames.filter((_, i) => !idx.includes(i)); setFrames(nf); save(items, nf, true); setSelFrames([])
@@ -740,43 +818,11 @@ export function BoardView() {
     if (selShapes.length) deleteShapes(selShapes, false)
     const ids = selPhotosHere
     if (!ids.length || sid == null) return
-    await api.seriesRemove(sid, ids)
+    if (isFolder) { const r = await api.folderBoardRemove(sid, ids); saveSeq.current++; applySaved(r, false) }
+    else await api.seriesRemove(sid, ids)
     setItems(prev => prev.filter(i => !ids.includes(i.id))); s.setSel([]); s.reloadSeries(); s.reloadTags()
-    s.toast(`${ids.length} photo${ids.length > 1 ? 's' : ''} taken off “${name}” (files untouched; ${keysOf('undo')[0] || 'Undo'} puts them back)`)
+    s.toast(`${ids.length} photo${ids.length > 1 ? 's' : ''} taken off ${isFolder && !linked ? 'the board (still in their series' : `“${name}” (files untouched`}; ${keysOf('undo')[0] || 'Undo'} puts them back)`)
   }
-  const newSeries = async () => {
-    const n = window.prompt('Name of the new series')
-    if (!n) return
-    try {
-      const r = await api.seriesCreate(n, s.sel)
-      s.reloadSeries(); s.setBoardSeries(r.id)
-    } catch (e: any) { s.toast(e.message) }
-  }
-  const rename = async () => {
-    if (sid == null) return
-    const n = window.prompt('Rename series (its tag is renamed too)', name)
-    if (!n || n === name) return
-    await api.seriesRename(sid, n); setName(n); s.reloadSeries(); s.reloadTags()
-  }
-  const del = async () => {
-    if (sid == null || !window.confirm(`Delete the series “${name}”? Photos are not deleted; their series tag is removed.`)) return
-    await api.seriesDelete(sid); s.setBoardSeries(null); s.reloadSeries(); s.reloadTags()
-  }
-  const onAdded = async (n: number) => {
-    setAdding(false)
-    if (preAdd.current) checkpoint(preAdd.current)
-    s.toast(`${n} photo${n === 1 ? '' : 's'} added to “${name}”`)
-    const r = await load()
-    if (r) save(r.items, r.frames, false)  // stores the new reading order
-    s.reloadSeries(); s.reloadTags()
-  }
-  // with a photo selected: its folder in the Library, scrolled to it; otherwise the whole series in board order
-  const showInLibrary = () => {
-    if (sid == null) return
-    if (selPhotosHere.length) { s.reveal(selPhotosHere[0]); return }
-    s.patchFilters({ series: sid, folder: null, folders: [], month: null, tag: null }); s.setSort([{ f: 'custom', d: 'asc' }]); s.setView('grid')
-  }
-
   // an endless board: the canvas reaches EDGE board pixels past everything in every direction (also left of and
   // above where the board starts), so you can grab it and move anywhere, like in Miro. Board point (x, y) sits
   // at ((x - ox) * zoom, (y - oy) * zoom) on the canvas.
@@ -791,7 +837,7 @@ export function BoardView() {
     if (!w) return
     if (needInitialScroll.current && (items.length || frames.length)) {  // back where you were on this board, or its start at the top left
       needInitialScroll.current = false
-      const v = readView(sid)
+      const v = readView(viewKey)
       if (v) {
         w.scrollLeft = (v.cx - ox) * zoom - w.clientWidth / 2
         w.scrollTop = (v.cy - oy) * zoom - w.clientHeight / 2
@@ -806,6 +852,8 @@ export function BoardView() {
     }
     origin.current = { ox, oy }
   })
+  const seriesCount = useMemo(() => { const m = new Map<number, number>(); for (const it of items) if (it.series_id != null && !it.hidden) m.set(it.series_id, (m.get(it.series_id) || 0) + 1); return m }, [items])
+  const insideCount = (f: Frame) => shown.filter(it => centerIn(itemRect(it), f)).length
   const selSet = new Set(s.sel), shSet = new Set(selShapes)
   const selNotes = notes.filter(n => shSet.has(n.key))
   const canvasCursor = space ? 'grab' : tool === 'select' ? 'default' : 'crosshair'
@@ -813,54 +861,14 @@ export function BoardView() {
   const nSh = selShapes.length
 
   return (
-    <div className="board-wrap">
-      {!s.isMobile && (
-        <div className="series-list">
-          <span className="caps" style={{ padding: '0 8px 6px' }}>Series</span>
-          {s.series.map(x => (
-            <button key={x.id} className={'it' + (x.id === sid ? ' on' : '')} onClick={() => s.setBoardSeries(x.id)}>
-              <span className="ellipsis">{x.name}</span><span className="muted">{x.count}</span>
-            </button>
-          ))}
-          <button className="btn dashed" style={{ margin: '6px 4px' }} onClick={newSeries}>+ New series{s.sel.length ? ` from ${s.sel.length} selected` : ''}</button>
-          <div className="small muted" style={{ padding: 8, lineHeight: 1.5 }}>
-            “+ Add photos” brings in whole folders or everything matching a rating, label, tag or date. Frames are chapters: add one with the frame button on the left, double-click its name to rename it, drag it by its name bar or edges. Shift+1 shows everything, Shift+2 the selection, [ and ] jump between frames, and the frames button lists them all.
-            <br /><br />Drag on empty space to select several things (Shift adds). Drag with the right or middle mouse button, or hold Space and drag, to move around; on a touch screen drag empty space with one finger and pinch with two to zoom. How the mouse, wheel and double-click behave is in Settings (⚙ at the top). Keys: V select, N note, A arrow, Delete takes what's selected off the board (change them with the keyboard button at the top). Double-click empty space for a note, an arrow to write on it.
-          </div>
-        </div>
-      )}
-      <div className="center">
-        {sid == null ? (
-          <div className="col" style={{ padding: 40, alignItems: 'flex-start' }}>
-            <span className="display" style={{ fontSize: 20 }}>No series yet</span>
-            <span className="muted">Select photos in the Library, then use “Add to series… → new series”.</span>
-            <button className="btn primary" onClick={newSeries}>New series</button>
-          </div>
-        ) : (
-          <>
-            <div className="ctxbar">
-              {!s.isMobile && <span className="display" style={{ fontSize: 17 }}>{name}</span>}
-              <span className="muted">{order.length} in series{frames.some(f => f.maybe) ? ` · ${items.length - hiddenCount - order.length} in maybe piles` : ''}</span>
-              {(hiddenCount > 0 || showHidden) && (
-                <button className={'chip' + (showHidden ? ' on' : '')} title="Photos you hid from the library. They stay in the series and keep their place on the board." onClick={() => s.patchFilters({ show_hidden: !showHidden, only_hidden: false })}>
-                  {showHidden ? 'showing' : 'show'} {hiddenCount} hidden
-                </button>
-              )}
-              <div className="grow" />
-              <button className="btn primary" onClick={() => { preAdd.current = cur.current; setAdding(true) }} title="Add photos from folders, or by rating, label, tag and date">+ Add photos</button>
-              {!s.isMobile && <>
-              <button className="btn" onClick={showInLibrary} title={selPhotosHere.length ? "Open the selected photo's folder in the Library, scrolled to it" : "Show the whole series in the Library, in board order"}>Show in library</button>
-              <button className="btn" onClick={rename}>Rename</button>
-              <button className="btn danger" onClick={del}>Delete</button>
-              </>}
-            </div>
+    <>
             <div className="board-area">
               <div className="canvas-wrap" ref={wrap} style={{ cursor: drag.current?.kind === 'pan' ? 'grabbing' : canvasCursor }} onContextMenu={e => e.preventDefault()}
                 onScroll={e => {  // remember where you are on this board (centre and zoom), for coming back
                   if (needInitialScroll.current || sid == null) return
                   const w = e.currentTarget
                   window.clearTimeout(viewTimer.current)
-                  viewTimer.current = window.setTimeout(() => writeView(sid, { z: zoomRef.current, cx: (w.scrollLeft + w.clientWidth / 2) / zoomRef.current + oxy.current.ox, cy: (w.scrollTop + w.clientHeight / 2) / zoomRef.current + oxy.current.oy }), 200)
+                  viewTimer.current = window.setTimeout(() => writeView(viewKey, { z: zoomRef.current, cx: (w.scrollLeft + w.clientWidth / 2) / zoomRef.current + oxy.current.ox, cy: (w.scrollTop + w.clientHeight / 2) / zoomRef.current + oxy.current.oy }), 200)
                 }}
                 onPointerDownCapture={touchDown} onPointerMoveCapture={touchMove} onPointerUpCapture={touchUp} onPointerCancelCapture={touchUp}>
                 <div className="canvas" data-bg="1" style={{ width: W * zoom, height: H * zoom }} onPointerDown={onBgDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
@@ -874,9 +882,16 @@ export function BoardView() {
                           ? <input className="fl fl-in" autoFocus defaultValue={f.label} aria-label="Frame name" onPointerDown={e => e.stopPropagation()} onFocus={e => e.target.select()}
                               onBlur={e => renameFrame(i, e.target.value)} onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditFrame(null) }} />
                           : <span className="fl" onPointerDown={e => onFrameDown(e, i, 'frame')} onDoubleClick={e => { e.stopPropagation(); setEditFrame(i) }} title="Drag here or by the edges to move the frame with what's inside; double-click the name to rename">
-                              {f.label}{f.maybe ? ' · not in series' : ''}
+                              <span className="fl-t">{f.label}{f.maybe ? ' · not in series' : ''}</span>
+                              {isFolder && linked && f.series_id != null && (
+                                <span className="fchip" title={`This frame is the series ${f.label} in ${name}`} style={f.color ? { background: hexA(f.color, .22), borderColor: hexA(f.color, .6) } : undefined}>
+                                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="7" width="13" height="13" rx="2" /><path d="M8 7V5a1 1 0 011-1h11a1 1 0 011 1v11a1 1 0 01-1 1h-2" /></svg>
+                                  series · {seriesCount.get(f.series_id) || 0}
+                                </span>
+                              )}
+                              {isFolder && !linked && <span className="fcount">{insideCount(f)}</span>}
                             </span>}
-                        <button className="fx" aria-label="Remove frame" onPointerDown={e => e.stopPropagation()} onClick={() => deleteFrame(i)}>×</button>
+                        <button className="fx" aria-label={`Remove frame ${f.label}`} onPointerDown={e => e.stopPropagation()} onClick={() => deleteFrame(i)}>×</button>
                         <span className="rs" onPointerDown={e => onFrameDown(e, i, 'resize')} />
                       </div>
                     ))}
@@ -887,7 +902,7 @@ export function BoardView() {
                         <button key={it.id} className={'bitem' + (selSet.has(it.id) ? ' sel' : '') + (it.hidden ? ' hid' : '') + (moving?.photos.has(it.id) ? ' moving' : '')} style={{ left: it.x, top: it.y, width: w, height: h, zIndex: selSet.has(it.id) ? 5 : 1, cursor: grab }}
                           onPointerDown={e => onObjDown(e, { photo: it.id })} onDoubleClick={e => { e.stopPropagation(); if (tool === 'select') photoDouble(it.id) }} aria-label={it.filename + (n ? `, position ${n}` : ', maybe')}>
                           <img src={thumbUrl(it)} alt="" draggable={false} />
-                          {it.hidden ? <span className="num maybe">hidden</span> : opt.boardNumbers && <span className={'num' + (n ? '' : ' maybe')}>{n ? String(n).padStart(2, '0') : '?'}</span>}
+                          {it.hidden ? <span className="num maybe">hidden</span> : opt.boardNumbers && linked && <span className={'num' + (n ? '' : ' maybe')}>{n ? num2(n) : '?'}</span>}
                         </button>
                       )
                     })}
@@ -935,7 +950,7 @@ export function BoardView() {
                   const title = `${label} (${keysOf(act).join(', ') || 'no key'})`
                   return <button key={t} className={tool === t ? 'on' : ''} title={title} aria-label={title} aria-pressed={tool === t} onClick={() => setTool(t)}>{TOOL_ICONS[t]}</button>
                 })}
-                <button className={tool === 'frame' ? 'on' : ''} aria-pressed={tool === 'frame'} title={`Frame: drag to draw one (around photos and notes to put them in it), or click for the usual size (${keysOf('newFrame').join(', ') || 'no key'})`} aria-label="Frame tool" onClick={() => setTool(t => (t === 'frame' ? 'select' : 'frame'))}>{TOOL_ICONS.frame}</button>
+                <button className={tool === 'frame' ? 'on' : ''} aria-pressed={tool === 'frame'} title={`${isFolder && linked ? `Frame tool: draw a frame to create a series in ${name}` : 'Frame: drag to draw one (around photos and notes to put them in it), or click for the usual size'} (${keysOf('newFrame').join(', ') || 'no key'})`} aria-label={isFolder && linked ? `Frame tool: draw a frame to create a series in ${name}` : 'Frame tool'} onClick={() => setTool(t => (t === 'frame' ? 'select' : 'frame'))}>{TOOL_ICONS.frame}</button>
                 <span className="sep" />
                 <button title={`Fit everything on screen (${keysOf('fitAll').join(', ') || 'no key'})`} aria-label="Fit everything" onClick={fitAll}>{TOOL_ICONS.fit}</button>
                 <div className="bt-pop">
@@ -969,7 +984,7 @@ export function BoardView() {
                   </div>
                   {selFrames.length === 1 && <button className="btn" onClick={() => setEditFrame(selFrames[0])}>Rename</button>}
                   <button className="btn" onClick={() => { const r = frames[selFrames[0]]; if (r) showRect(r) }}>Go to</button>
-                  <button className="btn" onClick={() => deleteFrames(selFrames)} title={keysOf('boardDelete').join(', ')}>Delete frame{selFrames.length > 1 ? 's' : ''}</button>
+                  <button className="btn" onClick={() => deleteFrames(selFrames)} title={keysOf('boardDelete').join(', ')}>Delete {isFolder && linked ? 'series' : 'frame' + (selFrames.length > 1 ? 's' : '')}</button>
                 </div>
               )}
               {(selPhotosHere.length > 0 || nSh > 0) && (
@@ -979,10 +994,18 @@ export function BoardView() {
                   {selPhotosHere.length > 0 && <button className="btn" onClick={() => s.editInDarktable(selPhotosHere)}>Edit in darktable</button>}
                   {selPhotosHere.length > 0 && s.isMobile && (() => {  // the selected photos in the board's own order (as the full screen view pages through it)
                     const ids = selectionIds([...order, ...shown.filter(it => !pos.has(it.id))].map(it => it.id), selPhotosHere)
-                    return <EditOnPhone ids={ids} start={ids[0]} series={sid} title={name} className="btn" />
+                    return <EditOnPhone ids={ids} start={ids[0]} series={isFolder ? null : sid} title={name} className="btn" />
                   })()}
                   {selPhotosHere.length > 0 && <button className="btn" title={`Hide from the library and the board (${keysOf('hide')[0] || 'no key'})`} onClick={() => toggleHidden()}>{selPhotosHere.every(id => byPhoto.get(id)?.hidden) ? 'Unhide' : 'Hide'}</button>}
-                  <button className="btn" onClick={removeSel} title={keysOf('boardDelete').join(', ')}>{selPhotosHere.length ? 'Remove from board' : 'Delete'}</button>
+                  <button className="btn" onClick={removeSel} title={keysOf('boardDelete').join(', ')}>{selPhotosHere.length ? (isFolder && linked ? 'Remove from series' : 'Remove from board') : 'Delete'}</button>
+                </div>
+              )}
+              {(isFolder || !linked) && !s.isMobile && (
+                <div className={'bhint' + (linked ? ' on' : '')}>
+                  <LinkIcon off={!linked} size={14} />
+                  <span>{isFolder
+                    ? linked ? `Each frame is a series in ${name}. Moving a photo to another frame moves it to that series.` : 'Free board. Frames here are only visual groups; the order comes from the strip.'
+                    : parent ? `Free board: inside the folder ${parent} the order of this series comes from the folder.` : 'Free board. Moving photos does not change the order; it comes from the strip.'}</span>
                 </div>
               )}
               <div className="bzoom">
@@ -991,20 +1014,15 @@ export function BoardView() {
                 <button onClick={() => zoomTo(zoom + .1)} aria-label="Zoom in" title={'Zoom in (' + keysOf('zoomIn').join(', ') + ', or Ctrl + wheel)'}>+</button>
               </div>
             </div>
-            {!s.isMobile && <PhotoStrip photos={shown} pos={pos} sel={selSet}
+            {!s.isMobile && <PhotoStrip photos={shown} pos={pos} sel={selSet} lanes={isFolder ? lanes : null} linked={linked} name={name}
               onPick={(it, e) => {
                 const add = e.ctrlKey || e.metaKey || e.shiftKey
                 s.setSel(add ? (selSet.has(it.id) ? s.sel.filter(x => x !== it.id) : [...s.sel, it.id]) : [it.id]); if (!add) setSelShapes([])
                 const r = itemRect(it); showRect({ x: r.x - 150, y: r.y - 100, w: 450, h: 305 }, zoomRef.current)
               }}
               onEditAll={() => s.editInDarktable(order.map(i => i.id))} canEditAll={order.length > 0} />}
-          </>
-        )}
-      </div>
-      {adding && sid != null && (
-        <AddPhotosDialog sid={sid} name={name} frames={frames} lastAdd={lastAdd} onClose={() => setAdding(false)} onAdded={onAdded} />
-      )}
-    </div>
+      {askNode}
+    </>
   )
 }
 
@@ -1012,14 +1030,17 @@ export function BoardView() {
 const STRIP_SORTS: [Settings['boardStripSort'], string][] = [['reading', 'Board order'], ['taken', 'Capture time'], ['name', 'Filename'], ['rating', 'Rating'], ['label', 'Colour label'], ['folder', 'Folder']]
 
 /** Every photo on the board in a strip you can sort as you like (it doesn't jump around while you arrange the board).
- *  Click one to go to it on the board, Ctrl/Shift-click to select several; the wheel scrolls the strip. */
-function PhotoStrip({ photos, pos, sel, onPick, onEditAll, canEditAll }: {
-  photos: Item[]; pos: Map<number, number>; sel: Set<number>
+ *  Click one to go to it on the board, Ctrl/Shift-click to select several; the wheel scrolls the strip.
+ *  A folder's board (`lanes`): in the board's (or strip's) order the photos stand series by series, each group
+ *  with the series' chip and an underline in its colour, numbered from 01 as in its lane and its frame. */
+function PhotoStrip({ photos, pos, sel, lanes, linked, name, onPick, onEditAll, canEditAll }: {
+  photos: Item[]; pos: Map<number, number>; sel: Set<number>; lanes: LaneInfo[] | null; linked: boolean; name: string
   onPick: (it: Item, e: React.MouseEvent) => void; onEditAll: () => void; canEditAll: boolean
 }) {
   const st = useSettings()
   const list = useMemo(() => {
     const key = st.boardStripSort, dir = st.boardStripDesc ? -1 : 1
+    const lane = new Map((lanes || []).map((l, i) => [l.id, i]))
     const v = (p: Item): number | string => {
       switch (key) {
         case 'taken': return p.taken || ''
@@ -1027,11 +1048,11 @@ function PhotoStrip({ photos, pos, sel, onPick, onEditAll, canEditAll }: {
         case 'rating': return p.rating
         case 'label': return p.labels.length ? Math.min(...p.labels) : 99
         case 'folder': return p.relpath.toLowerCase()
-        default: return pos.get(p.id) ?? 1e6
+        default: return (lane.get(p.series_id ?? -1) ?? 999) * 1e6 + (pos.get(p.id) ?? 9e5)
       }
     }
     return [...photos].sort((a, b) => { const x = v(a), y = v(b); return (x < y ? -1 : x > y ? 1 : 0) * dir || a.filename.localeCompare(b.filename) })
-  }, [photos, pos, st.boardStripSort, st.boardStripDesc])
+  }, [photos, pos, lanes, st.boardStripSort, st.boardStripDesc])
   const strip = useRef<HTMLDivElement>(null)
   useEffect(() => {  // the mouse wheel scrolls the strip sideways
     const el = strip.current
@@ -1043,6 +1064,24 @@ function PhotoStrip({ photos, pos, sel, onPick, onEditAll, canEditAll }: {
   if (!st.boardStrip) return (
     <div className="seqstrip folded"><button className="btn ghost small" onClick={() => setSetting('boardStrip', true)}>▴ Show the photo strip ({photos.length})</button></div>
   )
+  const thumb = (it: Item, group?: string) => {
+    const n = pos.get(it.id)
+    return (
+      <button key={it.id} className={'sthumb' + (sel.has(it.id) ? ' sel' : '')} onClick={e => onPick(it, e)} aria-label={`${group ? group + ' ' : ''}${n ? num2(n) + ' ' : ''}${it.filename}`}
+        title={`${it.filename} — go to it on the board (Ctrl/Shift-click to select several)`}>
+        <img src={thumbUrl(it)} alt="" draggable={false} />
+        <span className="tiny muted">
+          {st.boardStripSort === 'rating' ? (it.rating > 0 ? '★' + it.rating : it.rating < 0 ? 'rej' : '–')
+            : st.boardStripSort === 'label' ? (it.labels.length ? it.labels.map(l => <i key={l} className="ldot" style={{ background: LABELS[l].c }} />) : '–')
+            : n ? num2(n) : it.series_id === null && lanes ? '–' : 'maybe'}
+        </span>
+      </button>
+    )
+  }
+  // in the board's own order a folder's photos are shown series by series
+  const grouped = lanes && st.boardStripSort === 'reading'
+  const groups = grouped ? (st.boardStripDesc ? [...lanes!].reverse() : lanes!).map(l => ({ l, its: list.filter(p => p.series_id === l.id) })) : []
+  const loose = grouped ? list.filter(p => !lanes!.some(l => l.id === p.series_id)) : []
   return (
     <div className="seqstrip">
       <div className="col" style={{ gap: 6, width: 170 }}>
@@ -1052,27 +1091,28 @@ function PhotoStrip({ photos, pos, sel, onPick, onEditAll, canEditAll }: {
         </div>
         <div className="row" style={{ gap: 4 }}>
           <select className="input" style={{ flex: '1 1 auto', padding: '4px 6px' }} value={st.boardStripSort} aria-label="Sort the strip by" onChange={e => setSetting('boardStripSort', e.target.value as Settings['boardStripSort'])}>
-            {STRIP_SORTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            {STRIP_SORTS.map(([v, l]) => <option key={v} value={v}>{v === 'reading' && !linked ? 'Strip order' : l}</option>)}
           </select>
           <button className="btn" style={{ padding: '4px 8px' }} title={st.boardStripDesc ? 'Descending' : 'Ascending'} aria-label="Reverse the order" onClick={() => setSetting('boardStripDesc', !st.boardStripDesc)}>{st.boardStripDesc ? '↓' : '↑'}</button>
         </div>
       </div>
-      <div className="thumbs" ref={strip}>
-        {list.map(it => {
-          const n = pos.get(it.id)
-          return (
-            <button key={it.id} className={'sthumb' + (sel.has(it.id) ? ' sel' : '')} onClick={e => onPick(it, e)} title={`${it.filename} — go to it on the board (Ctrl/Shift-click to select several)`}>
-              <img src={thumbUrl(it)} alt="" draggable={false} />
-              <span className="tiny muted">
-                {st.boardStripSort === 'rating' ? (it.rating > 0 ? '★' + it.rating : it.rating < 0 ? 'rej' : '–')
-                  : st.boardStripSort === 'label' ? (it.labels.length ? it.labels.map(l => <i key={l} className="ldot" style={{ background: LABELS[l].c }} />) : '–')
-                  : n ? String(n).padStart(2, '0') : 'maybe'}
-              </span>
-            </button>
-          )
-        })}
+      <div className={'thumbs' + (grouped ? ' grouped' : '')} ref={strip}>
+        {grouped ? <>
+          {groups.map(({ l, its }) => (
+            <div key={l.id} className="sgroup">
+              <span className="sgchip" style={l.color ? { borderColor: hexA(l.color, .6), background: hexA(l.color, .13) } : undefined}><i style={l.color ? { background: l.color } : undefined} />{l.name}<span className="soft">{its.length}</span></span>
+              <div className="sgcol"><div className="sgrow">{its.map(it => thumb(it, l.name))}</div><span className="sgline" style={l.color ? { background: l.color } : undefined} /></div>
+            </div>
+          ))}
+          {loose.length > 0 && (
+            <div className="sgroup">
+              <span className="sgchip">In no series<span className="soft">{loose.length}</span></span>
+              <div className="sgcol"><div className="sgrow">{loose.map(it => thumb(it))}</div><span className="sgline" /></div>
+            </div>
+          )}
+        </> : list.map(it => thumb(it))}
       </div>
-      <button className="btn" onClick={onEditAll} disabled={!canEditAll}>Edit whole series in darktable</button>
+      <button className="btn" onClick={onEditAll} disabled={!canEditAll}>{lanes ? `Edit ${name} in darktable` : 'Edit whole series in darktable'}</button>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { Agent, api, Filters, Photo, SeriesInfo, SortLevel, Tag } from './api'
+import { Agent, api, Filters, Photo, SeriesFolder, SeriesInfo, SortLevel, Tag } from './api'
 import { keysOf } from './shortcuts'
 import { agentLabel, needsDeviceChoice } from './devices'
 
@@ -56,6 +56,8 @@ export interface Store {
   /** Hide photos from the library views (or show them again); LPL only, files untouched. */
   hidePhotos: (ids: number[], hidden: boolean) => Promise<void>
   series: SeriesInfo[]; reloadSeries: () => void
+  /** Folders of series (a series says which one it is in with folder_id). */
+  seriesFolders: SeriesFolder[]
   agents: Agent[]; status: any; isLocal: boolean
   sendIds: number[] | null; setSendIds: (ids: number[] | null) => void
   editInDarktable: (ids: number[]) => Promise<void>
@@ -113,6 +115,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [tags, setTags] = useState<Tag[]>([])
   const [facets, setFacets] = useState<Store['facets']>({ lenses: [], cameras: [] })
   const [series, setSeries] = useState<SeriesInfo[]>([])
+  const [seriesFolders, setSeriesFolders] = useState<SeriesFolder[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [status, setStatus] = useState<any>(null)
   const [toastMsg, setToastMsg] = useState('')
@@ -177,7 +180,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [loading, items.length, total, sort, filters, seed])
 
   const reloadTags = useCallback(() => { api.tags().then(r => setTags(r.tags)).catch(() => {}) }, [])
-  const reloadSeries = useCallback(() => { api.series().then(r => setSeries(r.series)).catch(() => {}) }, [])
+  const reloadSeries = useCallback(() => { api.series().then(r => { setSeries(r.series); setSeriesFolders(r.folders || []) }).catch(() => {}) }, [])
   useEffect(() => {
     reloadTags(); reloadSeries()
     api.facets().then(setFacets).catch(() => {})
@@ -351,7 +354,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const value: Store = {
     isMobile, tabs, activeTab, switchTab, newTab, closeTab, renameTab, moveTab, liveTab, view, setView, sort, setSort, group, setGroup, gran, setGran, filters, patchFilters, clearFilters,
     thumb, setThumb, seed, reshuffle: () => setSeed(s => s + 1), items, total, loading, loadMore, reload, itemsKey,
-    sel, setSel, clickSelect, selPhotos, selectAll, mergePhotos, meta, tags, reloadTags, facets, hidePhotos, series, reloadSeries,
+    sel, setSel, clickSelect, selPhotos, selectAll, mergePhotos, meta, tags, reloadTags, facets, hidePhotos, series, reloadSeries, seriesFolders,
     agents, status, isLocal: status?.mode === 'local', sendIds, setSendIds, editInDarktable, devicePick, closeDevicePick: () => setDevicePick(null), editOn, toast, toastMsg, viewer, setViewer, boardSeries, setBoardSeries,
     reveal, revealId, clearReveal: () => setRevealId(null), fullscreen, setFullscreen,
   }

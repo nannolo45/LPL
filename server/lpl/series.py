@@ -478,9 +478,17 @@ def create_series(body: Dict[str, Any]) -> dict:
     return {"id": sid}
 
 
-def rename_series(sid: int, name: str) -> dict:
+def patch_series(sid: int, body: Dict[str, Any]) -> dict:
+    """PATCH /api/series/{id}: name (the tag is renamed with it) and/or color (its lane and, in a folder, its frame)."""
     s = api._series(sid)
-    name = clean_name(name)
+    if "color" in body:
+        color = str(body.get("color") or "")[:20]
+        with db.write_lock:
+            c = db.conn()
+            c.execute("UPDATE series SET color=? WHERE id=?", (color, sid))
+            c.execute("UPDATE folder_frames SET color=? WHERE series_id=?", (color, sid))
+            c.commit()
+    name = clean_name(body.get("name"))
     if not name or name == s["name"]:
         return {"ok": True}
     with db.write_lock:
@@ -1063,6 +1071,11 @@ def series_strip_move(sid: int, body: Dict[str, Any] = Body(...)):
     of photo `before` (null: at the end). Linked: that frame is re-flowed and the order read back from the board."""
     lane = str(body.get("lane") or "all")
     before = body.get("before")
+    s = api._series(sid)
+    if s["folder_id"]:  # its order is the folder's business (a linked folder board re-flows this series' frame)
+        have = set(order_of(db.conn(), sid))
+        folder_strip_move(s["folder_id"], {"ids": [i for i in body.get("ids") or [] if int(i) in have], "series": sid, "before": before})
+        return series_strip(sid)
     with db.write_lock:
         c = db.conn()
         s = api._series(sid)

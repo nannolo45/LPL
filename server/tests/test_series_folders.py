@@ -524,7 +524,15 @@ def test_single_series_unlink_and_link_again(lib):
     ok(c.post("/api/series/%d/move" % sid, json={"folder_id": fid}))
     assert ok(c.get("/api/series/%d/board" % sid))["linked"] is False
     assert c.post("/api/series/%d/link" % sid, json={"linked": True, "mode": "board"}).status_code == 409
-    assert lanes(c, fid)[ok(c.get("/api/series/%d/board" % sid))["series"]["name"]] == order  # it brought its order along
+    name = ok(c.get("/api/series/%d/board" % sid))["series"]["name"]
+    assert lanes(c, fid)[name] == order  # it brought its order along
+    # reordering it on its own (opened alone) is the folder's order too, and the folder's board follows
+    st = ok(c.post("/api/series/%d/strip/move" % sid, json={"ids": [order[3]], "lane": "all", "before": order[0]}))
+    order = [order[3]] + order[:3] + order[4:]
+    assert [p["id"] for p in st["lanes"][0]["photos"]] == order and lanes(c, fid)[name] == order
+    bd = board(c, fid)
+    assert_tidy(bd)
+    assert {p["id"]: p["num"] for p in bd["items"]}[order[0]] == 1
 
 
 def test_add_matching_in_a_folder(lib):

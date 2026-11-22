@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { SeriesInfo } from '../api'
+import { SeriesFolder, SeriesInfo } from '../api'
+import { resolveTarget, targetName } from '../seriesnav'
 import { TabState, useStore, View, WTab } from '../store'
 import { fmtMonth, leaf } from '../fields'
 import { keysOf, useShortcutsVersion } from '../shortcuts'
@@ -13,14 +14,14 @@ const ICON: Record<View, JSX.Element> = {
   work: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5" /><path d="M8 20h8M12 16v4" /></svg>,
   send: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5" /><path d="M4 15v4a1 1 0 001 1h14a1 1 0 001-1v-4" /></svg>,
 }
-const NAME: Record<View, string> = { grid: 'Grid', list: 'List', folders: 'Folders', timeline: 'Timeline', board: 'Board', work: 'Working set', send: 'Send to NAS' }
+const NAME: Record<View, string> = { grid: 'Grid', list: 'List', folders: 'Folders', timeline: 'Timeline', board: 'Series', work: 'Working set', send: 'Send to NAS' }
 
 /** What a tab shows, in a few words: its own name if you gave one, else from its view and filters. */
-export function tabTitle(t: WTab, series: SeriesInfo[]): string {
+export function tabTitle(t: WTab, series: SeriesInfo[], folders: SeriesFolder[] = []): string {
   if (t.title) return t.title
   const st: TabState = t.st, f = st.filters || {}
   const sname = (id?: number | null) => series.find(x => x.id === id)?.name
-  if (st.view === 'board') return 'Board · ' + (sname(st.boardSeries) || series[0]?.name || 'series')
+  if (st.view === 'board') return 'Series · ' + (targetName(resolveTarget(st.boardSeries, series, folders), series, folders) || 'series')
   if (st.view === 'work' || st.view === 'send') return NAME[st.view]
   if (st.view === 'folders') {
     let cur = ''
@@ -29,6 +30,7 @@ export function tabTitle(t: WTab, series: SeriesInfo[]): string {
   }
   const parts: string[] = []
   if (f.series) parts.push(sname(f.series) || 'series')
+  if (f.series_folder) parts.push(folders.find(x => x.id === f.series_folder)?.name || 'series folder')
   if (f.folder) parts.push(f.folder.split('/').pop() || f.folder)
   if (f.folders?.length) parts.push(f.folders.length === 1 ? f.folders[0].split('/').pop()! : `${f.folders.length} folders`)
   if (f.tag) parts.push(leaf(f.tag))
@@ -54,7 +56,7 @@ export function TabStrip() {
   return (
     <div className="wtabs" role="tablist" aria-label="Tabs">
       {tabs.map((t, i) => {
-        const title = tabTitle(t, s.series)
+        const title = tabTitle(t, s.series, s.seriesFolders)
         const on = t.id === s.activeTab
         return (
           <div key={t.id} role="tab" aria-selected={on} className={'wtab' + (on ? ' on' : '') + (over === i && drag && drag !== t.id ? ' over' : '')} title={title}
@@ -80,7 +82,7 @@ export function TabStrip() {
   )
 }
 
-/** Grid, List, Folders, Timeline, Board as one compact switch; Working set / Send to NAS apart. */
+/** Grid, List, Folders, Timeline, Series as one compact switch; Working set / Send to NAS apart. */
 export function ViewSwitch() {
   const s = useStore()
   const views: View[] = ['grid', 'list', 'folders', 'timeline', 'board']

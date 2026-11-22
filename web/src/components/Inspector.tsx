@@ -7,6 +7,9 @@ import { Thumb } from './Library'
 import { photoActivity, serverNow } from '../devices'
 import { LastEdit, ProgressBar, useTick } from './EditRecord'
 import { NewSeriesSheet } from './NewSeries'
+import { SeriesLine } from './SeriesLine'
+import { buildTree } from '../seriesnav'
+import { bumpSeries } from '../seriesops'
 
 export function RatingLabels({ photos, big = false }: { photos: Photo[]; big?: boolean }) {
   const s = useStore()
@@ -52,9 +55,9 @@ export function SeriesPicker({ ids }: { ids: number[] }) {
         await create(name)
       } else {
         const r = await api.seriesAdd(+v, ids)
-        s.toast(`${r.added} added to ${s.series.find(x => x.id === +v)?.name}`)
+        s.toast(`${r.added} added to ${s.series.find(x => x.id === +v)?.name}` + (r.moved ? ` (${r.moved} moved there from another series of the same folder)` : ''))
       }
-      s.reloadSeries(); s.reloadTags()
+      s.reloadSeries(); s.reloadTags(); bumpSeries()
       api.get(ids).then(r => s.mergePhotos(r.items))
     } catch (e: any) { s.toast(e.message) }
   }
@@ -62,7 +65,10 @@ export function SeriesPicker({ ids }: { ids: number[] }) {
     <>
       <select className="input" value="" onChange={e => add(e.target.value)} aria-label="Add to series">
         <option value="">Add to series…</option>
-        {s.series.map(x => <option key={x.id} value={x.id}>{x.name} ({x.count})</option>)}
+        {(() => { const t = buildTree(s.series, s.seriesFolders); return <>
+          {t.folders.map(f => <optgroup key={f.folder.id} label={f.folder.name}>{f.series.map(x => <option key={x.id} value={x.id}>{x.name} ({x.count})</option>)}</optgroup>)}
+          {t.top.map(x => <option key={x.id} value={x.id}>{x.name} ({x.count})</option>)}
+        </> })()}
         <option value="__new">+ new series…</option>
       </select>
       {naming && <NewSeriesSheet onClose={() => setNaming(false)} onCreate={async name => {
@@ -308,6 +314,7 @@ export function Inspector() {
           </div>
           <LastEdit p={one} />
           <WhereLine id={one.id} />
+          <SeriesLine id={one.id} />
         </>
       )}
       {photos.length > 1 && (

@@ -582,7 +582,7 @@ def series_create(body: Dict[str, Any] = Body(...)):
 
 @app.patch("/api/series/{sid}")
 def series_rename(sid: int, body: Dict[str, Any] = Body(...)):
-    return series_mod.rename_series(sid, body.get("name"))
+    return series_mod.patch_series(sid, body)
 
 
 @app.delete("/api/series/{sid}")

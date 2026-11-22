@@ -33,7 +33,10 @@ export interface Photo {
   x?: number
   y?: number
   ord?: number | null
-  series?: { id: number; name: string }[]
+  /** board and strip only: the number shown on the photo (its place among the series' visible photos) and its series */
+  num?: number | null
+  series_id?: number | null
+  series?: { id: number; name: string; folder_id?: number | null; folder?: string | null; color?: string; num?: number | null; count?: number }[]
   // photo detail only (GET /api/photos/{id})
   last_edit?: EditEvent | null
 }
@@ -75,6 +78,8 @@ export interface Filters {
   month?: string | null
   tag?: string | null
   series?: number | null
+  /** every series of a series folder, one after the other */
+  series_folder?: number | null
   tags?: string[]
   tag_mode?: 'or' | 'and'
   only_hidden?: boolean
@@ -88,15 +93,33 @@ export interface BoardNote { key: string; kind: 'note'; x: number; y: number; w:
 export interface BoardArrow { key: string; kind: 'arrow'; a: BoardEnd; b: BoardEnd; text?: string }
 export type BoardShape = BoardNote | BoardArrow
 
-export interface AddTarget { frame?: number; new?: boolean; per_folder?: boolean; label?: string }
+export interface AddTarget { frame?: number; series?: number; new?: boolean; per_folder?: boolean; label?: string }
 export interface LastAdd { filters: Filters; target: AddTarget }
 export interface MatchResult { total: number; new: number; limit: number; folders: number; sample: { id: number; v: number }[] }
 
 export interface Folder { path: string; count: number; edited: number; first: string | null; last: string | null; covers: { id: number; v: number; pending?: boolean }[]; direct: number; pos: number | null; hidden?: boolean }
 export interface FoldersResult { folders: Folder[]; excluded: string[]; previews_pending: number }
 export interface Tag { path: string; synonyms: string; category: number; private: number; n: number }
-export interface SeriesInfo { id: number; name: string; count: number; covers: { id: number; v: number }[] }
-export interface Frame { id?: number; label: string; x: number; y: number; w: number; h: number; maybe: number; color?: string; border?: string }
+export interface SeriesInfo { id: number; name: string; count: number; covers: { id: number; v: number }[]
+  /** the series folder it is in (null: top level), its place there, its lane colour, and whether its own board gives its order */
+  folder_id?: number | null; pos?: number | null; color?: string; linked?: boolean }
+export interface SeriesFolder { id: number; name: string; pos: number | null; linked: boolean; count: number; series_count: number }
+/** What is open in the Series view: one series, or a folder of series. */
+export interface Target { kind: 'series' | 'folder'; id: number }
+export interface Frame { id?: number; label: string; x: number; y: number; w: number; h: number; maybe: number; color?: string; border?: string
+  /** on a folder's board: the series this frame is (null: only a visual group) */
+  series_id?: number | null }
+export interface LaneInfo { id: number; name: string; color: string; count: number }
+export interface BoardData { series?: { id: number; name: string }; folder?: { id: number; name: string; linked: boolean } | null; linked?: boolean; color?: string
+  lanes?: LaneInfo[]; frames: Frame[]; items: Photo[]; last_add?: LastAdd | null; shapes?: BoardShape[]; warnings?: string[] }
+export interface Lane { key: string; series: { id: number; name: string; color: string } | null; label: string; color: string; maybe: number; frame: boolean; photos: Photo[] }
+export interface StripData { series?: { id: number; name: string; folder_id: number | null; color: string }; folder?: { id: number; name: string; linked: boolean } | null; linked: boolean; lanes: Lane[] }
+/** How far a board and its strip are apart (GET …/link): what linking them again would do. */
+export interface LinkState { linked: boolean; same: boolean; frames: number; series?: number; photos?: number; in_folder?: boolean
+  free_frames?: { id: number; label: string; photos: number }[]; missing_frames?: string[]; moves?: number; reordered?: number
+  loose?: { id: number; filename: string }[]; off_board?: number; outside?: number; maybe?: number; differs?: number }
+export type LinkMode = 'strip' | 'board' | 'none'
+const tbase = (t: Target) => (t.kind === 'folder' ? `/api/series-folders/${t.id}` : `/api/series/${t.id}`)
 /** step and progress (0..1): what a device is doing with the photo right now, if it says (R16). */
 export interface WorkItem { id: number; filename: string; status: string; local_path?: string; error?: string; checkout_ts?: number; synced_ts?: number; step?: string; progress?: number }
 export interface Agent { id: string; name: string; os: string; last_seen: number; online: boolean; state: { working_set?: WorkItem[]; darktable_running?: boolean; bridge_alive?: boolean; bridge_status?: string; version?: string; message?: string; local_url?: string; local_error?: string } }
@@ -158,9 +181,10 @@ export const api = {
   tagDelete: (path: string) => call<{ photos: number }>('POST', '/api/tags/delete', { path }),
   tagProps: (path: string, props: Record<string, unknown>) => call('POST', '/api/tags/props', { path, ...props }),
   tagSuggest: (ids: number[]) => call<{ tags: string[] }>('POST', '/api/tags/suggest', { ids }),
-  series: () => call<{ series: SeriesInfo[] }>('GET', '/api/series'),
-  seriesCreate: (name: string, ids: number[] = []) => call<{ id: number }>('POST', '/api/series', { name, ids }),
+  series: () => call<{ series: SeriesInfo[]; folders?: SeriesFolder[] }>('GET', '/api/series'),
+  seriesCreate: (name: string, ids: number[] = [], folder_id?: number | null) => call<{ id: number }>('POST', '/api/series', { name, ids, folder_id: folder_id ?? undefined }),
   seriesRename: (id: number, name: string) => call('PATCH', `/api/series/${id}`, { name }),
+  seriesColor: (id: number, color: string) => call('PATCH', `/api/series/${id}`, { color }),
   seriesDelete: (id: number) => call('DELETE', `/api/series/${id}`),
   board: (id: number) => call<{ series: { id: number; name: string }; frames: Frame[]; items: Photo[]; last_add?: LastAdd | null; shapes?: BoardShape[] }>('GET', `/api/series/${id}/board`),
   shapesSave: (id: number, shapes: BoardShape[]) => call<{ ok: boolean }>('PUT', `/api/series/${id}/shapes`, { shapes }),
@@ -169,8 +193,27 @@ export const api = {
     call<{ added: number }>('POST', `/api/series/${id}/add-matching`, { filters, target, sort }),
   boardSave: (id: number, items: { id: number; x: number; y: number; ord: number | null }[], frames?: Frame[]) =>
     call<{ series: { id: number; name: string }; frames: Frame[]; items: Photo[] }>('PUT', `/api/series/${id}/board`, frames ? { items, frames } : { items }),
-  seriesAdd: (id: number, ids: number[]) => call<{ added: number }>('POST', `/api/series/${id}/items`, { ids }),
+  seriesAdd: (id: number, ids: number[]) => call<{ added: number; moved?: number }>('POST', `/api/series/${id}/items`, { ids }),
   seriesRemove: (id: number, ids: number[]) => call('POST', `/api/series/${id}/remove`, { ids }),
+  // series folders, the strip and the board link (a Target is one series or a folder of series)
+  folderCreate: (name: string) => call<{ id: number }>('POST', '/api/series-folders', { name }),
+  folderRename: (id: number, name: string) => call<{ ok: boolean; errors?: string[] }>('PATCH', `/api/series-folders/${id}`, { name }),
+  folderDelete: (id: number) => call<{ ok: boolean; series: number[] }>('DELETE', `/api/series-folders/${id}`),
+  seriesMove: (id: number, folder_id: number | null, before?: number | null) => call<{ ok: boolean; errors?: string[] }>('POST', `/api/series/${id}/move`, { folder_id, before: before ?? null }),
+  seriesOrder: (folder_id: number | null, ids: number[]) => call<{ ok: boolean }>('POST', '/api/series/order', { folder_id, ids }),
+  tboard: (t: Target) => call<BoardData>('GET', `${tbase(t)}/board`),
+  tboardSave: (t: Target, body: { items: { id: number; x: number; y: number }[]; frames?: Frame[]; remove?: number[]; restore?: boolean }) => call<BoardData>('PUT', `${tbase(t)}/board`, body),
+  tshapesSave: (t: Target, shapes: BoardShape[]) => call<{ ok: boolean }>('PUT', `${tbase(t)}/shapes`, { shapes }),
+  tmatch: (t: Target, filters: Filters, sort?: SortLevel[]) => call<MatchResult>('POST', `${tbase(t)}/match`, { filters, sort }),
+  taddMatching: (t: Target, filters: Filters, target: AddTarget, sort?: SortLevel[]) => call<{ added: number }>('POST', `${tbase(t)}/add-matching`, { filters, target, sort }),
+  tstrip: (t: Target) => call<StripData>('GET', `${tbase(t)}/strip`),
+  /** photos (in the order they should stand) into a lane, in front of `before` (null: at its end) */
+  tstripMove: (t: Target, ids: number[], lane: Lane, before: number | null) =>
+    call<StripData>('POST', `${tbase(t)}/strip/move`, t.kind === 'folder' ? { ids, series: lane.series?.id, before } : { ids, lane: lane.key, before }),
+  tlink: (t: Target) => call<LinkState>('GET', `${tbase(t)}/link`),
+  tlinkSet: (t: Target, linked: boolean, mode?: LinkMode) =>
+    call<{ linked: boolean; removed_frames?: string[]; created?: string[]; loose?: { id: number; filename: string }[] }>('POST', `${tbase(t)}/link`, { linked, mode }),
+  folderBoardRemove: (id: number, ids: number[]) => call<BoardData>('POST', `/api/series-folders/${id}/remove`, { ids }),
   prefGet: (key: string) => call<{ value: unknown }>('GET', `/api/prefs/${key}`),
   prefSet: (key: string, value: unknown) => call<{ ok: boolean }>('PUT', `/api/prefs/${key}`, { value }),
   agents: () => call<{ agents: Agent[]; server_time: number }>('GET', '/api/agents'),

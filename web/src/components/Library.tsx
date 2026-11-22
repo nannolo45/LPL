@@ -50,6 +50,7 @@ export function ContextBar() {
     const se = s.series.find(x => x.id === f.series)
     chips.push({ label: 'series: ' + (se?.name || f.series), clear: () => s.patchFilters({ series: null }) })
   }
+  if (f.series_folder) chips.push({ label: 'series folder: ' + (s.seriesFolders.find(x => x.id === f.series_folder)?.name || f.series_folder), clear: () => s.patchFilters({ series_folder: null }) })
   return (
     <div className="ctxbar">
       <b>{s.total.toLocaleString()}</b><span className="muted">photos</span>

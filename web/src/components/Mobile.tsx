@@ -8,7 +8,10 @@ import { LastEdit } from './EditRecord'
 import { photoShown, Thumb, useGroups, useReveal, useScrollResume } from './Library'
 import { FoldersView } from './Folders'
 import { WorkView } from './Work'
-import { BoardView } from './Board'
+import { SeriesView } from './SeriesView'
+import { FolderIcon, SeriesTree } from './SeriesTree'
+import { buildTree, targetName, targetOf } from '../seriesnav'
+import { useSeriesOps } from '../seriesops'
 import { SettingsDialog } from './Shortcuts'
 import { EditOnPhone, useListTitle } from './PhoneEdit'
 import { selectionIds, takeDeepLink } from '../devices'
@@ -111,28 +114,36 @@ function PhotoPage({ id, onBack }: { id: number; onBack: () => void }) {
   )
 }
 
-function SeriesTab({ open, board }: { open: (id: number) => void; board: (id: number) => void }) {
+/** The Series tab's overview: folders (each with its series) and the series at the top level. `board` opens one
+ *  (a series' id, or minus a folder's id); `open` shows its photos in order in the Library. */
+function SeriesTab({ open, board }: { open: (key: number) => void; board: (key: number) => void }) {
   const s = useStore()
+  const ops = useSeriesOps()
+  const tree = buildTree(s.series, s.seriesFolders)
+  const card = (key: number, name: string, sub: string, covers: { id: number; v: number }[], folder: boolean) => (
+    <div key={key} className="card">
+      <button style={{ border: 0, background: 'none', padding: 0, textAlign: 'left', color: 'inherit' }} className="col" onClick={() => board(key)}>
+        <div className="row">{folder && <span style={{ color: 'var(--accent)', display: 'inline-flex' }}><FolderIcon size={18} /></span>}<b className="grow ellipsis">{name}</b><span className="muted">{sub}</span></div>
+        <div className="row" style={{ gap: 3, overflow: 'hidden' }}>
+          {covers.map(c => <img key={c.id} src={coverUrl(c)} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 4 }} />)}
+        </div>
+      </button>
+      <div className="row" style={{ gap: 8 }}>
+        <button className="btn primary big grow" onClick={() => board(key)}>{folder ? 'Open' : 'Board'}</button>
+        <button className="btn big grow" onClick={() => open(key)}>Photos in order</button>
+      </div>
+    </div>
+  )
   return (
     <div className="scroll">
       <div className="col" style={{ padding: '0 14px', gap: 12 }}>
-        {s.series.map(x => (
-          <div key={x.id} className="card">
-            <button style={{ border: 0, background: 'none', padding: 0, textAlign: 'left', color: 'inherit' }} className="col" onClick={() => board(x.id)}>
-              <div className="row"><b className="grow">{x.name}</b><span className="muted">{x.count}</span></div>
-              <div className="row" style={{ gap: 3, overflow: 'hidden' }}>
-                {x.covers.map(c => <img key={c.id} src={coverUrl(c)} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 4 }} />)}
-              </div>
-            </button>
-            <div className="row" style={{ gap: 8 }}>
-              <button className="btn primary big grow" onClick={() => board(x.id)}>Board</button>
-              <button className="btn big grow" onClick={() => open(x.id)}>Photos in order</button>
-            </div>
-          </div>
-        ))}
-        {!s.series.length && <span className="muted">No series yet. Select photos and use “Add to series”.</span>}
-        <span className="small muted">On the board: drag empty space to move around, pinch to zoom, tap a photo to select it and drag it to move it. What happens on a double-tap and more are in Settings (⚙ at the top).</span>
+        {tree.folders.map(({ folder: f, series }) => card(-f.id, f.name, `${f.series_count} series · ${f.count}`, series.flatMap(x => x.covers.slice(0, 2)).slice(0, 6), true))}
+        {tree.top.map(x => card(x.id, x.name, String(x.count), x.covers, false))}
+        {!s.series.length && !s.seriesFolders.length && <span className="muted">No series yet. Select photos and use “Add to series”.</span>}
+        <button className="btn dashed big" onClick={() => ops.newFolder()}>+ New folder</button>
+        <span className="small muted">A folder holds several series. In a folder or a series, “Strip” shows the photos in order: press and hold one to move it. On the board: drag empty space to move around, pinch to zoom, tap a photo to select it and drag it to move it. What happens on a double-tap and more are in Settings (⚙ at the top).</span>
       </div>
+      {ops.node}
     </div>
   )
 }
@@ -148,6 +159,7 @@ export function MobileApp() {
   const [settings, setSettings] = useState(false)
   const [tabsOpen, setTabsOpen] = useState(false)
   const [newSeries, setNewSeries] = useState(false)
+  const [tree, setTree] = useState(false)  // the series tree, opened from the title of an open folder or series
   const [cameFrom, setCameFrom] = useState<'folders' | 'series' | null>(null)  // a folder or series opened from its overview
   useEffect(() => { if (photo != null && s.sel.length === 1 && s.sel[0] !== photo) setPhoto(s.sel[0]) }, [s.sel])
   useEffect(() => { if (photo != null) photoShown(s.activeTab, photo) }, [photo])  // the grid shows it when you go back
@@ -161,6 +173,8 @@ export function MobileApp() {
   // the phone's Back steps out of what is open, one thing at a time
   useBackLayer(photo != null, () => setPhoto(null))
   useBackLayer(board != null, () => { setBoard(null); s.setView('grid') })
+  // another folder or series was opened from inside (the tree, a lane's menu), or the open one was deleted
+  useEffect(() => { if (board != null && s.boardSeries !== board) { setBoard(s.boardSeries); if (s.boardSeries == null) s.setView('grid') } }, [s.boardSeries])
   useBackLayer(cameFrom != null && tab === 'lib', () => goTab(cameFrom!))
   // a deep link: ?photo=<id> opens the photo's page, ?series=<id> the series' board
   useEffect(() => {
@@ -178,13 +192,19 @@ export function MobileApp() {
   useEffect(() => { if (s.revealId != null) { setTab('lib'); setPhoto(null) } }, [s.revealId])
   const openPhoto = (p: Photo) => { s.setSel([p.id]); setPhoto(p.id) }
   const goTab = (t: Tab) => { setTab(t); setPhoto(null); setBoard(null); setCameFrom(null); if (t === 'lib') s.setView('grid'); if (t === 'folders') s.setView('folders'); if (t === 'pc' && !s.isLocal) s.setView('work') }
-  const title = board != null ? (s.series.find(x => x.id === board)?.name || 'Board') : photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : tab === 'series' ? 'Series' : 'Devices'
-  const fcount = [s.filters.folder, (s.filters.folders || []).length, s.filters.month, s.filters.tag, s.filters.series, s.filters.edited, (s.filters.lenses || []).length, (s.filters.cameras || []).length, (s.filters.labels || []).length, (s.filters.ratings || []).length].filter(Boolean).length
+  const title = board != null ? (targetName(targetOf(board), s.series, s.seriesFolders) || 'Series') : photo != null ? 'Photo' : tab === 'lib' ? 'Library' : tab === 'folders' ? 'Folders' : tab === 'series' ? 'Series' : 'Devices'
+  const fcount = [s.filters.folder, (s.filters.folders || []).length, s.filters.month, s.filters.tag, s.filters.series, s.filters.series_folder, s.filters.edited, (s.filters.lenses || []).length, (s.filters.cameras || []).length, (s.filters.labels || []).length, (s.filters.ratings || []).length].filter(Boolean).length
   return (
     <div className="app">
       <div className="mhead">
-        {(photo != null || board != null) && <button className="btn ghost big" onClick={() => { if (photo != null) setPhoto(null); else { setBoard(null); s.setView('grid') } }} aria-label="Back">‹</button>}
-        <span className="display">{title}</span>
+        {(photo != null || board != null) && <button className="btn ghost big" onClick={() => { if (photo != null) setPhoto(null); else { setBoard(null); s.setView('grid') } }} aria-label={board != null && photo == null ? 'Back to all series' : 'Back'}>‹</button>}
+        {board != null && photo == null
+          ? <button className="mtitle" aria-label={`${title}. Open the series tree to switch folder or series`} onClick={() => setTree(true)}>
+              {board < 0 && <span style={{ color: 'var(--accent)', display: 'inline-flex', flex: '0 0 auto' }}><FolderIcon size={20} /></span>}
+              <span className="display">{title}</span>
+              <span className="mtitle-chev"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg></span>
+            </button>
+          : <span className="display">{title}</span>}
         <button className="btn big" style={{ minWidth: 44, fontWeight: 600 }} aria-label={`Tabs: ${s.tabs.length} open`} title="Tabs" onClick={() => setTabsOpen(true)}>{s.tabs.length}</button>
         {photo == null && !(tab === 'lib' && !board) && <button className="btn ghost big" aria-label="Settings" onClick={() => setSettings(true)}>⚙</button>}
         {tab === 'series' && photo == null && board == null && <button className="btn big" onClick={() => setNewSeries(true)}>New series</button>}
@@ -203,16 +223,17 @@ export function MobileApp() {
             {s.filters.folder && <button className="chip on" onClick={() => s.patchFilters({ folder: null })}>{s.filters.folder.split('/').pop()} ×</button>}
             {(s.filters.folders || []).length > 0 && <button className="chip on" onClick={() => s.patchFilters({ folders: [] })}>{(s.filters.folders || []).length} folders ×</button>}
             {s.filters.series && <button className="chip on" onClick={() => s.patchFilters({ series: null })}>{s.series.find(x => x.id === s.filters.series)?.name} ×</button>}
+            {s.filters.series_folder && <button className="chip on" onClick={() => s.patchFilters({ series_folder: null })}>{s.seriesFolders.find(x => x.id === s.filters.series_folder)?.name} ×</button>}
             {s.filters.tag && <button className="chip on" onClick={() => s.patchFilters({ tag: null })}>{s.filters.tag} ×</button>}
           </div>
         </div>
       )}
       <div key={s.activeTab} style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {photo != null ? <PhotoPage id={photo} onBack={() => setPhoto(null)} />
-          : board != null ? <div className="mboard"><BoardView /></div>
+          : board != null ? <div className="mboard"><SeriesView /></div>
           : tab === 'lib' ? <MobileGrid selecting={selecting} onOpen={openPhoto} />
           : tab === 'folders' ? <FoldersViewMobile onOpen={() => { goTab('lib'); setCameFrom('folders') }} />
-          : tab === 'series' ? <SeriesTab board={id => { s.setBoardSeries(id); s.setView('board'); setBoard(id) }} open={id => { s.patchFilters({ series: id, folder: null, tag: null, month: null }); s.setSort([{ f: 'custom', d: 'asc' }]); s.setGroup(false); goTab('lib'); setCameFrom('series') }} />
+          : tab === 'series' ? <SeriesTab board={id => { s.setBoardSeries(id); s.setView('board'); setBoard(id) }} open={id => { s.patchFilters({ series: id > 0 ? id : null, series_folder: id < 0 ? -id : null, folder: null, tag: null, month: null }); s.setSort([{ f: 'custom', d: 'asc' }]); s.setGroup(false); goTab('lib'); setCameFrom('series') }} />
           : <WorkView />}
       </div>
       {selecting && s.sel.length > 0 && photo == null && (
@@ -231,6 +252,7 @@ export function MobileApp() {
       </nav>
       {settings && <SettingsDialog onClose={() => setSettings(false)} />}
       {tabsOpen && <TabsSheet onClose={() => setTabsOpen(false)} />}
+      {tree && <Sheet title="Series" onClose={() => setTree(false)}><SeriesTree phone current={targetOf(board)} onOpened={() => setTree(false)} /></Sheet>}
       {newSeries && <NewSeriesSheet onClose={() => setNewSeries(false)} onCreate={async name => {
         try {
           const r = await api.seriesCreate(name, [])
@@ -260,7 +282,7 @@ function TabsSheet({ onClose }: { onClose: () => void }) {
     <Sheet title={`${tabs.length} tab${tabs.length > 1 ? 's' : ''}`} onClose={onClose}>
       <div className="col" style={{ gap: 6 }} role="tablist" aria-label="Tabs">
         {tabs.map(t => {
-          const title = tabTitle(t, s.series)
+          const title = tabTitle(t, s.series, s.seriesFolders)
           const on = t.id === s.activeTab
           const note = phoneSpot(t.st.view, t.st.boardSeries).note
           return (
