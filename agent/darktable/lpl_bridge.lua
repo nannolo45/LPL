@@ -127,13 +127,22 @@ local function reload_sidecar(img)
 end
 
 local function show(img)
+  -- darktable enters the darkroom on the selected (or hovered) image and refuses, without an error, when there
+  -- is none: with the mouse somewhere else nothing happened. So select the photo first.
   local ok, err = pcall(function()
+    pcall(function() dt.gui.selection({ img }) end)
     if dt.gui.current_view() ~= dt.gui.views.darkroom then
       dt.gui.current_view(dt.gui.views.darkroom)
     end
     dt.gui.views.darkroom.display_image(img)
   end)
   if not ok then status("display failed: " .. tostring(err)) end
+  local okv, view = pcall(function() return dt.gui.current_view() end)
+  if okv and view ~= dt.gui.views.darkroom then
+    status("darktable stayed in " .. tostring(view and view.id or "another view") .. ": it did not enter the darkroom")
+    return false
+  end
+  return ok
 end
 
 local function forget(path)
@@ -233,8 +242,7 @@ local function carry_out()
   end
   if first then
     status("opening in darkroom: " .. short(first.filename))
-    show(first)
-    status("opened " .. short(first.filename))
+    if show(first) then status("opened " .. short(first.filename)) end
   end
 end
 
