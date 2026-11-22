@@ -59,10 +59,25 @@ endpoints answer as before with extra fields. On a folder the phone's "Edit on t
 View id stays `board` (label "Series"); a tab's `boardSeries` is a series id, or minus a folder id. New files:
 `SeriesView.tsx`, `SeriesTree.tsx`, `Strip.tsx`, `Ask.tsx`, `SeriesLine.tsx`, `seriesnav.ts`, `seriesops.tsx`.
 
+## Leftovers done (branch `series-leftovers`)
+- Lanes of a single series: dragging a frame lane by its header (long press on the phone) changes the reading order.
+  `POST /api/series/{id}/strip/lanes {lane, before}` (linked series only; an unlinked series has one lane). The frame
+  moves on the board to where the frame it goes in front of lies, with its photos, notes and free arrow ends; that
+  frame and everything after it (and what is loose below) is pushed down by the frame's height, and the order is read
+  back. "Outside the frames" stays last and cannot be dragged.
+- Folders and top-level series share one manual order (`series_folders.pos` and top-level `series.pos` are one
+  numbering): drag a folder or a series in the tree (a line shows where it lands), or "Move up / Move down" in the
+  "⋯" menu. `POST /api/series/top-order {entries}`, `before_folder` on series move. `db.migrate` renumbers an older
+  library once where the two numberings collide (folders first, as before). New folders and series come last.
+- "Take the order from the board" is one undo (and redo) step: the server keeps a snapshot before the relink
+  (membership, order, frames, places, notes, the link, series made from extra frames) and
+  `POST …/link/restore {token}` puts it back, tags included. The snapshots are in memory (30, newest last): after a
+  server restart the undo answers 410.
+- Re-flow moves notes: when a frame grows, notes and free arrow ends inside a pushed frame, or loose below the old
+  bottom of the frame over its width, move down by the same amount; those inside the growing frame stay.
+
 ## Known limits
 - One level of folders; series names unique library-wide.
-- Lanes of a single series (its frames) can not be reordered by their header; folders have no manual order.
-- Re-flow and frame growth do not move notes or arrows out of the way.
-- Undo on the board covers strip edits, "Arrange the board from the strip", and deleting a series' frame (it
-  comes back as a new series). "Take the order from the board" is not undoable; the dialog does not claim it.
+- Undo on the board covers strip edits, "Arrange the board from the strip", "Take the order from the board", and
+  deleting a series' frame (it comes back as a new series).
 - Deleting a folder drops its shared board (layout, notes); series, order and photos stay.

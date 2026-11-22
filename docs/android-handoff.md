@@ -65,6 +65,8 @@ Which the app receives as `lpldt://edit?server=http%3A%2F%2F192.0.2.10%3A8080&id
   photo's folder with the photo selected and scrolled to, so the inspector shows it (the existing
   "Show in folder" behaviour, `reveal`).
 - `<origin>/?series=<id>`: phone: the series' board (Series tab). Desktop: the Board view on that series.
+  (Series can now sit in folders and be shown as a Strip; the link still opens the series. Details in
+  `docs/series-folders-strip.md`, which also says what the phone's "Edit on this phone" link carries for a folder.)
 - The parameters are read once at start-up (`takeDeepLink()` in `devices.ts`, also when the login page
   comes first) and removed from the address bar with `history.replaceState` at once, so a reload does not
   repeat them. Other query parameters stay.
@@ -170,7 +172,7 @@ Left as they are, on purpose:
 - Local mode's "this PC" texts (Send to NAS, folders): that really is the PC LPL runs on.
 
 Every action that can target one of several devices either sits in that device's card on the Devices
-(working set) screen, with the device's name in its label or title, or goes through the picker.
+(working set) screen (the Devices tab; see `docs/devices-stop-estimate.md`), with the device's name in its label or title, or goes through the picker.
 
 ## 7. What the Android app must know
 

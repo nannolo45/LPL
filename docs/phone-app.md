@@ -74,6 +74,9 @@ If the button never appears in Chrome over https, that would be the first thing 
   with "List / Timeline / Send to NAS: shown as the grid on the phone" in the tab list. The stored tab keeps
   its view. Before this change, opening the phone layout turned such a tab's view into the grid; it no
   longer does.
+- Series on the phone: the Series list is a tree of folders and series (folders can be put in any order from the
+  "⋯" menu: Move up / Move down); a series opens as Board or Strip, and a long press on a lane header moves the
+  lane. See `docs/series-folders-strip.md`. The old "Working set" page is the Devices tab (`docs/devices-stop-estimate.md`).
 - The bottom bar still changes what the current tab shows: Library sets the tab to the grid, Folders to
   folders (as before), Devices now sets it to the Working set view (new, so the tab comes back to Devices).
   The Series list has no desktop view; a tab left on the Series list comes back as what it showed before.
