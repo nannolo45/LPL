@@ -18,6 +18,9 @@ export const writeCached = (r: FoldersResult) => {
 
 const parentOf = (p: string) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : p ? '' : null)
 
+// how far each folder's tiles were scrolled, per tab: going back up, or coming back to Folders, resumes there
+const folderScroll = new Map<string, number>()
+
 export function FoldersView() {
   const s = useStore()
   const [all, setAll] = useState<Folder[]>(() => readCached()?.folders || [])
@@ -32,6 +35,23 @@ export function FoldersView() {
   const lastPick = useRef<string | null>(null)
   const fkey = 'lpl.folder.' + s.activeTab  // each tab remembers where it is in the folders
   const [cur, setCur] = useState<string>(() => localStorage.getItem(fkey) ?? localStorage.getItem('lpl.folder') ?? '')
+  const scroller = useRef<HTMLDivElement>(null)
+  const tiles = useRef<HTMLDivElement>(null)
+  const from = useRef(cur)
+  // measured from the first tile, not from the top of the page: the bar for picked folders above the tiles comes and goes
+  const scrolled = () => (scroller.current && tiles.current ? scroller.current.getBoundingClientRect().top - tiles.current.getBoundingClientRect().top : 0)
+  // The list of another folder is put in the same scrolling box, which would stay where it was (or as far down as
+  // the new list goes), and the box itself is new after another view or tab. Into a subfolder: start at its top.
+  // Back up, or back in this view: where you were.
+  useLayoutEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const down = cur !== from.current && cur.startsWith(from.current ? from.current + '/' : '')
+    if (down) folderScroll.delete(fkey + '\n' + cur)
+    const was = folderScroll.get(fkey + '\n' + cur)
+    el.scrollTop = was == null ? 0 : el.scrollTop + was - scrolled()
+    from.current = cur
+  }, [cur])
   const [mode, setMode] = useState<string>(() => localStorage.getItem('lpl.folderSort') || 'custom')
   useBackLayer(s.isMobile && cur !== '', () => setCur(cur.split('/').slice(0, -1).join('/')), cur)  // phone: Back goes up a folder
   const [drag, setDrag] = useState<string | null>(null)
@@ -125,7 +145,7 @@ export function FoldersView() {
   }
 
   return (
-    <div className="scroll">
+    <div className="scroll" ref={scroller} onScroll={e => { if (e.target === e.currentTarget) folderScroll.set(fkey + '\n' + cur, scrolled()) }}>
       <div className="row wrap" style={{ marginBottom: 16, padding: s.isMobile ? '0 14px' : 0 }}>
         <button className="btn ghost" onClick={() => setCur('')}>{s.isLocal ? 'This PC' : 'NAS'}</button>
         {crumbs.map((c, i) => (
@@ -165,7 +185,7 @@ export function FoldersView() {
           <button className="btn primary" onClick={openPicked}>Show {picked.length === 1 ? 'its' : 'their'} photos</button>
         </div>
       )}
-      <div className="ftiles" onClick={e => { if (e.target === e.currentTarget) setPicked([]) }}>
+      <div className="ftiles" ref={tiles} onClick={e => { if (e.target === e.currentTarget) setPicked([]) }}>
         {children.map(f => {
           const hasKids = all.some(x => parentOf(x.path) === f.path && x.path !== f.path)
           return (
