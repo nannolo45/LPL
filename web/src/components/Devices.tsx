@@ -151,7 +151,7 @@ function SelectionBar({ a, name, act, sel, rows, clear, phone }: { a: Agent; nam
       {b.save.length > 0 && <button className={'btn' + big} title={`Copy the edits (XMP) of ${n(b.save.length)} from ${name} back to the NAS now. The photos stay on ${name}.`} onClick={() => act.job('sync', a.id, b.save)}>Save edits to NAS ({b.save.length})</button>}
       {b.show.length > 0 && <button className={'btn' + big} title="Find them in LightPhotoLibrary: only these photos" onClick={() => s.showPhotos(b.show)}>Show in library ({b.show.length})</button>}
       {b.done.length > 0 && <button className={'btn danger' + big} title={`Done with ${b.done.length === 1 ? 'it' : 'them'}: save the edits to the NAS, close in darktable and delete the working cop${b.done.length === 1 ? 'y' : 'ies'} on ${name}. The originals on the NAS are never touched.`}
-        onClick={() => act.job('release', a.id, b.done)}>Done · remove {b.done.length} from {name}</button>}
+        onClick={() => (b.done.length < 2 || window.confirm(`Save the edits of ${b.done.length} photos to the NAS and delete their working copies on ${name}? The originals on the NAS are never touched.`)) && act.job('release', a.id, b.done)}>Done · remove {b.done.length} from {name}</button>}
       <button className={'btn ghost' + big} title="Unselect everything (Esc)" onClick={clear}>Clear</button>
     </div>
   )
