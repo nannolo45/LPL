@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { blurIsFocusHandBack, GRIP_HOLD_MS, gripDragStarts, isNameTapRename } from '../stripTouch'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, GroupInfo, Lane, Photo, SeriesFolder, StripData, Target, thumbUrl } from '../api'
 import { useStore } from '../store'
@@ -28,13 +29,24 @@ export interface ExtDrag { begin: (ids: number[], label: string, from: HTMLEleme
 
 const Pencil = () => <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z" /><path d="M13.5 6.5l4 4" /></svg>
 
-/** The name of a lane or a group heading, renamed in place: double-click (or the pencil, or F2), Enter keeps it, Esc does not. */
+/** The name of a lane or a group heading, renamed in place: double-click (or the pencil, F2, or on a phone a tap on the
+ *  name) opens it; Enter / the keyboard's Done keeps it, Esc does not. A blur in its first moments (the menu that opened it
+ *  closing and handing focus back) does not count: it takes the focus again. */
 function NameEdit({ value, label, onDone }: { value: string; label: string; onDone: (name: string | null) => void }) {
   const done = useRef(false)
+  const born = useRef(Date.now())
   const finish = (v: string | null) => { if (!done.current) { done.current = true; onDone(v) } }
-  return <input className="lane-edit display" defaultValue={value} aria-label={label} autoFocus onFocus={e => e.currentTarget.select()}
-    onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') finish(e.currentTarget.value); else if (e.key === 'Escape') finish(null) }}
-    onBlur={e => finish(e.currentTarget.value)} onPointerDown={e => e.stopPropagation()} />
+  return <form className="lane-form" onSubmit={e => { e.preventDefault(); finish((e.currentTarget.elements[0] as HTMLInputElement).value) }}>
+    <input className="lane-edit display" defaultValue={value} aria-label={label} autoFocus enterKeyHint="done" autoComplete="off" autoCapitalize="sentences" spellCheck={false}
+      onFocus={e => e.currentTarget.select()}
+      onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape') finish(null) }}
+      onBlur={e => {
+        const el = e.currentTarget
+        if (!done.current && blurIsFocusHandBack(born.current, Date.now())) { window.setTimeout(() => { if (!done.current && el.isConnected) el.focus() }, 0); return }
+        finish(el.value)
+      }}
+      onPointerDown={e => e.stopPropagation()} />
+  </form>
 }
 
 type LaneProps = {
@@ -58,8 +70,8 @@ const LaneRow = memo(function LaneRow({ lane, shown, selKey, folder, linked, can
         <span className="lane-chip" style={c ? { background: c } : undefined} />
         {editing
           ? <NameEdit value={lane.label} label={`New name for ${lane.label}`} onDone={v => act.rename(lane.key, v)} />
-          : <span className="lane-name display" onDoubleClick={canRename ? () => act.edit(lane.key) : undefined} title={canRename ? 'Double-click to rename' : undefined}>{lane.label}</span>}
-        {canRename && !editing && <button type="button" className="lane-ren" aria-label={`Rename ${lane.label}`} title="Rename (or double-click the name, or F2)" onClick={() => act.edit(lane.key)}><Pencil /></button>}
+          : <span className={'lane-name display' + (isNameTapRename(phone, canRename) ? ' tap' : '')} onDoubleClick={canRename ? () => act.edit(lane.key) : undefined} onClick={isNameTapRename(phone, canRename) ? () => act.edit(lane.key) : undefined} title={canRename ? 'Double-click to rename' : undefined}>{lane.label}</span>}
+        {canRename && !editing && <button type="button" className="lane-ren" aria-label={`Rename ${lane.label}`} title={phone ? `Rename ${lane.label}` : 'Rename (or double-click the name, or F2)'} onClick={() => act.edit(lane.key)}><Pencil /></button>}
         <span className="lane-n">{phone ? n : `${n} photo${n === 1 ? '' : 's'}`}{lane.maybe ? ' · not in series' : ''}</span>
         <div className="grow" />
         {!phone && linked && lane.frame && <span className="lane-frame"><LinkIcon />frame on the board</span>}
@@ -531,23 +543,30 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
     return grip ? { kind: 'lane', id: grip.dataset.grip! } : null  // (a group heading's grip names its folder: "f<id>")
   }
   const onPointerDown = (e: React.PointerEvent) => {
-    if (e.pointerType === 'touch' || e.button !== 0) return
+    const touch = e.pointerType === 'touch'
+    if (e.button !== 0) return
     const t = targetOfEvent(e.target)
+    if (touch && t?.kind !== 'lane') return  // a finger on a photo: the long-press code below
     if (!t) { if (!(e.target as HTMLElement).closest('button, input, .smenu, .strip-tray')) s.setSel(s.sel.filter(id => !byId.has(id))); return }
     e.preventDefault()
     press.current = { ...t, x: e.clientX, y: e.clientY, e: { ctrlKey: e.ctrlKey, metaKey: e.metaKey, shiftKey: e.shiftKey } }
+    // a finger on a lane's handle (touch-action: none, so the page never takes the gesture for a scroll): press and drag, or hold a moment
+    let hold = 0
+    const begin = (x: number, y: number) => { window.clearTimeout(hold); if (press.current && !drag.current) startDrag(press.current.kind, press.current.id, x, y, touch) }
+    if (touch) { try { (e.target as Element).setPointerCapture?.(e.pointerId) } catch { /* ignore */ } hold = window.setTimeout(() => begin(e.clientX, e.clientY), GRIP_HOLD_MS) }
     const move = (ev: PointerEvent) => {
       const p = press.current
       if (!p) return
       if (!drag.current) {
-        if (Math.hypot(ev.clientX - p.x, ev.clientY - p.y) < 5) return
-        startDrag(p.kind, p.id, ev.clientX, ev.clientY, false)
+        if (!gripDragStarts(ev.clientX - p.x, ev.clientY - p.y, 0, touch)) return
+        begin(ev.clientX, ev.clientY)
         if (!drag.current) return
       }
       drag.current.x = ev.clientX; drag.current.y = ev.clientY
       tick()
     }
     const up = (ev: PointerEvent) => {
+      window.clearTimeout(hold)
       window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up)
       const p = press.current
       press.current = null
@@ -572,7 +591,7 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
     const start = (e: TouchEvent) => {
       if (e.touches.length !== 1) { window.clearTimeout(timer); t0 = null; if (drag.current) endDrag(false); return }
       const t = targetOfEvent(e.target)
-      if (!t) return
+      if (!t || t.kind === 'lane') return  // (a lane's handle is the pointer code's: onPointerDown)
       const p = e.touches[0]
       t0 = { ...t, x: p.clientX, y: p.clientY, moved: false }
       window.clearTimeout(timer)
@@ -688,7 +707,8 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
               <span className="sg-icon" style={g.color ? { color: g.color } : undefined}><FolderIcon size={16} /></span>
               {editKey === 'g' + g.id
                 ? <NameEdit value={g.name} label={`New name for the folder ${g.name}`} onDone={v => rename('g' + g.id, v)} />
-                : <span className="sg-name display" onDoubleClick={() => setEditKey('g' + g.id)} title="Double-click to rename">{g.name}</span>}
+                : <><span className={'sg-name display' + (phone ? ' tap' : '')} onDoubleClick={() => setEditKey('g' + g.id)} onClick={phone ? () => setEditKey('g' + g.id) : undefined} title="Double-click to rename">{g.name}</span>
+                  <button type="button" className="lane-ren" aria-label={`Rename the folder ${g.name}`} title={phone ? `Rename ${g.name}` : 'Rename (or double-click the name)'} onClick={() => setEditKey('g' + g.id)}><Pencil /></button></>}
               <span className="lane-n">{phone ? `${g.series_count} · ${g.count}` : `${g.series_count} series · ${g.count} photo${g.count === 1 ? '' : 's'}`}</span>
               <div className="grow" />
               <MenuButton label={`More for the folder ${g.name}: open, rename, colour, new series, delete`} items={groupMenu(g)} className="smore lane-more" />

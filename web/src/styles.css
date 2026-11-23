@@ -552,8 +552,9 @@ a { color: var(--accent); }
 .strip.phone .strip-hint { position: sticky; bottom: 0; z-index: 4; margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #1b1b1e; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.35; color: var(--soft); }
 .strip.phone .strip-hint svg { flex: 0 0 auto; color: var(--accent); }
 .strip.phone .strip-new { margin-bottom: 12px; }
-.strip.phone .strip-sel { bottom: 8px; margin: 10px 8px 0; align-self: stretch; }
-.strip.phone .strip-sel .btn { min-height: 44px; flex-shrink: 0; }
+.strip.phone .strip-sel { bottom: 8px; margin: 10px 8px 0; align-self: stretch; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 8px; white-space: normal; overflow: visible; box-sizing: border-box; }
+.strip.phone .strip-sel > .small { grid-column: 1 / -1; }
+.strip.phone .strip-sel .btn { min-height: 44px; min-width: 0; padding-left: 8px; padding-right: 8px; white-space: normal; line-height: 1.2; text-align: center; justify-content: center; }
 .stree.phone .st-main { min-height: 44px; font-size: 15px; }
 .stree.phone .st-chev { width: 44px; height: 44px; }
 .stree.phone .st-more { position: static; transform: none; background: transparent; visibility: visible; width: 44px; height: 44px; }
@@ -699,7 +700,8 @@ td.devcheckcell, th.devcheckcell { width: 34px; padding-right: 0; }
 .at-badge { font-size: 9px; padding: 0 4px; margin-left: 4px; border-radius: 3px; background: var(--accent); color: #1a1a1a; font-weight: 600; }
 
 /* ---- Strip: renaming in place, the photo panel (desktop), the tray (phone) */
-.lane-edit { min-width: 120px; width: min(320px, 50%); padding: 2px 7px; border: 1px solid var(--accent); border-radius: 5px; background: var(--bg); color: #fff; font-size: 14px; font-weight: 500; outline: none; }
+.lane-form { display: contents; }
+.lane-edit { -webkit-user-select: text; user-select: text; touch-action: manipulation; min-width: 120px; width: min(320px, 50%); padding: 2px 7px; border: 1px solid var(--accent); border-radius: 5px; background: var(--bg); color: #fff; font-size: 14px; font-weight: 500; outline: none; }
 .lane-ren { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); opacity: 0; }
 .lane:hover .lane-ren, .lane-ren:focus-visible, .strip.phone .lane-ren { opacity: 1; }
 .lane-ren:hover { background: rgba(255,255,255,.06); color: var(--text); }
@@ -737,3 +739,9 @@ td.devcheckcell, th.devcheckcell { width: 34px; padding-right: 0; }
 .vth .vm { display: flex; align-items: center; gap: 3px; font-size: 10px; color: var(--muted); }
 .vth .vm i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 @media (pointer: coarse) { .vth { width: 104px; min-height: 44px; } }
+
+/* Strip on a phone: renaming by touch (a tap on the name, a pencil of 44 px) and the name editor at 16 px (no zoom on focus) */
+.strip.phone .lane-ren { width: 44px; height: 44px; }
+.strip.phone .lane-name.tap, .strip.phone .sg-name.tap { cursor: text; padding: 10px 2px; }
+.strip.phone .lane-edit { font-size: 16px; min-height: 40px; width: auto; flex: 1 1 0; min-width: 0; }
+.strip-group .lane-ren { opacity: 1; }
