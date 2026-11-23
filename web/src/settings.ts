@@ -31,13 +31,15 @@ export interface Settings {
   devicesAutoOpen: boolean
   /** the top bar's devices indicator shows the time left while photos are sent */
   devicesEtaInBar: boolean
+  /** R18: where received exports are stored: relative to the library, or a full path; empty = the "exports" folder in the library */
+  exportsFolder: string
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   boardPan: 'both', boardWheel: 'scroll', boardTouch: 'pan', boardPhotoDouble: 'darktable',
   boardNumbers: true, boardSnap: false, boardNoteColor: '#f5d76e', boardFrameColor: '', boardZoom: 100, boardZoomPhone: 50,
   boardStrip: true, boardStripSort: 'reading', boardStripDesc: false,
-  devicesAutoOpen: true, devicesEtaInBar: true,
+  devicesAutoOpen: true, devicesEtaInBar: true, exportsFolder: '',
 }
 
 let current: Settings = (() => {

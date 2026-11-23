@@ -27,6 +27,21 @@ function Switch({ k, label, help }: { k: 'devicesAutoOpen' | 'devicesEtaInBar'; 
   )
 }
 
+/** R18: where exports from the darktable app are stored on the NAS. */
+function ExportsFolder() {
+  const st: Settings = useSettings()
+  const [v, setV] = useState(st.exportsFolder || '')
+  return (
+    <div className="setrow">
+      <div className="col" style={{ gap: 2, minWidth: 0, flex: '1 1 240px' }}>
+        <span className="small">Exports folder</span>
+        <span className="tiny muted">Where exports from the darktable app are stored, in the photo's folder path. Empty: the “exports” folder in the library. Not scanned as photos.</span>
+      </div>
+      <input value={v} placeholder="exports" aria-label="Exports folder" onChange={e => setV(e.target.value)} onBlur={() => v !== (st.exportsFolder || '') && setSetting('exportsFolder', v.trim())} />
+    </div>
+  )
+}
+
 function DeviceDetails({ a, now }: { a: Agent; now: number }) {
   const s = useStore()
   const [open, setOpen] = useState(false)
@@ -72,6 +87,7 @@ export function DevicesSettings() {
           help="Off: they are copied and wait on the device until you open one. Devices that do not know this setting yet (older agents, the phone app) open them as before." />
         <Switch k="devicesEtaInBar" label="Show the time-left estimate in the top bar"
           help="Off: the top bar shows only how many photos have arrived. The Devices page always shows the estimate." />
+        <ExportsFolder />
         <span className="caps" style={{ marginTop: 10 }}>Devices</span>
         {s.agents.length ? s.agents.map(a => <DeviceDetails key={a.id} a={a} now={now} />)
           : <span className="small muted" style={{ padding: '6px 0' }}>No device has connected yet.</span>}

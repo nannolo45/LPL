@@ -22,6 +22,8 @@ export interface Photo {
   title: string | null
   description: string | null
   edited: number
+  /** R18: how many exports the darktable app sent for this photo */
+  exports?: number
   preview_ver: number
   preview_state: number
   meta_mtime: number
@@ -51,6 +53,9 @@ export interface Photo {
 }
 
 /** One version of a photo (GET /api/photos/{id}/versions): its own rating, labels and tags, stored in its XMP. */
+/** One export the app sent (GET /api/photos/{id}/exports). */
+export interface ExportInfo { id: number; version: number; name: string; path: string; size: number; format: string; created: number; agent: string | null; device: string | null; has_file: boolean }
+
 export interface VersionInfo { n: number; name: string; mtime: number | null; size: number | null; rating: number; labels: number[]; tags: string[]
   edited: number; cover: boolean; has_file: boolean; preview_ver: number }
 
@@ -87,6 +92,8 @@ export interface Filters {
   lens?: string
   camera?: string
   edited?: '' | 'yes' | 'no'
+  /** R18: only photos that have exports */
+  exports?: '' | 'yes'
   folder?: string | null
   subfolders?: boolean
   month?: string | null
@@ -217,6 +224,8 @@ export const api = {
   autotagReview: (kind: string, offset = 0, limit = 120) => call<AutotagReview>('GET', `/api/autotag/review?kind=${kind}&offset=${offset}&limit=${limit}`),
   autotagCorrect: (ids: number[], verdict: 'bnw' | 'toned' | 'colour' | 'clear', apply = true) => call<{ items: Photo[]; added?: number; removed?: number }>('POST', '/api/autotag/correct', { ids, verdict, apply }),
   autotagApply: (enable: boolean) => call<{ added: number; removed: number; photos: number; counts: AutotagCounts }>('POST', '/api/autotag/apply', { enable }),
+  exportsOf: (id: number) => call<{ id: number; exports: ExportInfo[] }>('GET', `/api/photos/${id}/exports`),
+  deleteExport: (id: number, eid: number) => call<{ ok: boolean; exports: ExportInfo[] }>('DELETE', `/api/photos/${id}/exports/${eid}`),
   versions: (id: number) => call<{ id: number; versions: VersionInfo[]; cover: number; next: number }>('GET', `/api/photos/${id}/versions`),
   setCover: (id: number, version: number) => call<{ cover: number; versions: VersionInfo[] }>('POST', `/api/photos/${id}/cover?version=${version}`),
   deleteVersion: (id: number, version: number) => call<{ ok: boolean; cover: number; versions: VersionInfo[] }>('DELETE', `/api/photos/${id}/xmp?version=${version}`),
@@ -289,5 +298,6 @@ export const thumbUrl = (p: { id: number; preview_ver?: number; pin?: number | n
   // an entry that shows another version than the photo's cover (a pinned version in a series or on a board)
   p.show != null && p.show !== (p.cover ?? 0) ? `/api/preview/${p.id}?s=${size}&version=${p.show}&v=${p.preview_ver ?? 0}` : `/api/preview/${p.id}?s=${size}&v=${p.preview_ver ?? 0}`
 /** The preview of one version of a photo; ver (its preview_ver) tells the browser when it changed. */
+export const exportUrl = (id: number, eid: number) => `/api/photos/${id}/exports/${eid}/file`
 export const versionUrl = (id: number, n: number, ver = 0, size: 't' | 'l' = 't') => `/api/preview/${id}?s=${size}&version=${n}&v=${ver}`
 export const coverUrl = (c: { id: number; v: number }) => `/api/preview/${c.id}?s=t&v=${c.v}`
