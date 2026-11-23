@@ -179,7 +179,7 @@ export interface AutotagRule { enabled: boolean; tag_bnw: string; tag_toned: str
   folders: string[]; remove_stale: boolean; managed: string[] }
 export interface AutotagSettings { auto: boolean; bnw: AutotagRule }
 export type AutotagVerdict = 'bnw' | 'colour' | 'unsure' | 'none'
-export interface AutotagInfo { rule?: string; verdict: AutotagVerdict | null; toned?: number; source?: string; score?: number | null; detail?: string
+export interface AutotagInfo { rule?: string; enabled?: boolean; verdict: AutotagVerdict | null; toned?: number; source?: string; score?: number | null; detail?: string
   checked?: number | null; override?: { verdict: AutotagVerdict; toned: number } | null; tags?: string[] }
 export interface AutotagStatus { state: 'idle' | 'running' | 'error'; done: number; total: number; apply: boolean; error: string; finished: number; last_apply?: { added: number; removed: number; photos: number } }
 export interface AutotagCounts { bnw: number; toned: number; colour: number; unsure: number; none: number; camera: number; checked: number; corrected: number; photos: number }

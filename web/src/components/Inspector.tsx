@@ -8,7 +8,7 @@ import { photoActivity, serverNow } from '../devices'
 import { LastEdit, ProgressBar, useTick } from './EditRecord'
 import { NewSeriesSheet } from './NewSeries'
 import { SeriesLine } from './SeriesLine'
-import { AutotagLine, useAutoTags } from './Autotag'
+import { AutotagLine, AutotagMany, useAutoTags } from './Autotag'
 import { buildTree } from '../seriesnav'
 import { bumpSeries } from '../seriesops'
 import { ExportsList } from './Exports'
@@ -340,6 +340,7 @@ export function Inspector() {
           <div className="row wrap" style={{ gap: 4 }}>
             {photos.slice(0, 15).map(p => <div key={p.id} style={{ width: 52, height: 35, overflow: 'hidden', borderRadius: 3, background: '#222226' }}><Thumb p={p} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /></div>)}
           </div>
+          <AutotagMany ids={photos.map(p => p.id)} />
         </>
       )}
       {photos.length > 0 && (

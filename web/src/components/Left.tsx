@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { api } from '../api'
+import { SettingsDialog } from './Shortcuts'
 import { useStore } from '../store'
 import { dirText, field, FIELDS, LABELS, PRESETS } from '../fields'
 
@@ -81,6 +83,22 @@ function Section({ id, title, summary, right, defaultOpen = true, children }: {
         {right}
       </div>
       {open && children}
+    </div>
+  )
+}
+
+/** Under the Look filter: says when auto-tagging is off or has not checked every photo yet (so B&W can't match). */
+function LookHint() {
+  const [st, setSt] = useState<{ on: boolean; left: number } | null>(null)
+  const [open, setOpen] = useState(false)
+  const load = () => api.autotag().then(r => setSt({ on: r.settings.bnw.enabled, left: Math.max(0, r.counts.photos - r.counts.checked) })).catch(() => {})
+  useEffect(() => { load() }, [])
+  if (!st || (st.on && !st.left)) return null
+  return (
+    <div className="col" style={{ gap: 4, marginTop: 6 }}>
+      <span className="tiny muted">{st.on ? `${st.left} photos not checked yet.` : 'Auto-tagging is off, so photos are not checked. Photos you mark by hand (photo panel › Look) still count.'}</span>
+      <div><button className="btn tiny" onClick={() => setOpen(true)}>{st.on ? 'Check now…' : 'Turn on…'}</button></div>
+      {open && <SettingsDialog section="autotag" onClose={() => { setOpen(false); load() }} />}
     </div>
   )
 }
@@ -172,6 +190,7 @@ export function FilterPanel() {
             <button key={v} className={'chip' + ((f.look || []).includes(v) ? ' on' : '')} onClick={() => s.patchFilters({ look: toggle(f.look || [], v) })}>{l}</button>
           ))}
         </div>
+        <LookHint />
       </Section>
       <div className="col" style={{ gap: 4 }}>
         <label className="row" style={{ cursor: 'pointer' }}>

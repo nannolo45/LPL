@@ -5,6 +5,7 @@ import { useStore } from '../store'
 import { exifLine, fmtDay, stars } from '../fields'
 import { FilterPanel, SortPanel } from './Left'
 import { HideButton, RatingLabels, SeriesPicker, TagPanel, WhereLine } from './Inspector'
+import { AutotagLine, AutotagMany } from './Autotag'
 import { LastEdit } from './EditRecord'
 import { photoShown, Thumb, useGroups, useReveal, useScrollResume } from './Library'
 import { FoldersView } from './Folders'
@@ -115,6 +116,7 @@ function PhotoPage({ id, onBack }: { id: number; onBack: () => void }) {
         <span className="small muted" style={{ marginTop: -6 }}>Opens on one of your devices (or as soon as it's online). Ratings, labels and tags are saved to the XMP right away.</span>
         <SeriesPicker ids={[p.id]} />
         <TagPanel photos={[vv.view ?? p]} version={vv.mv} />
+        <AutotagLine id={p.id} />
         <HideButton photos={[p]} big />
         <button className="btn big" onClick={onBack}>Back to library</button>
       </div>
@@ -281,6 +283,7 @@ export function MobileApp() {
         <RatingLabels photos={s.selPhotos} big />
         <SeriesPicker ids={s.sel} />
         <TagPanel photos={s.selPhotos} />
+        {s.sel.length > 1 ? <AutotagMany ids={s.sel} /> : s.sel.length === 1 ? <AutotagLine id={s.sel[0]} /> : null}
         <HideButton photos={s.selPhotos} big />
       </Sheet>}
     </div>

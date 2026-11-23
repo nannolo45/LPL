@@ -276,7 +276,7 @@ export function AutotagLine({ id }: { id: number }) {
   const [info, setInfo] = useState<AutotagInfo | null | undefined>(undefined)
   const ver = s.selPhotos.find(p => p.id === id)?.meta_mtime
   useEffect(() => { let on = true; api.photo(id).then(p => { if (on) setInfo(p.autotag ?? null) }).catch(() => {}); return () => { on = false } }, [id, ver])
-  if (!info || (!info.verdict && !info.override)) return null
+  if (!info) return null
   const o = info.override
   const v = o ? o.verdict : info.verdict
   const toned = o ? o.toned : info.toned
@@ -297,11 +297,38 @@ export function AutotagLine({ id }: { id: number }) {
         {info.checked && <span className="tiny muted">checked {new Date(info.checked * 1000).toLocaleDateString()}</span>}
       </div>
       {info.detail && <span className="small soft">{o ? `The rule says: ${info.detail}` : info.detail}</span>}
+      {info.enabled === false && !o && <span className="tiny muted">Auto-tagging is off (Settings › Auto-tagging). Marking by hand still tags the photo.</span>}
       <div className="row wrap" style={{ gap: 6 }}>
         {v !== 'bnw' || toned ? <button className="btn tiny" onClick={() => correct('bnw')}>Mark B&amp;W</button> : null}
         {!(v === 'bnw' && toned) && <button className="btn tiny" onClick={() => correct('toned')}>Mark toned</button>}
         {v !== 'colour' && <button className="btn tiny" onClick={() => correct('colour')}>Not B&amp;W</button>}
         {o && <button className="btn tiny ghost" onClick={() => correct('clear')}>Let the rule decide</button>}
+      </div>
+    </div>
+  )
+}
+
+/** Several photos selected: mark them all as B&W / toned / not B&W (tags them at once), or hand them back to the rule. */
+export function AutotagMany({ ids }: { ids: number[] }) {
+  const s = useStore()
+  const [busy, setBusy] = useState(false)
+  const mark = async (verdict: 'bnw' | 'toned' | 'colour' | 'clear') => {
+    setBusy(true)
+    try {
+      const r = await api.autotagCorrect(ids, verdict)
+      s.mergePhotos(r.items); s.reloadTags()
+      const what = verdict === 'bnw' ? 'B&W' : verdict === 'toned' ? 'B&W, toned' : verdict === 'colour' ? 'not B&W' : 'back to the rule'
+      s.toast(`${ids.length} photos: ${what}`)
+    } catch (e: any) { s.toast(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <div className="at-why">
+      <span className="small" style={{ fontWeight: 500 }}>Look: mark {ids.length} photos</span>
+      <div className="row wrap" style={{ gap: 6 }}>
+        <button className="btn tiny" disabled={busy} onClick={() => mark('bnw')}>Mark B&amp;W</button>
+        <button className="btn tiny" disabled={busy} onClick={() => mark('toned')}>Mark toned</button>
+        <button className="btn tiny" disabled={busy} onClick={() => mark('colour')}>Not B&amp;W</button>
+        <button className="btn tiny ghost" disabled={busy} onClick={() => mark('clear')}>Let the rule decide</button>
       </div>
     </div>
   )

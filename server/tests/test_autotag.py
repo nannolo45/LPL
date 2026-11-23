@@ -53,8 +53,20 @@ def test_history_color_calibration_gray_tab():
     assert on["bnw"] is True and "gray" in on["why"]
     assert hist([li(0, "channelmixerrgb", params=mixer((0.3, 0.6, 0.1), gz=True), version=3)])["bnw"] is True
     assert hist([li(0, "channelmixerrgb", params=mixer(), version=3)])["bnw"] is False
-    odd = hist([li(0, "channelmixerrgb", params=mixer((1, 0, 0)), version=2)])
+    # darktable 5.x writes version 4 (the checker box appended at the end): same place for the gray tab
+    v4 = hist([li(0, "channelmixerrgb", params=mixer((0.3, 0.6, 0.1)) + "00" * 40, version=4)])
+    assert v4["bnw"] is True and v4["unknown"] is False
+    assert hist([li(0, "channelmixerrgb", params=mixer((1, 0, 0)), version=2)])["bnw"] is True
+    odd = hist([li(0, "channelmixerrgb", params="0000", version=4)])
     assert odd["bnw"] is False and odd["unknown"] is True
+
+
+def test_history_color_balance_rgb_chroma():
+    def cb(chroma):
+        return struct.pack("<17f", *([0] * 12 + [1, 0, 1, 0, 0])).hex() + struct.pack("<f", chroma).hex() + "00" * 120
+    off = hist([li(0, "colorbalancergb", params=cb(-1.0), version=5)])
+    assert off["bnw"] is True and "chroma" in off["why"]
+    assert hist([li(0, "colorbalancergb", params=cb(-0.4), version=5)])["bnw"] is False
 
 
 def _img(kind, size=(160, 120)):
@@ -207,3 +219,17 @@ def test_camera_preview_off_leaves_unedited_photos(lib):
     client.post("/api/autotag/run", json={"wait": True, "apply": True, "force": True})
     assert tags(client, ids["grey"]) == []
     client.put("/api/autotag", json={"bnw": {"use_camera": True}})
+
+
+def test_marking_by_hand_tags_with_the_rule_off(lib):
+    from lpl import autotag
+    client, ids, d = lib
+    autotag.save_settings({"bnw": {"enabled": False}})
+    info = client.get("/api/photos/%d" % ids["colour"]).json()["autotag"]
+    assert info["enabled"] is False and info["verdict"] is None  # shown (to mark by hand) even with the rule off
+    client.post("/api/autotag/correct", json={"ids": [ids["colour"], ids["grey"]], "verdict": "bnw"})
+    assert tags(client, ids["colour"]) == ["auto|look|bnw"] and tags(client, ids["grey"]) == ["auto|look|bnw"]
+    q = client.post("/api/photos/query", json={"sort": [], "filters": {"look": ["bnw"]}, "offset": 0, "limit": 50, "seed": 0}).json()
+    assert {p["id"] for p in q["items"]} == {ids["colour"], ids["grey"]}
+    client.post("/api/autotag/correct", json={"ids": [ids["colour"]], "verdict": "colour"})
+    assert tags(client, ids["colour"]) == []

@@ -37,6 +37,8 @@ log = logging.getLogger("lpl.autotag")
 router = APIRouter()
 
 RULE = "bnw"
+# bumped when the way a photo is judged changes, so verdicts stored by an older LPL are looked at again
+ENGINE = 2
 VERDICTS = ("bnw", "colour", "unsure", "none")
 DEFAULTS: Dict[str, Any] = {
     "auto": True,  # check new and changed photos by themselves (only once the rule is switched on)
@@ -141,7 +143,7 @@ def save_settings(new: dict) -> dict:
 
 def _sig_settings(b: dict) -> str:
     keys = ("use_rendered", "use_history", "use_camera", "disagree_review", "strictness", "band")
-    return hashlib.sha1(json.dumps([b[k] for k in keys]).encode()).hexdigest()[:10]
+    return hashlib.sha1(json.dumps([ENGINE] + [b[k] for k in keys]).encode()).hexdigest()[:10]
 
 
 # ---------------------------------------------------------------- the edit history
@@ -158,12 +160,22 @@ def decode_params(v: Optional[str]) -> Optional[bytes]:
 
 
 def _gray_in_use(params: Optional[bytes], version: int) -> Optional[bool]:
-    """color calibration (channelmixerrgb) version 3: red[4], green[4], blue[4], saturation[4], lightness[4], grey[4],
-    all floats; darktable applies the gray tab when any of grey[0..2] is not 0. None: a version this does not know."""
-    if params is None or version != 3 or len(params) < 92:
+    """color calibration (channelmixerrgb): every version so far (1..4; darktable 5.x writes 4) starts with red[4],
+    green[4], blue[4], saturation[4], lightness[4], grey[4], all floats, and only appends after that. darktable
+    applies the gray tab when any of grey[0..2] is not 0. None: the settings could not be read."""
+    if params is None or len(params) < 92:
         return None
     g = struct.unpack_from("<3f", params, 80)
     return any(abs(x) > 1e-6 for x in g)
+
+
+def _chroma_off(params: Optional[bytes]) -> bool:
+    """color balance rgb (every version shares the start of its settings): global chroma at -100% takes all colour
+    out. It is the 18th float (shadows/midtones/highlights/global Y,C,H, three weights, then chroma shadows,
+    highlights, global)."""
+    if params is None or len(params) < 72:
+        return False
+    return struct.unpack_from("<f", params, 68)[0] <= -0.99
 
 
 def read_history(desc) -> Dict[str, Any]:
@@ -203,6 +215,11 @@ def read_history(desc) -> Dict[str, Any]:
                 break
             if g is None:
                 unknown = True
+        if m["op"] == "colorbalancergb" and _chroma_off(decode_params(m["params"])):
+            bnw, why = True, "color balance rgb (chroma -100%)"
+            break
+    if bnw:
+        unknown = False
     return {"bnw": bnw, "why": why, "sig": sig, "unknown": unknown}
 
 
@@ -303,8 +320,10 @@ def classify(row, b: dict) -> Dict[str, Any]:
             if h["bnw"]:
                 out.update(verdict="bnw", source="history", detail="darktable edit: %s" % h["why"])
             else:
-                out.update(verdict="colour", source="history",
-                           detail="darktable edit: no B&W module" + (" (color calibration of an unknown version)" if h["unknown"] else ""))
+                if h["unknown"]:  # could not read color calibration: let the user say
+                    out.update(verdict="unsure", source="history", detail="darktable edit: color calibration could not be read")
+                else:
+                    out.update(verdict="colour", source="history", detail="darktable edit: no B&W module found")
         return out
     if b["use_camera"] and row["preview_state"] == 1:
         m = measure_preview(row["id"])
@@ -537,6 +556,13 @@ def start_background() -> None:
     if _worker_started:
         return
     _worker_started = True
+    # verdicts stored by an older way of judging: look at every photo again once (unchanged ones are cheap)
+    try:
+        if get_settings()["bnw"]["enabled"] and int(db.get_setting("autotag_engine", "0") or 0) < ENGINE:
+            if start(apply_after=True):
+                db.set_setting("autotag_engine", str(ENGINE))
+    except Exception:  # pragma: no cover
+        log.exception("auto-tagging (re-check after an update)")
 
     def loop():
         while True:
@@ -566,13 +592,12 @@ def xmp_arrived(pid: int) -> None:
 # ---------------------------------------------------------------- API
 def photo_info(pid: int) -> Optional[dict]:
     st = get_settings()
-    if not st["bnw"]["enabled"]:
-        return None
+    on = bool(st["bnw"]["enabled"])
     r = db.conn().execute("SELECT verdict, toned, source, detail, checked FROM autotag_results WHERE photo_id=? AND rule=?", (pid, RULE)).fetchone()
     o = db.conn().execute("SELECT verdict, toned FROM autotag_overrides WHERE photo_id=? AND rule=?", (pid, RULE)).fetchone()
     if not r and not o:
-        return {"rule": RULE, "verdict": None, "tags": [st["bnw"]["tag_bnw"], st["bnw"]["tag_toned"]]}
-    return {"rule": RULE, "verdict": r["verdict"] if r else None, "toned": int(r["toned"]) if r else 0, "source": r["source"] if r else "",
+        return {"rule": RULE, "enabled": on, "verdict": None, "tags": [st["bnw"]["tag_bnw"], st["bnw"]["tag_toned"]]}
+    return {"rule": RULE, "enabled": on, "verdict": r["verdict"] if r else None, "toned": int(r["toned"]) if r else 0, "source": r["source"] if r else "",
             "detail": r["detail"] if r else "", "checked": r["checked"] if r else None,
             "override": {"verdict": o["verdict"], "toned": int(o["toned"])} if o else None,
             "tags": [st["bnw"]["tag_bnw"], st["bnw"]["tag_toned"]]}
@@ -694,7 +719,8 @@ def correct(body: Dict[str, Any] = Body(...)):
                           (pid, RULE, "none", "", "", "", time.time()))
         c.commit()
     out = {"ok": True}
-    if body.get("apply", True) and get_settings()["bnw"]["enabled"]:
+    # the user's own answer puts (or takes off) the tags at once, also while the rule itself is switched off
+    if body.get("apply", True):
         out.update(apply(ids))
     from . import api
     out["items"] = api.photo_dicts(ids)
