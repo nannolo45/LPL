@@ -134,6 +134,6 @@ cd web && npm install && npm run dev
 ```
 
 ## Known limits in 0.1
-- darktable duplicates (`IMG_01.RAF.xmp` versions) are not shown as separate photos yet.
+- darktable duplicates (`IMG_01_02.RAF.xmp`) are versions of their photo (one tile with a count badge, a versions strip in the photo panel): see [docs/versions-r17.md](docs/versions-r17.md). The PC agent does not fetch or send them yet.
 - Exporting a series in order, map view and date/numeric range filters are planned.
 - The darktable bridge uses darktable's Lua API (`dispatch`, `display_image`, `apply_sidecar`, `write_image`); it was written against the documented API and tested with a mock, so please report the first real run.
