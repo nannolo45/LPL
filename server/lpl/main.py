@@ -36,6 +36,8 @@ def create_app():
     api.mount_web()
     if os.environ.get("LPL_NO_SCAN") != "1":
         scanner.start_background()
+        from . import autotag
+        autotag.start_background()
     if config.local:
         from . import localedit
         localedit.start_background()

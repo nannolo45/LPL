@@ -220,6 +220,8 @@ def scan(full: bool = False) -> None:
                     apply_xmp_to_db(pid, x)
                     edits.observe_scan(pid, x)  # a changed darktable edit that no agent posted: "edited outside LPL"
                 db.conn().commit()
+            from . import autotag
+            autotag.mark([pid for pid, _x in xmp_changed])
         # photos in a folder that is currently unplugged (e.g. external drive) are kept as they are
         missing = [r["id"] for rel, r in known.items() if rel not in seen and not r["missing"] and not (offline and rel.startswith(offline))]
         if missing:
@@ -243,10 +245,15 @@ def _do_preview(pid: int, rel: str, ext: str, orient: int) -> None:
     except Exception as e:
         log.warning("preview failed for %s: %s", rel, e)
         state = -1
+    from . import autotag
     with db.write_lock:
         c = db.conn()
         c.execute("UPDATE photos SET preview_state=?, preview_ver=preview_ver+1 WHERE id=?", (state, pid))
+        if state == 1:
+            autotag.preview_changed(pid, rendered=False)
         c.commit()
+    if state == 1:
+        autotag.mark([pid])
 
 
 def _worker() -> None:

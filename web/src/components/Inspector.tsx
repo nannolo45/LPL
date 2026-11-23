@@ -8,6 +8,7 @@ import { photoActivity, serverNow } from '../devices'
 import { LastEdit, ProgressBar, useTick } from './EditRecord'
 import { NewSeriesSheet } from './NewSeries'
 import { SeriesLine } from './SeriesLine'
+import { AutotagLine, useAutoTags } from './Autotag'
 import { buildTree } from '../seriesnav'
 import { bumpSeries } from '../seriesops'
 
@@ -98,6 +99,7 @@ export function HideButton({ photos, big }: { photos: Photo[]; big?: boolean }) 
 }
 
 export function TagPanel({ photos }: { photos: Photo[] }) {
+  const autoTags = useAutoTags()
   const s = useStore()
   const [q, setQ] = useState('')
   const [sugg, setSugg] = useState<string[]>([])
@@ -198,8 +200,8 @@ export function TagPanel({ photos }: { photos: Photo[] }) {
       {attached.length > 0 && (
         <div className="row wrap" style={{ gap: 6 }}>
           {attached.map(t => (
-            <span key={t} className={'tagchip' + (mark(t) === '✓' ? '' : ' some')} title={t}>
-              {mark(t) !== '✓' && <span className="muted tiny">some ·</span>}{leaf(t)}
+            <span key={t} className={'tagchip' + (mark(t) === '✓' ? '' : ' some') + (autoTags.includes(t) ? ' auto' : '')} title={autoTags.includes(t) ? `${t} (set by auto-tagging; removing it counts as a correction)` : t}>
+              {mark(t) !== '✓' && <span className="muted tiny">some ·</span>}{leaf(t)}{autoTags.includes(t) && <small className="at-badge">auto</small>}
               <button aria-label={`Detach ${t}`} onClick={() => detach(t)}>×</button>
             </span>
           ))}
@@ -315,6 +317,7 @@ export function Inspector() {
           <LastEdit p={one} />
           <WhereLine id={one.id} />
           <SeriesLine id={one.id} />
+          <AutotagLine id={one.id} />
         </>
       )}
       {photos.length > 1 && (

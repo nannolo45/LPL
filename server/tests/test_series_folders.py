@@ -810,3 +810,44 @@ def test_undo_take_the_order_from_the_board_single(lib):
     ok(c.post("/api/series/%d/link/restore" % sid, json={"token": r["undo"]}))
     st = ok(c.get("/api/series/%d/strip" % sid))
     assert st["linked"] is False and [p["id"] for la in st["lanes"] for p in la["photos"]] == order
+
+
+def test_rename_a_frame_from_the_strip(lib):
+    c, ids = lib
+    sid = three_frames(c, ids)
+    st = ok(c.get("/api/series/%d/strip" % sid))
+    fid = int(st["lanes"][1]["key"][1:])
+    st = ok(c.patch("/api/series/%d/frames/%d" % (sid, fid), json={"label": "  Harbour  "}))
+    assert [la["label"] for la in st["lanes"]] == ["A", "Harbour", "C", "Outside the frames"]
+    assert [f["label"] for f in ok(c.get("/api/series/%d/board" % sid))["frames"]] == ["A", "Harbour", "C"]
+    assert c.patch("/api/series/%d/frames/%d" % (sid, fid), json={"label": " "}).status_code == 400
+    other, _ = single(c, uniq("Other"), ids[40:41])
+    assert c.patch("/api/series/%d/frames/%d" % (other, fid), json={"label": "X"}).status_code == 404
+
+
+def test_drop_photos_from_outside_into_a_lane(lib):
+    """The strip's photo panel: photos not yet in the series are dropped into a lane at a place."""
+    c, ids = lib
+    sid = three_frames(c, ids)
+    st = ok(c.get("/api/series/%d/strip" % sid))
+    kB = st["lanes"][1]["key"]
+    st = ok(c.post("/api/series/%d/strip/move" % sid, json={"ids": [ids[50], ids[51]], "lane": kB, "before": ids[31]}))
+    lane = next(la for la in st["lanes"] if la["key"] == kB)
+    assert [p["id"] for p in lane["photos"]] == [ids[50], ids[51], ids[31]]
+    name = ok(c.get("/api/series"))["series"][0]["name"]
+    assert "series|%s" % name in tags_of(c, ids[50])
+    # into a series of a folder: the photo joins it (and leaves the folder's other series)
+    fid, sids = new_folder(c, uniq("Trip"), {"Day 1": ids[0:3], "Day 2": ids[3:6]})
+    ok(c.post("/api/series/%d/strip/move" % sids["Day 2"], json={"ids": [ids[52], ids[0]], "lane": "all", "before": ids[4]}))
+    assert lanes(c, fid) == {"Day 1": ids[1:3], "Day 2": [ids[3], ids[52], ids[0], ids[4], ids[5]]}
+    ok(c.post("/api/series-folders/%d/strip/move" % fid, json={"ids": [ids[53]], "series": sids["Day 1"], "before": None}))
+    assert lanes(c, fid)["Day 1"] == [ids[1], ids[2], ids[53]]
+
+
+def test_filters_for_the_strip_photo_panel(lib):
+    c, ids = lib
+    fid, sids = new_folder(c, uniq("Panel"), {"P1": ids[0:2], "P2": ids[2:4]})
+    single(c, uniq("Elsewhere"), ids[4:5])
+    q = lambda f: {p["id"] for p in ok(c.post("/api/photos/query", json={"filters": {"folder": FOLDER, **f}, "sort": [], "limit": 100}))["items"]}
+    assert q({"not_in_series_folder": fid}) == set(ids) - set(ids[0:4])
+    assert q({"no_series": True}) == set(ids) - set(ids[0:5])

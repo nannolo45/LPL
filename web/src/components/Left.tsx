@@ -161,6 +161,15 @@ export function FilterPanel() {
           ))}
         </div>
       </Section>
+      <Section id="look" title="Look (auto)" defaultOpen={false} summary={picked((f.look || []).length)}
+        right={(f.look || []).length > 0 && <button className="btn ghost tiny" onClick={() => s.patchFilters({ look: [] })}>clear</button>}>
+        {/* what auto-tagging found (Settings > Auto-tagging); the user's corrections count */}
+        <div className="row wrap" style={{ gap: 5 }}>
+          {([['bnw', 'B&W'], ['toned', 'toned'], ['colour', 'colour'], ['unsure', 'unsure'], ['unchecked', 'not checked']] as const).map(([v, l]) => (
+            <button key={v} className={'chip' + ((f.look || []).includes(v) ? ' on' : '')} onClick={() => s.patchFilters({ look: toggle(f.look || [], v) })}>{l}</button>
+          ))}
+        </div>
+      </Section>
       <div className="col" style={{ gap: 4 }}>
         <label className="row" style={{ cursor: 'pointer' }}>
           <input type="checkbox" checked={!!f.show_hidden} onChange={() => s.patchFilters({ show_hidden: !f.show_hidden, only_hidden: false })} style={{ accentColor: '#E8A33D' }} />

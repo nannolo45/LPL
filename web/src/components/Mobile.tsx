@@ -1,3 +1,4 @@
+import { tray } from '../tray'
 import { useEffect, useState } from 'react'
 import { api, coverUrl, Photo } from '../api'
 import { useStore } from '../store'
@@ -248,6 +249,7 @@ export function MobileApp() {
           <span className="grow">{s.sel.length} selected</span>
           <button className="btn primary big" onClick={() => setSheet('edit')}>Rate & tag</button>
           <button className="btn big" onClick={() => s.editInDarktable(s.sel)}>darktable</button>
+          <button className="btn big" title="Collect them to place into a series' Strip later" onClick={() => { const n = tray.add(selectionIds(s.items.map(x => x.id), s.sel)); s.toast(n ? `${n} added to the tray · open a series as Strip to place them` : 'Already in the tray') }}>Tray</button>
           {(() => { const ids = selectionIds(s.items.map(x => x.id), s.sel)  // only the selected photos
             return <EditOnPhone ids={ids} start={ids[0]} series={list.series} title={list.title} label="This phone" /> })()}
         </div>

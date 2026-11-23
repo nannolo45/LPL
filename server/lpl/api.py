@@ -189,6 +189,7 @@ def photo_detail(pid: int):
     d = items[0]
     d["series"] = series_mod.photo_series(pid)
     d["last_edit"] = edits.last(pid)
+    d["autotag"] = autotag.photo_info(pid)
     return d
 
 
@@ -1085,7 +1086,9 @@ async def put_xmp(pid: int, request: Request, checkout_ts: float = 0, agent: str
         x["mtime"] = sc.stat().st_mtime
         scanner.apply_xmp_to_db(pid, x, touch=False)
         edits.set_baseline(pid, x["history"], x["mtime"])
+        autotag.xmp_arrived(pid)
         db.conn().commit()
+    autotag.mark([pid])
     return Response(data, media_type="application/rdf+xml", headers={"X-LPL-Merged": "1" if merged else "0"})
 
 
@@ -1104,7 +1107,9 @@ async def put_preview(pid: int, request: Request):
         raise HTTPException(400, "bad image: %s" % e)
     with db.write_lock:
         db.conn().execute("UPDATE photos SET preview_ver=preview_ver+1, preview_state=1 WHERE id=?", (pid,))
+        autotag.preview_changed(pid, rendered=True)
         db.conn().commit()
+    autotag.mark([pid])
     return {"ok": True}
 
 
@@ -1434,3 +1439,8 @@ def mount_web() -> None:
 
 # series folders, the strip and the board link: their routes and the rules for membership and order (series.py)
 from . import series as series_mod  # noqa: E402
+
+# auto-tagging (Settings > Auto-tagging): its routes, the B&W rule (autotag.py)
+from . import autotag  # noqa: E402
+
+app.include_router(autotag.router)

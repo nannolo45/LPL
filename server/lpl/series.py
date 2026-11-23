@@ -1775,9 +1775,13 @@ def series_strip_move(sid: int, body: Dict[str, Any] = Body(...)):
     before = body.get("before")
     s = api._series(sid)
     if s["folder_id"]:  # its order is the folder's business (a linked folder board re-flows this series' frame)
-        have = set(order_of(db.conn(), sid))
-        folder_strip_move(s["folder_id"], {"ids": [i for i in body.get("ids") or [] if int(i) in have], "series": sid, "before": before})
+        # photos from outside (the strip's photo panel) join the series there, like a move from another lane
+        folder_strip_move(s["folder_id"], {"ids": list(body.get("ids") or []), "series": sid, "before": before})
         return series_strip(sid)
+    have = set(order_of(db.conn(), sid))
+    extra = [int(i) for i in body.get("ids") or [] if int(i) not in have]
+    if extra:  # photos dropped in from outside the series: add them first (tag, board), then put them in place
+        api.series_add(sid, {"ids": extra})
     with db.write_lock:
         c = db.conn()
         s = api._series(sid)
@@ -1868,6 +1872,22 @@ def move_frame_lane(c, sid: int, fid: int, before: Optional[int]) -> None:
             y += byid[k]["h"] + 40
     if sown:
         b.save_shapes(shapes)
+
+
+@router.patch("/api/series/{sid}/frames/{fid}")
+def series_frame_patch(sid: int, fid: int, body: Dict[str, Any] = Body(...)):
+    """Rename a frame of a single series' board (its lane in the strip). A folder's frames are series: rename those."""
+    api._series(sid)
+    label = str(body.get("label") or "").strip()
+    if not label:
+        raise HTTPException(400, "a frame needs a name")
+    with db.write_lock:
+        c = db.conn()
+        if not c.execute("SELECT 1 FROM series_frames WHERE id=? AND series_id=?", (fid, sid)).fetchone():
+            raise HTTPException(404, "that frame no longer exists")
+        c.execute("UPDATE series_frames SET label=? WHERE id=?", (label[:120], fid))
+        c.commit()
+    return series_strip(sid)
 
 
 @router.post("/api/series/{sid}/strip/lanes")

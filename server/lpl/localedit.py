@@ -139,12 +139,16 @@ def _handle_outbox() -> None:
                 except Exception as e:
                     log.warning("preview from darktable failed: %s", e)
             x = xmp.read_for_image(target)
+            from . import autotag
             with db.write_lock:
                 if x:
                     scanner.apply_xmp_to_db(pid, x)
                     edits.observe_scan(pid, x)
                 db.conn().execute("UPDATE photos SET preview_ver=preview_ver+1, preview_state=1 WHERE id=?", (pid,))
+                if jpg.is_file():
+                    autotag.preview_changed(pid, rendered=True)
                 db.conn().commit()
+            autotag.mark([pid])
         for f in (marker, jpg):
             try:
                 f.unlink()

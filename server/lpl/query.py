@@ -166,6 +166,13 @@ def build_where(f: Dict[str, Any]) -> Tuple[str, List[Any], str]:
     not_in = f.get("not_in_series")
     if not_in:
         where.append("p.id NOT IN (SELECT photo_id FROM series_items WHERE series_id=%d)" % int(not_in))
+    if f.get("no_series"):  # in no series at all (the strip's photo panel: "Not in a series yet")
+        where.append("p.id NOT IN (SELECT photo_id FROM series_items)")
+    not_in_folder = f.get("not_in_series_folder")
+    if not_in_folder:  # in none of the series of a series folder and its subfolders
+        from . import series as series_mod
+        sids = [x["id"] for x in series_mod.series_under(series_mod.db.conn(), int(not_in_folder))] or [0]
+        where.append("p.id NOT IN (SELECT photo_id FROM series_items WHERE series_id IN (%s))" % ",".join(str(int(i)) for i in sids))
     series = f.get("series")
     if series:
         join = " JOIN series_items si ON si.photo_id=p.id AND si.series_id=%d" % int(series)
@@ -176,6 +183,14 @@ def build_where(f: Dict[str, Any]) -> Tuple[str, List[Any], str]:
         rank = " ".join("WHEN %d THEN %d" % (sid, k) for k, sid in enumerate(sids)) or "WHEN 0 THEN 0"
         join = (" JOIN (SELECT si0.photo_id, MIN((CASE si0.series_id %s END) * 1000000 + COALESCE(si0.ord, 999999)) AS ord FROM series_items si0 "
                 "WHERE si0.series_id IN (%s) GROUP BY si0.photo_id) si ON si.photo_id=p.id" % (rank, ",".join(str(i) for i in sids) or "0"))
+    look = [x for x in (f.get("look") or []) if x in ("bnw", "toned", "colour", "unsure", "unchecked")]
+    if look:  # what auto-tagging found (the user's corrections count over the rule's verdict)
+        v = "COALESCE(ao.verdict, ar.verdict)"
+        tn = "COALESCE(ao.toned, ar.toned)"
+        parts = {"bnw": "%s='bnw'" % v, "toned": "(%s='bnw' AND %s=1)" % (v, tn), "colour": "%s='colour'" % v,
+                 "unsure": "(ao.verdict IS NULL AND ar.verdict='unsure')", "unchecked": "(%s IS NULL OR %s='none')" % (v, v)}
+        where.append("p.id IN (SELECT p2.id FROM photos p2 LEFT JOIN autotag_results ar ON ar.photo_id=p2.id AND ar.rule='bnw' "
+                     "LEFT JOIN autotag_overrides ao ON ao.photo_id=p2.id AND ao.rule='bnw' WHERE %s)" % " OR ".join(parts[x] for x in look))
     ids = f.get("ids")
     if ids:
         ids = [int(i) for i in ids][:5000]

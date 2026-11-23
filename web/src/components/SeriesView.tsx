@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, LinkState, SeriesFolder, Target } from '../api'
 import { useStore } from '../store'
 import { keyOf, resolveTarget } from '../seriesnav'
 import { bumpSeries, setPendingUndo, MenuButton, MenuItem, useSeriesOps } from '../seriesops'
 import { useBackLayer } from '../back'
 import { BoardView } from './Board'
-import { StripView } from './Strip'
+import { ExtDrag, StripView } from './Strip'
+import { StripSource } from './StripSource'
+import { tray } from '../tray'
 import { FolderIcon, LinkIcon, SeriesTree } from './SeriesTree'
 import { AddPhotosDialog } from './AddPhotos'
 
@@ -100,6 +102,12 @@ export function SeriesView() {
   const [dlg, setDlg] = useState<LinkState | null>(null)
   const [info, setInfo] = useState<{ hidden: number; maybe: number }>({ hidden: 0, maybe: 0 })
   const [busy, setBusy] = useState(false)
+  // the left side in Strip mode: the series tree, or the photo panel to drag photos in from (remembered on this device)
+  const [side, setSideRaw] = useState<'series' | 'photos'>(() => { try { return localStorage.getItem('lpl.strip.side') === 'photos' ? 'photos' : 'series' } catch { return 'series' } })
+  const setSide = (v: 'series' | 'photos') => { setSideRaw(v); try { localStorage.setItem('lpl.strip.side', v) } catch { /* ignore */ } }
+  const [members, setMembers] = useState<Map<number, string>>(new Map())
+  const [srcRev, setSrcRev] = useState(0)
+  const ext = useRef<ExtDrag | null>(null)
   useEffect(() => { const m = readMode(key); setModeRaw(m); setBoardSeen(m === 'board'); setAdding(false); setDlg(null); setInfo({ hidden: 0, maybe: 0 }) }, [key])
   const setMode = (m: Mode) => { setModeRaw(m); if (m === 'board') setBoardSeen(true); try { localStorage.setItem('lpl.seriesmode.' + key, m) } catch { /* ignore */ } }
 
@@ -117,8 +125,21 @@ export function SeriesView() {
   const rootFolder = folder && crumbs.length ? crumbs[0] : folder
   const showHidden = !!s.filters.show_hidden
 
-  const tree = !phone && (
+  const photosSide = !phone && side === 'photos' && mode === 'strip' && !!target
+  const sideSeg = !phone && mode === 'strip' && !!target && (
+    <div className="seg ssrc-seg" role="group" aria-label="Left panel">
+      <button className={side === 'series' ? 'on' : ''} aria-pressed={side === 'series'} onClick={() => setSide('series')}>Series</button>
+      <button className={side === 'photos' ? 'on' : ''} aria-pressed={side === 'photos'} onClick={() => setSide('photos')}>Photos</button>
+    </div>
+  )
+  const tree = !phone && (photosSide ? (
+    <nav className="series-list wide" aria-label="Photos to add">
+      {sideSeg}
+      <StripSource target={target!} name={folder?.name || series?.name || ''} members={members} ext={ext} rev={srcRev} />
+    </nav>
+  ) : (
     <nav className="series-list" aria-label="Series">
+      {sideSeg}
       <SeriesTree current={target} />
       <details className="st-help small muted">
         <summary>How the board works</summary>
@@ -126,7 +147,7 @@ export function SeriesView() {
         <br /><br />Drag on empty space to select several things (Shift adds). Drag with the right or middle mouse button, or hold Space and drag, to move around; on a touch screen drag empty space with one finger and pinch with two to zoom. How the mouse, wheel and double-click behave is in Settings (⚙ at the top). Keys: V select, N note, A arrow, Delete takes what's selected off the board (change them with the keyboard button at the top). Double-click empty space for a note, an arrow to write on it.
       </details>
     </nav>
-  )
+  ))
 
   if (!target || (!folder && !series)) {
     return (
@@ -243,7 +264,14 @@ export function SeriesView() {
         )}
         <div className="sv-body">
           {boardSeen && <div className={'sv-pane' + (mode === 'board' ? '' : ' off')}><BoardView key={key} target={target} active={mode === 'board'} onInfo={i => { if (mode === 'board') setInfo(i) }} /></div>}
-          {mode === 'strip' && <div className="sv-pane"><StripView key={key} target={target} name={name} folder={folder} ops={ops} onInfo={i => setInfo({ hidden: i.hidden, maybe: 0 })} onNewSeries={() => { if (folder) ops.newSeries(folder) }} /></div>}
+          {mode === 'strip' && <div className="sv-pane"><StripView key={key} target={target} name={name} folder={folder} ops={ops} ext={ext}
+            onInfo={i => { setInfo({ hidden: i.hidden, maybe: 0 }); if (i.members) setMembers(i.members) }}
+            onAdded={() => setSrcRev(r => r + 1)}
+            onNewSeries={async ids => {
+              if (!folder) return
+              const id = await ops.newSeries(folder, ids || [])
+              if (id && ids?.length) { tray.remove(ids); setSrcRev(r => r + 1) }
+            }} /></div>}
         </div>
       </div>
       {adding && <AddPhotosDialog target={target} name={name} onClose={() => setAdding(false)} onAdded={n => { setAdding(false); s.toast(`${n} photo${n === 1 ? '' : 's'} added to “${name}”`); changed() }} />}

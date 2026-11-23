@@ -39,6 +39,8 @@ export interface Photo {
   series?: { id: number; name: string; folder_id?: number | null; folder?: string | null; path?: string[]; color?: string; num?: number | null; count?: number }[]
   // photo detail only (GET /api/photos/{id})
   last_edit?: EditEvent | null
+  /** photo detail (null: auto-tagging is off) and the auto-tagging review page: what the B&W rule found and why */
+  autotag?: AutotagInfo | null
 }
 
 /** A darktable module instance in an edit: operation, its English name (from module-names.json on the
@@ -88,6 +90,8 @@ export interface Filters {
   date_to?: string | null
   /** exactly these photos (the Devices page's "Show in library" for a selection) */
   ids?: number[]
+  /** what auto-tagging found: bnw, toned, colour, unsure, unchecked (the user's corrections count) */
+  look?: string[]
 }
 
 // board notes and arrows; an arrow end sits on a photo or a note, or at a free point
@@ -145,6 +149,18 @@ export interface SendFolder { folder: string; n: number; sent: number; changed: 
 export interface SendRequest { ids?: number[]; folder?: string; parent: string; descriptor: string; split_by_day: boolean; delete_after?: boolean }
 export interface SendState { running: boolean; phase: string; done: number; total: number; bytes_done: number; bytes_total: number; sent_files: number; sent_xmps: number; skipped: number; deleted: number; errors: string[]; finished: number | null; dest_folders: string[]; series?: { name: string; created: boolean; added: number }[] }
 
+/** Auto-tagging (Settings > Auto-tagging): the B&W rule's settings, a photo's verdict, the counts of a run. */
+export interface AutotagRule { enabled: boolean; tag_bnw: string; tag_toned: string; toned: 'bnw+toned' | 'bnw' | 'colour'
+  use_rendered: boolean; use_history: boolean; use_camera: boolean; disagree_review: boolean; strictness: number; band: number
+  folders: string[]; remove_stale: boolean; managed: string[] }
+export interface AutotagSettings { auto: boolean; bnw: AutotagRule }
+export type AutotagVerdict = 'bnw' | 'colour' | 'unsure' | 'none'
+export interface AutotagInfo { rule?: string; verdict: AutotagVerdict | null; toned?: number; source?: string; score?: number | null; detail?: string
+  checked?: number | null; override?: { verdict: AutotagVerdict; toned: number } | null; tags?: string[] }
+export interface AutotagStatus { state: 'idle' | 'running' | 'error'; done: number; total: number; apply: boolean; error: string; finished: number; last_apply?: { added: number; removed: number; photos: number } }
+export interface AutotagCounts { bnw: number; toned: number; colour: number; unsure: number; none: number; camera: number; checked: number; corrected: number; photos: number }
+export interface AutotagReview { counts: { unsure: number; bnw: number; toned: number; removals: number; adds: number }; total: number; items: Photo[]; status: AutotagStatus; settings: AutotagSettings }
+
 export class AuthError extends Error {}
 
 export async function call<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -183,6 +199,13 @@ export const api = {
   position: (sort: SortLevel[], filters: Filters, seed: number, id: number) => call<{ index: number }>('POST', '/api/photos/position', { sort, filters, seed, id }),
   get: (ids: number[]) => call<{ items: Photo[] }>('POST', '/api/photos/get', { ids }),
   photo: (id: number) => call<Photo>('GET', `/api/photos/${id}`),
+  autotag: () => call<{ settings: AutotagSettings; status: AutotagStatus; counts: AutotagCounts }>('GET', '/api/autotag'),
+  autotagSave: (body: Partial<{ auto: boolean; bnw: Partial<AutotagRule> }>) => call<{ settings: AutotagSettings; counts: AutotagCounts }>('PUT', '/api/autotag', body),
+  autotagRun: (body: { apply?: boolean; force?: boolean }) => call<{ status: AutotagStatus }>('POST', '/api/autotag/run', body),
+  autotagStatus: () => call<{ status: AutotagStatus; counts: AutotagCounts }>('GET', '/api/autotag/status'),
+  autotagReview: (kind: string, offset = 0, limit = 120) => call<AutotagReview>('GET', `/api/autotag/review?kind=${kind}&offset=${offset}&limit=${limit}`),
+  autotagCorrect: (ids: number[], verdict: 'bnw' | 'toned' | 'colour' | 'clear', apply = true) => call<{ items: Photo[]; added?: number; removed?: number }>('POST', '/api/autotag/correct', { ids, verdict, apply }),
+  autotagApply: (enable: boolean) => call<{ added: number; removed: number; photos: number; counts: AutotagCounts }>('POST', '/api/autotag/apply', { enable }),
   edits: (id: number) => call<{ edits: EditEvent[] }>('GET', `/api/photos/${id}/edits`),
   meta: (body: Record<string, unknown>) => call<{ items: Photo[]; errors: string[] }>('POST', '/api/meta', body),
   facets: () => call<{ lenses: { v: string; n: number }[]; cameras: { v: string; n: number }[]; formats: { v: string; n: number; raw?: boolean }[]; hidden_photos?: number }>('GET', '/api/facets'),
@@ -210,6 +233,7 @@ export const api = {
     call<{ added: number }>('POST', `/api/series/${id}/add-matching`, { filters, target, sort }),
   boardSave: (id: number, items: { id: number; x: number; y: number; ord: number | null }[], frames?: Frame[]) =>
     call<{ series: { id: number; name: string }; frames: Frame[]; items: Photo[] }>('PUT', `/api/series/${id}/board`, frames ? { items, frames } : { items }),
+  frameRename: (sid: number, fid: number, label: string) => call<StripData>('PATCH', `/api/series/${sid}/frames/${fid}`, { label }),
   seriesAdd: (id: number, ids: number[]) => call<{ added: number; moved?: number }>('POST', `/api/series/${id}/items`, { ids }),
   seriesRemove: (id: number, ids: number[]) => call('POST', `/api/series/${id}/remove`, { ids }),
   // series folders, the strip and the board link (a Target is one series or a folder of series)
