@@ -2,7 +2,7 @@
 // Tests for src/transfer.ts (the estimate, its wording, what the Devices page and the top bar say): npm test.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { deviceCounts, deviceRows, ESTIMATE, estimate, estimateWords, etaWords, fmtBytes, isFolded, overall, rollingRate, stoppedLines, transferLines } from '../src/transfer.ts'
+import { deviceCounts, deviceRows, filterCounts, filterRows, ESTIMATE, estimate, estimateWords, etaWords, fmtBytes, isFolded, overall, rollingRate, stoppedLines, transferLines } from '../src/transfer.ts'
 import type { StoppedRun, Transfer } from '../src/transfer.ts'
 import { hasUnsavedEdits } from '../src/devices.ts'
 
@@ -199,7 +199,8 @@ test('rows of a device: copying, waiting, arrived, not sent', () => {
   const r = deviceRows(dev({ state: { working_set: ws }, transfer: tr({ waiting: [...waiting, { id: 3, filename: 'again', job: 7 }], current: { id: 200, filename: 'DSCF200.RAF', bytes: 6, size: 10 } }) }))
   assert.deepEqual(r.copying.map(x => x.id), [200])                    // once, though the server names it too
   assert.deepEqual(r.waiting.map(x => x.id), [201, 202, 203])          // not one that is on the device already
-  assert.deepEqual(r.arrived.map(x => x.id), [4, 2, 3, 1])             // the error, the unsaved edit, then the latest first
+  assert.deepEqual(r.arrived.map(x => x.id), [2, 3, 1])                // the unsaved edit, then the latest first
+  assert.deepEqual(r.failed.map(x => [x.id, x.error]), [[4, 'x']])     // a copy that failed is not "on the device"
   assert.deepEqual(r.unsent, [])
   // the device has not listed the photo it copies yet: the server's word is shown
   const early = deviceRows(dev({ transfer: tr({ current: { id: 200, filename: 'DSCF200.RAF', bytes: 5, size: 10 } }) }))
@@ -235,3 +236,21 @@ test('top bar: what the indicator says', () => {
   assert.deepEqual(pick(overall([], now)), ['idle', 'no device', ''])
 })
 const pick = (o: { kind: string; text: string; sub: string }) => [o.kind, o.text, o.sub]
+
+test('photos that could not be copied: the device\'s word and the server\'s, each once; never one with edits', () => {
+  const ws = [w(1, 'ready'), w(2, 'error', { error: 'timed out', copy_failed: true }), w(3, 'error', { error: 'sync failed: x' })]
+  const r = deviceRows(dev({ state: { working_set: ws }, failed: [{ id: 2, filename: 'b', job: 4 }, { id: 9, filename: 'DSCF9.RAF', job: 4 }, { id: 1, filename: 'a', job: 3 }] }))
+  assert.deepEqual(r.failed.map(x => x.id), [2, 9])                     // 1 arrived since: not failed any more
+  assert.deepEqual(r.arrived.map(x => x.id), [3, 1])                    // a failed sync keeps its edits: it is on the device
+  assert.equal(isFolded(dev({ online: true, failed: [{ id: 9, filename: 'x', job: 1 }] })), false)
+})
+
+test('filter chips: counts and rows', () => {
+  const ws = [w(1, 'ready'), w(2, 'dirty'), w(3, 'synced'), w(4, 'error', { error: 'x' }), w(200, 'downloading')]
+  const r = deviceRows(dev({ state: { working_set: ws }, transfer: tr({ waiting: [{ id: 201, filename: 'w', job: 7 }] }) }))
+  assert.deepEqual(filterCounts(r), { all: 6, failed: 1, sending: 2, ready: 1, unsaved: 1, saved: 1, unsent: 0 })
+  assert.deepEqual(filterRows(r, 'unsaved').arrived.map(x => x.id), [2])
+  assert.deepEqual(filterRows(r, 'sending').waiting.map(x => x.id), [201])
+  assert.equal(filterRows(r, 'failed').arrived.length, 0)
+  assert.equal(filterRows(r, 'all'), r)
+})

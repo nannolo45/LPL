@@ -151,10 +151,16 @@ export interface LinkState { linked: boolean; same: boolean; frames: number; ser
 export type LinkMode = 'strip' | 'board' | 'none'
 const tbase = (t: Target) => (t.kind === 'folder' ? `/api/series-folders/${t.id}` : `/api/series/${t.id}`)
 /** step and progress (0..1): what a device is doing with the photo right now, if it says (R16). */
-export interface WorkItem { id: number; version?: number; filename: string; status: string; local_path?: string; error?: string; checkout_ts?: number; synced_ts?: number; step?: string; progress?: number }
+export interface WorkItem { id: number; version?: number; filename: string; status: string; local_path?: string; error?: string; checkout_ts?: number; synced_ts?: number; step?: string; progress?: number
+  /** the PC agent from 23 Nov 2026: the copy from the NAS never completed (nothing of the user's in it) */
+  copy_failed?: boolean }
 export interface Agent { id: string; name: string; os: string; last_seen: number; online: boolean; state: { working_set?: WorkItem[]; darktable_running?: boolean; bridge_alive?: boolean; bridge_status?: string; version?: string; message?: string; local_url?: string; local_error?: string }
   /** what the device says it can do (batch, cancel, open); what is being sent to it; a batch that was stopped; folded on the Devices page (null: never chosen) */
-  caps?: string[]; transfer?: import('./transfer').Transfer | null; stopped?: import('./transfer').StoppedRun | null; folded?: boolean | null; folded_phone?: boolean | null }
+  caps?: string[]; transfer?: import('./transfer').Transfer | null; stopped?: import('./transfer').StoppedRun | null; folded?: boolean | null; folded_phone?: boolean | null
+  /** photos it could not copy, until Retry or "Clear from queue" (server/lpl/transfers.py failed_items) */
+  failed?: import('./transfer').FailedItem[]
+  /** other entries of the same computer; a name given in LPL it has not taken yet; names it was merged from (server/lpl/identity.py) */
+  same_machine?: string[]; renaming?: string | null; merged_from?: string[] }
 
 export interface SendFolder { folder: string; n: number; sent: number; changed: number; first: string | null; last: string | null; descriptor: string }
 export interface SendRequest { ids?: number[]; folder?: string; parent: string; descriptor: string; split_by_day: boolean; delete_after?: boolean }

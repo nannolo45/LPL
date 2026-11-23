@@ -7,12 +7,14 @@ import { useEffect, useState } from 'react'
 import { Agent, api, WorkItem } from '../api'
 import { useStore } from '../store'
 import { agentLabel, devicePills, hasUnsavedEdits, isPhoneAgent, itemProgress, serverNow, STATUS } from '../devices'
-import { ago, deviceCounts, deviceRows, isFolded, onlineCount, reporting, stoppedLines, TransferItem, transferLines } from '../transfer'
+import { ago, deviceCounts, deviceRows, FailedItem, filterCounts, filterRows, isFolded, onlineCount, reporting, RowFilter, stoppedLines, TransferItem, transferLines } from '../transfer'
 import { Bar, Chevron, CrossIcon, PlayIcon, StopIcon } from './DevicesBits'
 import { devicesApi, refreshStatus } from '../devicesApi'
 import { ProgressBar, useTick } from './EditRecord'
 import { SettingsDialog } from './Shortcuts'
-import { boxState, bulkActions, prune, rangeIds, Selection, SelRow, toggleGroup, toggleId } from '../selection'
+import { boxState, bulkActions, prune, rangeIds, RowKind, Selection, SelRow, toggleGroup, toggleId } from '../selection'
+import { DeviceFullView, FullView } from './DeviceFullView'
+import { MenuItem, RowMenu } from './RowMenu'
 
 /** What the page and the top bar's popover do with a device; each asks the server and fetches the result at once. */
 export function useDeviceActions() {
@@ -29,9 +31,14 @@ export function useDeviceActions() {
     /** The copies a stopped batch brought, by the usual way (edits are saved to the NAS first); the rest is forgotten. */
     removeCopies: (id: string, ids: number[]) => run(api.job('release', { ids }, id).then(() => devicesApi.dismiss(id)), `Sent to ${label(id)}`),
     cancelJob: (job: number) => run(devicesApi.cancelJob(job), 'Taken back'),
+    /** Photos it could not copy: send them again, or take them off the page. */
+    retry: (id: string, ids: number[]) => run(devicesApi.retry(id, ids), `Sending ${ids.length === 1 ? 'it' : ids.length + ' photos'} to ${label(id)} again`),
+    clear: (id: string, ids: number[]) => run(devicesApi.clear(id, ids), `Cleared from the queue`),
+    /** Off the device's list: keep = the copy stays on it, untracked; discard = deleted without saving its edits. */
+    forget: (id: string, ids: number[], mode: 'keep' | 'discard') => run(api.job('forget', { ids, mode }, id), mode === 'keep' ? 'Forgotten; the copy stays' : 'Discarded'),
   }
 }
-type Actions = ReturnType<typeof useDeviceActions>
+export type Actions = ReturnType<typeof useDeviceActions>
 
 /** "Sending 38 of 120 photos to Laptop · 1.4 GB of 4.6 GB · about 6 min left", the bar, and Stop. */
 export function TransferBox({ a, name, now, act, compact, phone }: { a: Agent; name: string; now: number; act: Actions; compact?: boolean; phone?: boolean }) {
@@ -123,9 +130,10 @@ function useCut<T>(rows: T[], limit: number, more: (n: number) => string, key: s
   return { shown, toggle }
 }
 
-function Thumb({ id, v, onClick }: { id: number; v?: number; onClick: () => void }) {
-  return <img className="devthumb" src={`/api/preview/${id}?s=t&v=${v || 0}`} alt="" title="Show in the library" onClick={onClick}
-    onError={e => ((e.target as HTMLImageElement).style.visibility = 'hidden')} />
+function Thumb({ id, v, name, onClick }: { id: number; v?: number; name: string; onClick: () => void }) {
+  return <button type="button" className="devthumbbtn" aria-label={`Full view of ${name}`} title="Full view (Space)" onClick={onClick}>
+    <img className="devthumb" src={`/api/preview/${id}?s=t&v=${v || 0}`} alt=""
+      onError={e => ((e.target as HTMLImageElement).style.visibility = 'hidden')} /></button>
 }
 
 /** A checkbox; state 'some' shows the dash. */
@@ -135,7 +143,7 @@ function Check({ state, label, onClick }: { state: 'none' | 'some' | 'all'; labe
 }
 
 /** The bar under a device's table while photos are selected: only what applies to at least one of them, each with its number. */
-function SelectionBar({ a, name, act, sel, rows, clear, phone }: { a: Agent; name: string; act: Actions; sel: number[]; rows: SelRow[]; clear: () => void; phone?: boolean }) {
+function SelectionBar({ a, name, act, sel, rows, clear, phone, onView }: { a: Agent; name: string; act: Actions; sel: number[]; rows: SelRow[]; clear: () => void; phone?: boolean; onView: () => void }) {
   const s = useStore()
   const b = bulkActions(rows, sel)
   const big = phone ? ' big' : ''
@@ -144,6 +152,9 @@ function SelectionBar({ a, name, act, sel, rows, clear, phone }: { a: Agent; nam
   return (
     <div className={'selbar' + (phone ? ' m' : '')} role="toolbar" aria-label={`Selected photos on ${name}`}>
       <b className="selcount" aria-live="polite">{sel.length} selected</b>
+      <button className={'btn' + big} title="Look at them full size, one after the other (Space)" onClick={onView}>Full view</button>
+      {b.retry.length > 0 && <button className={'btn primary' + big} title={`Send ${n(b.retry.length)} that could not be copied to ${name} again`} onClick={() => { act.retry(a.id, b.retry); clear() }}>Retry {b.retry.length}</button>}
+      {b.clear.length > 0 && <button className={'btn' + big} title={`Take ${n(b.clear.length)} that could not be copied off this page. Nothing of ${b.clear.length === 1 ? 'it' : 'them'} is on ${name}; the originals on the NAS are not touched.`} onClick={() => { act.clear(a.id, b.clear); clear() }}>Clear {b.clear.length} from queue</button>}
       {b.drop.length > 0 && <button className={'btn icon' + big} title={stuck || `Take ${n(b.drop.length)} out of what is sent to ${name}`}
         onClick={() => { act.dontSend(a.id, b.drop); clear() }}><CrossIcon />Don’t send {b.drop.length}</button>}
       {b.drop.length === 0 && b.stuck > 0 && <span className="tiny muted" title={stuck}>{b.stuck} cannot be taken out now</span>}
@@ -157,24 +168,37 @@ function SelectionBar({ a, name, act, sel, rows, clear, phone }: { a: Agent; nam
   )
 }
 
-/** The photos of a device: copying first, then waiting, then what is on it, then what a stop left unsent. */
-function PhotoTable({ a, name, now, act, phone, sel, setSel }: { a: Agent; name: string; now: number; act: Actions; phone?: boolean; sel: Selection | null; setSel: (ids: number[], anchor: number | null) => void }) {
+/** What a row is, for the selection, the full view and the menu. */
+export type RowInfo = { id: number; filename: string; kind: RowKind; w?: WorkItem; f?: FailedItem; droppable?: boolean }
+
+/** Every row of a device, in the order shown (for the selection, Shift-click and the full view). */
+export function rowInfos(a: Agent, filter: RowFilter): RowInfo[] {
+  const rows = filterRows(deviceRows(a), filter)
+  const skip = !!a.transfer?.can_skip
+  return [
+    ...rows.failed.map(f => ({ id: f.id, filename: f.filename || `photo ${f.id}`, kind: 'failed' as const, f })),
+    ...rows.copying.map(w => ({ id: w.id, filename: w.filename, kind: 'copying' as const, w, droppable: skip && a.transfer?.current?.id === w.id })),
+    ...rows.waiting.map(w => ({ id: w.id, filename: w.filename || `photo ${w.id}`, kind: 'waiting' as const, droppable: skip || !a.transfer })),
+    ...rows.arrived.map(w => ({ id: w.id, filename: w.filename, kind: 'arrived' as const, w })),
+    ...rows.unsent.map(w => ({ id: w.id, filename: w.filename || `photo ${w.id}`, kind: 'unsent' as const, droppable: true })),
+  ]
+}
+
+/** The photos of a device: what could not be copied first, then copying, waiting, what is on it, what a stop left unsent. */
+function PhotoTable({ a, name, now, act, phone, sel, setSel, filter, onView }: { a: Agent; name: string; now: number; act: Actions; phone?: boolean; sel: Selection | null; setSel: (ids: number[], anchor: number | null) => void; filter: RowFilter; onView: (id: number) => void }) {
   const s = useStore()
-  const rows = deviceRows(a)
+  const rows = filterRows(deviceRows(a), filter)
   const busy = !!a.transfer || !!a.stopped
   const skip = !!a.transfer?.can_skip
+  const failed = useCut(rows.failed, filter === 'failed' ? 0 : LIMIT, n => `${n} more that could not be sent`, 'more-f', 6)
   const waiting = useCut(rows.waiting, LIMIT, n => `${n} more waiting`, 'more-w', 6)
-  const arrived = useCut(rows.arrived, busy ? LIMIT : 8, n => `${n} more on ${name}`, 'more-a', 6)
+  const arrived = useCut(rows.arrived, filter !== 'all' ? 0 : busy ? LIMIT : 8, n => `${n} more on ${name}`, 'more-a', 6)
   const unsent = useCut(rows.unsent, 0, n => `${n} not sent`, 'more-u', 6)
   const big = phone ? ' big' : ''
-  const order = [...rows.copying, ...rows.waiting, ...rows.arrived, ...rows.unsent].map(r => r.id)
+  const infos = rowInfos(a, filter)
+  const order = infos.map(r => r.id)
   const selIds = sel?.ids ?? []
-  const selRows: SelRow[] = [
-    ...rows.copying.map(w => ({ id: w.id, kind: 'copying' as const, droppable: skip && a.transfer?.current?.id === w.id })),
-    ...rows.waiting.map(w => ({ id: w.id, kind: 'waiting' as const, droppable: skip || !a.transfer })),
-    ...rows.arrived.map(w => ({ id: w.id, kind: 'arrived' as const, unsaved: hasUnsavedEdits(w) })),
-    ...rows.unsent.map(w => ({ id: w.id, kind: 'unsent' as const, droppable: true })),
-  ]
+  const selRows: SelRow[] = infos.map(r => ({ id: r.id, kind: r.kind, droppable: r.droppable, unsaved: r.w ? hasUnsavedEdits(r.w) : undefined }))
   const pick = (id: number, shift: boolean) => setSel(shift ? rangeIds(order, selIds, sel?.anchor ?? null, id) : toggleId(selIds, id), id)
   const all = boxState(order, selIds)
   const headBox = <Check state={all} label={`Select all ${order.length} photos on ${name}`} onClick={() => setSel(all === 'all' ? [] : order, all === 'all' ? null : order[0])} />
@@ -186,31 +210,31 @@ function PhotoTable({ a, name, now, act, phone, sel, setSel }: { a: Agent; name:
         onClick={() => setSel(toggleGroup(selIds, ids), full ? null : ids[0])}>{full ? 'Unselect' : 'Select all'}</button>
     </div></td></tr>
   }
-  const show = (id: number) => <button className={'btn' + big} title="Find it in LightPhotoLibrary: its folder, scrolled to it" onClick={() => s.reveal(id)}>Show in library</button>
   const dont = (id: number, filename: string, title: string) => (
     <button className={'btn icon' + big} aria-label={`Don’t send ${filename}`} title={title} onClick={() => act.dontSend(a.id, [id])}><CrossIcon />Don’t send</button>
   )
-  const cells = (id: number, filename: string, v: number | undefined, status: React.ReactNode, when: string, actions: React.ReactNode, error?: string) => {
+  const cells = (id: number, filename: string, v: number | undefined, status: React.ReactNode, when: string, actions: React.ReactNode, error?: string, bad?: boolean) => {
     const chosen = selIds.includes(id)
     const box = <Check state={chosen ? 'all' : 'none'} label={`Select ${filename}`} onClick={e => pick(id, e.shiftKey)} />
+    const cls = [chosen ? 'sel' : '', bad ? 'bad' : ''].filter(Boolean).join(' ') || undefined
     return phone ? (
-    <tr key={id} className={chosen ? 'sel' : undefined}><td colSpan={6}>
+    <tr key={id} className={cls}><td colSpan={6}>
       <div className="row" style={{ gap: 10 }}>
         <label className="devcheckcell">{box}</label>
-        <Thumb id={id} v={v} onClick={() => s.reveal(id)} />
+        <Thumb id={id} v={v} name={filename} onClick={() => onView(id)} />
         <div className="col grow" style={{ gap: 4, alignItems: 'flex-start' }}>
           <span className="ellipsis" style={{ maxWidth: '100%' }}>{filename}</span>
           {status}
-          {error && <span className="tiny" style={{ color: '#ff8b8e' }}>{error}</span>}
+          {error && <span className="tiny" style={{ color: '#ff9a9d' }}>{error}</span>}
         </div>
       </div>
       <div className="devacts">{actions}</div>
     </td></tr>
   ) : (
-    <tr key={id} className={chosen ? 'sel' : undefined}>
+    <tr key={id} className={cls}>
       <td className="devcheckcell">{box}</td>
-      <td style={{ width: 64 }}><Thumb id={id} v={v} onClick={() => s.reveal(id)} /></td>
-      <td><button className="linkbtn" title="Show in the library" onClick={() => s.reveal(id)}>{filename}</button>{error && <div className="tiny" style={{ color: '#ff8b8e' }}>{error}</div>}</td>
+      <td style={{ width: 64 }}><Thumb id={id} v={v} name={filename} onClick={() => onView(id)} /></td>
+      <td><button className="linkbtn" title="Show in the library" onClick={() => s.reveal(id)}>{filename}</button>{error && <div className="tiny" style={{ color: '#ff9a9d' }}>{error}</div>}</td>
       <td><div className="col" style={{ gap: 6, alignItems: 'flex-start' }}>{status}</div></td>
       <td className="muted nowrap">{when}</td>
       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div className="row" style={{ display: 'inline-flex', gap: 6 }}>{actions}</div></td>
@@ -222,24 +246,35 @@ function PhotoTable({ a, name, now, act, phone, sel, setSel }: { a: Agent; name:
     const st = STATUS[w.status] || [w.status, '#2a2a2e', '#c8c8cc']
     const pr = itemProgress(a, w, now)
     const copying = w.status === 'downloading'
+    const unsaved = hasUnsavedEdits(w)
+    const primary = copying ? (skip && a.transfer?.current?.id === w.id ? dont(w.id, w.filename, 'Give up this photo; the copy carries on with the next one') : null)
+      : unsaved ? <button className={'btn primary' + big} title={`Copy the edits (XMP) from ${name} back to the NAS now. The photo stays on ${name} so you can keep editing.`} onClick={() => act.job('sync', a.id, [w.id])}>Save to NAS</button>
+        : <button className={'btn' + big} title={`Open the copy on ${name} in darktable's darkroom`} onClick={() => act.job('open', a.id, [w.id])}>Open in darktable</button>
     return cells(w.id, w.filename, w.synced_ts,
       <>{pill(w.status === 'ready' ? `on ${name} · ready to edit` : st[0], st[1], st[2])}{pr && <ProgressBar label={pr.step} fraction={pr.fraction} />}</>,
       w.checkout_ts ? ago(w.checkout_ts, now) : '',
-      copying ? <>{show(w.id)}{skip && a.transfer?.current?.id === w.id && dont(w.id, w.filename, 'Give up this photo; the copy carries on with the next one')}</>
-        : <>
-          {show(w.id)}
-          <button className={'btn' + big} title={`Open the copy on ${name} in darktable's darkroom`} onClick={() => act.job('open', a.id, [w.id])}>Open in darktable</button>
-          <button className={'btn' + big} title={`Copy the edits (XMP) from ${name} back to the NAS now. The photo stays on ${name} so you can keep editing.`} onClick={() => act.job('sync', a.id, [w.id])}>Save edits to NAS</button>
-          <button className={'btn danger' + big} title={`Done with it: save the edits to the NAS, close it in darktable and delete the working copy on ${name}. The original on the NAS is never touched.`} onClick={() => act.job('release', a.id, [w.id])}>Done · remove from {name}</button>
-        </>,
-      w.error)
+      <>{primary}{!copying && <RowMenu label={`More for ${w.filename}`} big={!!phone} items={arrivedMenu(a, name, act, s, w, () => onView(w.id))} />}</>,
+      w.status === 'error' ? w.error : undefined)
   }
-  const queued = (w: TransferItem, words: string, title: string) => cells(w.id, w.filename || `photo ${w.id}`, 0, pill(words), '', <>{show(w.id)}{(skip || !a.transfer) && dont(w.id, w.filename || `photo ${w.id}`, title)}</>)
-  if (!rows.copying.length && !rows.waiting.length && !rows.arrived.length && !rows.unsent.length)
-    return <div className="small muted">{isPhoneAgent(a) ? `No photos on ${name}.` : `Nothing checked out on ${name}.`}</div>
+  const bad = (f: FailedItem) => cells(f.id, f.filename || `photo ${f.id}`, 0, pill('couldn’t send', '#3a1f22', '#ff9a9d'), f.time ? ago(f.time, now) : '',
+    <>
+      <button className={'btn' + big} title={`Send it to ${name} again`} onClick={() => act.retry(a.id, [f.id])}>Retry</button>
+      <button className={'btn' + big} title={`Take it off this page. Nothing of it is on ${name}; the original on the NAS is not touched.`} onClick={() => act.clear(a.id, [f.id])}>Clear</button>
+      <RowMenu label={`More for ${f.filename}`} big={!!phone} items={[
+        { label: 'Full view', hint: 'Space', run: () => onView(f.id) },
+        { label: 'Show in library', run: () => s.reveal(f.id) },
+      ]} />
+    </>, f.error || 'The copy from the NAS did not complete.', true)
+  const queued = (w: TransferItem, words: string, title: string) => cells(w.id, w.filename || `photo ${w.id}`, 0, pill(words), '',
+    <>{(skip || !a.transfer || words === 'not sent') && dont(w.id, w.filename || `photo ${w.id}`, title)}
+      <RowMenu label={`More for ${w.filename}`} big={!!phone} items={[{ label: 'Full view', hint: 'Space', run: () => onView(w.id) }, { label: 'Show in library', run: () => s.reveal(w.id) }]} /></>)
+  if (!order.length)
+    return <div className="small muted">{filter !== 'all' ? 'Nothing here.' : isPhoneAgent(a) ? `No photos on ${name}.` : `Nothing checked out on ${name}.`}</div>
   const keys = (e: React.KeyboardEvent) => {
+    if ((e.target as HTMLElement).closest('.rowmenu')) return
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') { e.preventDefault(); setSel(order, order[0] ?? null) }
     else if (e.key === 'Escape' && selIds.length) { e.preventDefault(); setSel([], null) }
+    else if (e.key === ' ' && selIds.length && (e.target as HTMLElement).tagName !== 'BUTTON') { e.preventDefault(); onView(selIds[0]) }
   }
   return (
     <div className="devsel" onKeyDown={keys}>
@@ -248,6 +283,9 @@ function PhotoTable({ a, name, now, act, phone, sel, setSel }: { a: Agent; name:
       <table className="wtable devtable">
         {!phone && <thead><tr><th className="devcheckcell">{headBox}</th><th /><th>Photo</th><th>Status</th><th>Checked out</th><th /></tr></thead>}
         <tbody>
+          {rows.failed.length > 0 && heading('Couldn’t send', rows.failed)}
+          {failed.shown.map(bad)}
+          {failed.toggle}
           {rows.copying.map(item)}
           {rows.waiting.length > 0 && heading('Waiting', rows.waiting)}
           {waiting.shown.map(w => queued(w, 'waiting', 'Take this photo out of the queue'))}
@@ -261,14 +299,77 @@ function PhotoTable({ a, name, now, act, phone, sel, setSel }: { a: Agent; name:
         </tbody>
       </table>
     </div>
-    {selIds.length > 0 && <SelectionBar a={a} name={name} act={act} sel={selIds} rows={selRows} clear={() => setSel([], null)} phone={phone} />}
+    {selIds.length > 0 && <SelectionBar a={a} name={name} act={act} sel={selIds} rows={selRows} clear={() => setSel([], null)} phone={phone} onView={() => onView(selIds[0])} />}
     </div>
   )
 }
 
-function DeviceCard({ a, folded, onFold, now, act, phone, sel, setSel }: { a: Agent; folded: boolean; onFold: (f: boolean) => void; now: number; act: Actions; phone?: boolean; sel: Selection | null; setSel: (ids: number[], anchor: number | null) => void }) {
+/** The ⋯ menu of a photo that is on the device. */
+export function arrivedMenu(a: Agent, name: string, act: Actions, s: ReturnType<typeof useStore>, w: WorkItem, view?: () => void): MenuItem[] {
+  const unsaved = hasUnsavedEdits(w)
+  return [
+    ...(view ? [{ label: 'Full view', hint: 'Space', run: view }] : []),
+    { label: `Open in darktable on ${name}`, run: () => act.job('open', a.id, [w.id]) },
+    ...(unsaved ? [{ label: 'Save edits to NAS', run: () => act.job('sync', a.id, [w.id]) }] : []),
+    { label: 'Show in library', run: () => s.reveal(w.id) },
+    { sep: true as const },
+    { label: `Forget, keep the copy on ${name}`, title: `LPL stops tracking it; the files stay on ${name}.`, run: () => act.forget(a.id, [w.id], 'keep') },
+    { label: unsaved ? `Save edits, then remove from ${name}` : `Remove from ${name}`, danger: true,
+      title: `Edits are saved to the NAS first, then the working copy on ${name} is deleted. The original on the NAS is never touched.`,
+      run: () => act.job('release', a.id, [w.id]) },
+    ...(unsaved ? [{ label: 'Discard edits and remove…', danger: true,
+      run: () => window.confirm(`Delete ${w.filename} on ${name} WITHOUT saving its edits to the NAS? The NAS keeps the version it has.`) && act.forget(a.id, [w.id], 'discard') }] : []),
+  ]
+}
+
+const CHIPS: [RowFilter, string][] = [['all', 'All'], ['failed', 'Couldn’t send'], ['sending', 'Sending'], ['ready', 'Ready to edit'], ['unsaved', 'Edited, not saved'], ['saved', 'Saved to NAS'], ['unsent', 'Not sent']]
+
+/** All · Couldn't send · Sending · Ready to edit · Edited, not saved · Saved to NAS · Not sent, each with its number (empty ones hidden). */
+function FilterChips({ a, filter, setFilter, phone }: { a: Agent; filter: RowFilter; setFilter: (f: RowFilter) => void; phone?: boolean }) {
+  const n = filterCounts(deviceRows(a))
+  const shown = CHIPS.filter(([k]) => k === 'all' || n[k] > 0 || k === filter)
+  if (shown.length <= 2 && filter === 'all') return null  // one kind of row only: nothing to filter
+  return (
+    <div className={'devchips' + (phone ? ' m' : '')} role="group" aria-label="Show">
+      {shown.map(([k, l]) => <button key={k} className={'devchip ' + k + (filter === k ? ' on' : '')} aria-pressed={filter === k} onClick={() => setFilter(k)}>{l} <b>{n[k]}</b></button>)}
+    </div>
+  )
+}
+
+/** "2 photos couldn't be sent to Laptop" with Look at them, Retry and Clear from queue. */
+function FailedBanner({ a, name, act, look, phone, compact }: { a: Agent; name: string; act: Actions; look: () => void; phone?: boolean; compact?: boolean }) {
+  const f = deviceRows(a).failed
+  if (!f.length) return null
+  const ids = f.map(x => x.id), one = f.length === 1, big = phone ? ' big' : ''
+  const why = f.find(x => x.error)?.error
+  return (
+    <div role="alert" className={'devfail' + (phone ? ' m' : '') + (compact ? ' compact' : '')}>
+      <div className="col grow" style={{ gap: 2, minWidth: 0 }}>
+        <b>{one ? `1 photo couldn’t be sent to ${name}` : `${f.length} photos couldn’t be sent to ${name}`}</b>
+        {!compact && <span className="small">{why ? `${why}. ` : ''}Nothing of {one ? 'it' : 'them'} is on {name}{a.transfer ? '; the rest of the batch carries on' : ''}.</span>}
+      </div>
+      <div className="row" style={{ gap: 8, flexWrap: phone ? 'wrap' : 'nowrap' }}>
+        <button className={'btn' + big} onClick={look}>Look at {one ? 'it' : 'them'}</button>
+        <button className={'btn primary' + big} title={`Send ${one ? 'it' : 'them'} to ${name} again`} onClick={() => act.retry(a.id, ids)}>Retry{one ? '' : ` ${f.length}`}</button>
+        <button className={'btn' + big} title={`Take ${one ? 'it' : 'them'} off this page. The originals on the NAS are not touched.`} onClick={() => act.clear(a.id, ids)}>Clear from queue</button>
+      </div>
+    </div>
+  )
+}
+
+function DeviceCard({ a, folded, onFold, now, act, phone, sel, setSel, onView }: { a: Agent; folded: boolean; onFold: (f: boolean) => void; now: number; act: Actions; phone?: boolean; sel: Selection | null; setSel: (ids: number[], anchor: number | null) => void; onView: (id: number, order: number[]) => void }) {
   const s = useStore()
   const name = agentLabel(a, s.agents)
+  const [filter, setFilterRaw] = useState<RowFilter>('all')
+  const counts = filterCounts(deviceRows(a))
+  const shownFilter: RowFilter = filter !== 'all' && counts[filter] === 0 ? 'all' : filter  // its last photo left: back to All
+  const setFilter = (f: RowFilter) => { setFilterRaw(f); setSel([], null) }
+  const view = (id: number) => onView(id, rowInfos(a, shownFilter).map(r => r.id))
+  const look = () => { setFilter('failed'); if (folded) onFold(false) }
+  const table = <>
+    <FilterChips a={a} filter={shownFilter} setFilter={setFilter} phone={phone} />
+    <PhotoTable a={a} name={name} now={now} act={act} phone={phone} sel={sel} setSel={setSel} filter={shownFilter} onView={view} />
+  </>
   const ws = a.state?.working_set || []
   const unsaved = ws.filter(hasUnsavedEdits).map(w => w.id)
   const synced = ws.filter(w => w.status === 'synced').map(w => w.id)
@@ -300,8 +401,9 @@ function DeviceCard({ a, folded, onFold, now, act, phone, sel, setSel }: { a: Ag
       {lines}
       {t ? <TransferBox a={a} name={name} now={now} act={act} phone /> : <span className="soft" style={{ fontSize: 13 }}>{deviceCounts(a)}</span>}
       {st && <StoppedBox a={a} name={name} act={act} phone />}
+      <FailedBanner a={a} name={name} act={act} look={look} phone compact={folded} />
       {save}{remove}
-      {!folded && <PhotoTable a={a} name={name} now={now} act={act} phone sel={sel} setSel={setSel} />}
+      {!folded && table}
     </section>
   )
   return (
@@ -325,7 +427,8 @@ function DeviceCard({ a, folded, onFold, now, act, phone, sel, setSel }: { a: Ag
       {lines}
       {!folded && t && <TransferBox a={a} name={name} now={now} act={act} />}
       {!folded && st && <StoppedBox a={a} name={name} act={act} />}
-      {!folded && <PhotoTable a={a} name={name} now={now} act={act} sel={sel} setSel={setSel} />}
+      <FailedBanner a={a} name={name} act={act} look={look} compact={folded} />
+      {!folded && table}
     </section>
   )
 }
@@ -376,11 +479,12 @@ export function DevicesView() {
   const [settings, setSettings] = useState(false)
   // The photos he ticked: of one device at a time; photos that leave the device's list leave the selection.
   const [selection, setSelection] = useState<Selection | null>(null)
+  const [full, setFull] = useState<FullView | null>(null)
   useEffect(() => {
     if (!selection) return
     const a = s.agents.find(x => x.id === selection.agent)
     const r = a ? deviceRows(a) : null
-    const ids = r ? prune(selection.ids, [...r.copying, ...r.waiting, ...r.arrived, ...r.unsent].map(x => x.id)) : []
+    const ids = r ? prune(selection.ids, [...r.failed, ...r.copying, ...r.waiting, ...r.arrived, ...r.unsent].map(x => x.id)) : []
     if (ids !== selection.ids) setSelection(ids.length ? { ...selection, ids } : null)
   }, [s.agents])
   // His fold choices are kept on the server, so every browser agrees; the phone layout keeps its own (under
@@ -411,7 +515,9 @@ export function DevicesView() {
     </div>
   )
   const cards = s.agents.map(a => <DeviceCard key={a.id} a={a} folded={folded(a)} onFold={f => setFolds({ [key(a)]: f })} now={now} act={act} phone={phone}
-    sel={selection?.agent === a.id ? selection : null} setSel={(ids, anchor) => setSelection(ids.length ? { agent: a.id, ids, anchor } : null)} />)
+    sel={selection?.agent === a.id ? selection : null} setSel={(ids, anchor) => setSelection(ids.length ? { agent: a.id, ids, anchor } : null)}
+    onView={(id, order) => setFull({ agent: a.id, order, id })} />)
+  const fullAgent = full && s.agents.find(x => x.id === full.agent)
   return (
     <div className="scroll">
       {phone ? (
@@ -442,6 +548,9 @@ export function DevicesView() {
         </div>
       )}
       {settings && <SettingsDialog section="devices" onClose={() => setSettings(false)} />}
+      {full && fullAgent && <DeviceFullView a={fullAgent} view={full} setView={setFull} act={act} now={now}
+        sel={selection?.agent === full.agent ? selection.ids : []}
+        setSel={ids => setSelection(ids.length ? { agent: full.agent, ids, anchor: ids[ids.length - 1] } : null)} />}
     </div>
   )
 }

@@ -27,7 +27,10 @@ RestartSec=5
 WantedBy=default.target
 EOF
   systemctl --user daemon-reload
-  systemctl --user enable --now lightphotolibrary-agent.service
+  systemctl --user enable lightphotolibrary-agent.service
+  # restart, not just start: an agent that was already running would otherwise go on with the old code and
+  # the old settings (the old name kept showing in LightPhotoLibrary after a reinstall)
+  systemctl --user restart lightphotolibrary-agent.service
   echo "Agent running as a user service: systemctl --user status lightphotolibrary-agent"
 else
   echo "No systemd found: start it yourself with  python3 $dest/lpl_agent.py &"

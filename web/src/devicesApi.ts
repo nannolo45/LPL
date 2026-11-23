@@ -16,6 +16,14 @@ export const devicesApi = {
   cancelJob: (job: number) => call<{ ok: boolean }>('POST', `/api/jobs/${job}/cancel`),
   /** Remember folded / unfolded per device (null forgets the choice). */
   fold: (folds: Record<string, boolean | null>) => call<{ folds: Record<string, boolean> }>('PUT', '/api/devices/fold', { folds }),
+  /** Send photos it could not copy again, as a new batch. */
+  retry: (id: string, ids: number[]) => call<{ ok: boolean; id: number; photos: number }>('POST', `${dev(id)}/retry`, { ids }),
+  /** "Clear from queue": photos it could not copy leave the page (what a failed copy left on it is deleted there). */
+  clear: (id: string, ids: number[]) => call<{ ok: boolean; cleared: number; on_device: number }>('POST', `${dev(id)}/clear`, { ids }),
+  /** Rename a device; the device is told, so it keeps the name. */
+  rename: (id: string, name: string) => call<{ ok: boolean; name: string }>('PUT', `${dev(id)}/name`, { name }),
+  /** Merge an old entry of a computer into its current one (only an entry that stopped reporting). */
+  merge: (id: string, into: string) => call<{ ok: boolean }>('POST', `${dev(id)}/merge`, { into }),
   /** Take an offline device off the list (it comes back if it connects again). */
   forget: (id: string) => call<{ ok: boolean }>('DELETE', dev(id)),
 }

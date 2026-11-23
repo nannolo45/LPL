@@ -55,3 +55,9 @@ test('actions: on the device with nothing unsaved has no Save', () => {
   const b = bulkActions(rows, [5])
   assert.equal(b.save.length, 0); assert.deepEqual(b.done, [5])
 })
+
+test('actions: photos that could not be copied offer Retry and Clear, nothing else', () => {
+  const b = bulkActions([...rows, { id: 9, kind: 'failed' }], [9, 4])
+  assert.deepEqual(b.retry, [9]); assert.deepEqual(b.clear, [9])
+  assert.deepEqual(b.drop, []); assert.equal(b.stuck, 0); assert.deepEqual(b.done, [4])
+})

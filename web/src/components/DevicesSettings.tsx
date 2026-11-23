@@ -12,7 +12,7 @@ import { devicesApi, refreshStatus } from '../devicesApi'
 import { setSetting, Settings, useSettings } from '../settings'
 import { Chevron } from './DevicesBits'
 
-function Switch({ k, label, help }: { k: 'devicesAutoOpen' | 'devicesEtaInBar'; label: string; help: string }) {
+function Switch({ k, label, help }: { k: 'devicesAutoOpen' | 'devicesEtaInBar' | 'devicesAutoMerge'; label: string; help: string }) {
   const st: Settings = useSettings()
   return (
     <div className="setrow">
@@ -30,18 +30,51 @@ function Switch({ k, label, help }: { k: 'devicesAutoOpen' | 'devicesEtaInBar'; 
 function DeviceDetails({ a, now }: { a: Agent; now: number }) {
   const s = useStore()
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<string | null>(null)
   const name = agentLabel(a, s.agents)
   const pill = devicePills(a, ago(a.last_seen, now))[0]
   const forget = () => window.confirm(`Remove “${name}” from this list? It comes back if it connects again.`)
     && devicesApi.forget(a.id).then(() => { s.toast('Removed'); refreshStatus() }).catch(e => s.toast(e.message))
+  const save = () => {
+    const v = (editing || '').trim()
+    if (!v || v === a.name) return setEditing(null)
+    devicesApi.rename(a.id, v).then(() => { setEditing(null); refreshStatus() }).catch(e => s.toast(e.message))
+  }
+  // the same computer under another id: this entry stopped reporting, the other is the one in use
+  const twin = (a.same_machine || []).map(id => s.agents.find(x => x.id === id)).find(x => x && (x.online || x.last_seen > a.last_seen))
+  const merge = () => twin && devicesApi.merge(a.id, twin.id).then(() => { s.toast(`Merged into ${agentLabel(twin, s.agents)}`); refreshStatus() }).catch(e => s.toast(e.message))
   return (
-    <div className="col" style={{ gap: 6, padding: '9px 0', borderBottom: '1px solid var(--line)' }}>
+    <div className={'col devset' + (twin && !a.online ? ' twin' : '')} style={{ gap: 6, padding: '9px 0', borderBottom: '1px solid var(--line)' }}>
       <div className="row wrap">
-        <span className="display" style={{ fontSize: 15 }}>{name}</span>
+        {editing != null ? (
+          <form className="row" style={{ gap: 6 }} onSubmit={e => { e.preventDefault(); save() }}>
+            <input className="input" aria-label={`New name for ${name}`} autoFocus value={editing} maxLength={60}
+              onChange={e => setEditing(e.target.value)} onKeyDown={e => { if (e.key === 'Escape') { e.stopPropagation(); setEditing(null) } }} />
+            <button className="btn primary" type="submit">Save name</button>
+            <button className="btn ghost" type="button" onClick={() => setEditing(null)}>Cancel</button>
+          </form>
+        ) : <>
+          <span className="display" style={{ fontSize: 15 }}>{name}</span>
+          <button className="linkbtn tiny soft" style={{ textDecoration: 'underline' }} onClick={() => setEditing(a.name || '')}>Rename</button>
+        </>}
         <span className={pill[0] ? 'pill-ok' : 'pill-off'}><i />{pill[1]}</span>
         <div className="grow" />
         <button className="devmore" aria-expanded={open} aria-label={`Details of ${name}`} onClick={() => setOpen(!open)}><Chevron open={open} />Details</button>
       </div>
+      {a.renaming && <span className="tiny muted">{name} takes the new name the next time it reports{a.os === 'android' ? ' (the phone app keeps the name given here)' : ''}.</span>}
+      {(a.merged_from || []).length > 0 && <span className="tiny muted">Earlier entries of this computer merged into it: {a.merged_from!.join(', ')}.</span>}
+      {twin && !a.online && (
+        <div role="alert" className="devfail" style={{ marginTop: 4 }}>
+          <div className="col grow" style={{ gap: 2, minWidth: 0 }}>
+            <b>Same computer as {agentLabel(twin, s.agents)}</b>
+            <span className="small">The agent was installed again and came back under a new entry. Merging keeps {agentLabel(twin, s.agents)}'s name and moves over what is still linked to “{name}” (batches, the edit log).</span>
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn primary" onClick={merge}>Merge into {agentLabel(twin, s.agents)}</button>
+            <button className="btn danger" onClick={forget}>Remove “{name}”</button>
+          </div>
+        </div>
+      )}
       {open && (
         <div className="col small" style={{ gap: 6, paddingLeft: 4 }}>
           <span className="soft">System: {a.os || 'unknown'}{a.state?.version ? ` · version ${a.state.version}` : ''}</span>
@@ -72,6 +105,8 @@ export function DevicesSettings() {
           help="Off: they are copied and wait on the device until you open one. Devices that do not know this setting yet (older agents, the phone app) open them as before." />
         <Switch k="devicesEtaInBar" label="Show the time-left estimate in the top bar"
           help="Off: the top bar shows only how many photos have arrived. The Devices page always shows the estimate." />
+        <Switch k="devicesAutoMerge" label="Merge a reinstalled agent into its old entry"
+          help="On: when the agent is installed again on a computer LPL knows, the old entry is folded into the new one without asking. Off: both are listed and you merge them here." />
         <span className="caps" style={{ marginTop: 10 }}>Devices</span>
         {s.agents.length ? s.agents.map(a => <DeviceDetails key={a.id} a={a} now={now} />)
           : <span className="small muted" style={{ padding: '6px 0' }}>No device has connected yet.</span>}
@@ -84,7 +119,7 @@ export function DevicesSettings() {
         <button className="btn" onClick={() => window.confirm('Re-read metadata of every photo? This takes a while on 20,000 photos.') && api.scan(true).then(() => s.toast('Full rescan started')).catch(e => s.toast(e.message))}>Full rescan</button>
         <span className="tiny muted">v{s.status?.version}</span>
       </div>
-      <span className="tiny muted" style={{ marginTop: 10 }}>The two switches are saved in the library, so every PC and the phone get the same.</span>
+      <span className="tiny muted" style={{ marginTop: 10 }}>These switches are saved in the library, so every PC and the phone get the same.</span>
     </div>
   )
 }

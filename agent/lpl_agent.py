@@ -18,6 +18,7 @@ What it does, in a loop every couple of seconds:
      uploads it to the server, which writes it next to the original on the NAS
 """
 import argparse
+import hashlib
 import json
 import logging
 import os
@@ -37,7 +38,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from queue import Queue
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 # What this agent can do beyond the first protocol, announced in every heartbeat (docs/devices-stop-estimate.md):
 # batch = reports how far each edit job is; cancel = stops a job or leaves out photos when the heartbeat answer
 # says so; open = honours "open": false in an edit job (copy the photos, do not open darktable);
@@ -121,6 +122,44 @@ def load_config() -> dict:
     cfg.setdefault("local_library", True)   # this PC's own library (works without the NAS), at http://localhost:<local_port>
     cfg.setdefault("local_port", 8090)
     return cfg
+
+
+_MACHINE = None
+
+
+def machine_id() -> str:
+    """A hash of this computer's own id (/etc/machine-id, Windows' MachineGuid, the Mac's platform UUID), sent
+    with every heartbeat so LPL can tell that an agent installed again under a new id is the same computer.
+    Empty when there is none to be had. The raw id never leaves the computer."""
+    global _MACHINE
+    if _MACHINE is not None:
+        return _MACHINE
+    raw = ""
+    try:
+        if IS_WIN:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0,
+                                winreg.KEY_READ | getattr(winreg, "KEY_WOW64_64KEY", 0)) as k:
+                raw = str(winreg.QueryValueEx(k, "MachineGuid")[0])
+        elif sys.platform == "darwin":
+            out = subprocess.run(["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"], capture_output=True, text=True).stdout
+            m = re.search(r'"IOPlatformUUID" = "([^"]+)"', out)
+            raw = m.group(1) if m else ""
+        else:
+            for f in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+                if Path(f).is_file():
+                    raw = Path(f).read_text(encoding="utf-8").strip()
+                    if raw:
+                        break
+    except Exception:
+        raw = ""
+    _MACHINE = hashlib.sha256(("lpl:" + raw).encode()).hexdigest()[:24] if raw else ""
+    return _MACHINE
+
+
+def copy_failed(it: dict) -> bool:
+    """A working-set entry whose copy from the NAS never completed (no XMP here yet): nothing of the user's in it."""
+    return it.get("status") == "error" and (bool(it.get("copy_failed")) or not it.get("synced_mtime"))
 
 
 def save_config(cfg: dict) -> None:
@@ -491,7 +530,8 @@ class Agent:
 
     def state(self):
         with self.lock:
-            ws = [{k: v for k, v in it.items() if k in ("id", "filename", "status", "checkout_ts", "synced_ts", "error", "step", "progress")}
+            ws = [dict({k: v for k, v in it.items() if k in ("id", "filename", "status", "checkout_ts", "synced_ts", "error", "step", "progress")},
+                       **({"copy_failed": True} if copy_failed(it) else {}))
                   for it in sorted(self.items.values(), key=lambda x: x.get("checkout_ts", 0))]
         running = darktable_running()
         return {"working_set": ws, "darktable_running": running, "bridge_alive": bridge_alive(),
@@ -521,8 +561,42 @@ class Agent:
         self.save()
 
     def heartbeat_body(self):
-        return {"id": self.cfg["id"], "name": self.cfg["name"], "os": platform.system().lower(), "state": self.state(),
-                "caps": CAPS, "transfers": self.transfers()}
+        self.reread_name()
+        return {"id": self.cfg["id"], "name": self.cfg["name"], "machine": machine_id(), "os": platform.system().lower(),
+                "state": self.state(), "caps": CAPS, "transfers": self.transfers()}
+
+    def reread_name(self):
+        """The setup run again while this agent runs (reinstalling does that) may have given this PC another
+        name: take it from the config file, so LPL shows the new one without a restart."""
+        try:
+            m = config_path().stat().st_mtime
+        except OSError:
+            return
+        if m == getattr(self, "_cfg_mtime", None):
+            return
+        self._cfg_mtime = m
+        try:
+            name = (json.loads(config_path().read_text(encoding="utf-8")).get("name") or "").strip()
+        except (OSError, ValueError):
+            return
+        if name and name != self.cfg["name"]:
+            log.info("name changed in the config: %s -> %s", self.cfg["name"], name)
+            self.cfg["name"] = name
+
+    def take_rename(self, name):
+        """LPL was told another name for this PC: keep it in the config, so it outlives a restart or a reinstall."""
+        name = (name or "").strip() if isinstance(name, str) else ""
+        if not name or name == self.cfg["name"]:
+            return
+        log.info("renamed in LightPhotoLibrary: %s -> %s", self.cfg["name"], name)
+        self.cfg["name"] = name
+        try:
+            on_disk = json.loads(config_path().read_text(encoding="utf-8")) if config_path().is_file() else dict(self.cfg)
+            on_disk["name"] = name
+            save_config(on_disk)
+            self._cfg_mtime = config_path().stat().st_mtime
+        except Exception as e:
+            log.warning("could not save the new name: %s", e)
 
     # --- batches: how far each edit job is
     def transfers(self):
@@ -559,6 +633,7 @@ class Agent:
                     self.batches[j["id"]] = {"state": "queued", "arrived": [], "present": [], "failed": [], "skipped": [],
                                              "photo": None, "bytes": 0, "unsaid": False}
             self.jobs.put(j)
+        self.take_rename(answer.get("rename"))
         c = answer.get("cancel")
         if isinstance(c, dict):  # the whole list every time: what is not in it any more is not to be stopped
             self.cancel_jobs = set(c.get("jobs") or [])
@@ -607,6 +682,10 @@ class Agent:
             elif kind == "release":
                 for i in ids:
                     self.release(i)
+            elif kind == "forget":
+                mode = (job.get("payload") or {}).get("mode") or "failed"
+                for i in ids:
+                    self.forget(i, mode)
         except Exception as e:
             log.exception("job failed")
             self.message = "Last job failed: %s" % e
@@ -659,7 +738,7 @@ class Agent:
                 continue
             with self.lock:
                 it = self.items.get(pid)
-            if it and Path(it["local_path"]).is_file() and it.get("status") != "downloading":
+            if it and Path(it["local_path"]).is_file() and it.get("status") != "downloading" and not copy_failed(it):
                 self.refresh_versions(str(pid), it)
                 opened.append(Path(it["local_path"]))
                 self._mark(b, "present", pid)
@@ -721,7 +800,7 @@ class Agent:
                 self._mark(b, "skipped", pid)
                 continue
             except Exception as e:
-                it.update(status="error", error=str(e))
+                it.update(status="error", error=str(e), copy_failed=True)
                 self._mark(b, "failed", pid)
             finally:
                 self.step(it)
@@ -903,6 +982,9 @@ class Agent:
         it = self.items.get(pid)
         if not it:
             return
+        if copy_failed(it):  # nothing to save: what the copy left is deleted
+            self.forget(pid, "failed")
+            return
         self.sync(pid)
         if it["status"] == "error":
             return
@@ -919,6 +1001,33 @@ class Agent:
                 self.items.pop(pid, None)
         except OSError as e:
             it.update(status="error", error="could not delete local copy (still open in darktable?): %s" % e)
+        self.save()
+
+    def forget(self, pid: str, mode: str = "failed"):
+        """Take a photo off this PC's list. mode "failed": only a copy that never completed, with what it left;
+        "keep": the files stay where they are, LPL just stops tracking them; "discard": delete the copy and its
+        edits without saving them to the NAS (asked for explicitly on the Devices page)."""
+        it = self.items.get(pid)
+        if not it or it.get("status") in ("downloading", "syncing"):
+            return
+        if mode == "failed" and not copy_failed(it):
+            return
+        if mode != "keep":
+            p = Path(it["local_path"])
+            if mode == "discard" and darktable_running():
+                self.bridge.add("forget", p)
+                self.bridge.flush()
+                time.sleep(1.5)
+            try:
+                for f in [Path(str(p) + ".xmp"), p, Path(str(p) + ".part")] + list(local_versions(p).values()):
+                    if f.exists():
+                        f.unlink()
+            except OSError as e:
+                it.update(status="error", error="could not delete local copy (still open in darktable?): %s" % e)
+                self.save()
+                return
+        with self.lock:
+            self.items.pop(pid, None)
         self.save()
 
     # --- watching

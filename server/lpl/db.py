@@ -255,6 +255,8 @@ def migrate(c: sqlite3.Connection) -> None:
     versions.migrate(c)
     from . import transfers  # batches sent to devices: its own tables, and agents.caps
     transfers.migrate(c)
+    from . import identity  # agents.machine, agents.name_pending, agents.merged_from
+    identity.migrate(c)
     from . import autotag  # auto-tagging: results, corrections, where each preview came from
     autotag.migrate(c)
     c.commit()

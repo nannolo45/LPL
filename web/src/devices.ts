@@ -26,6 +26,11 @@ const UNSAVED = new Set(['dirty', 'editing', 'edited', 'modified', 'unsynced', '
 export const hasUnsavedEdits = (w: Pick<WorkItem, 'status' | 'error'>) =>
   UNSAVED.has((w.status || '').toLowerCase()) || (w.status === 'error' && /sync/i.test(w.error || ''))
 
+/** A working-set entry whose copy from the NAS never completed: nothing of the user's in it, so Retry or
+ *  "Clear from queue" are safe. Agents from before copy_failed: an error that is not about saving edits. */
+export const isCopyFailed = (w: Pick<WorkItem, 'status' | 'error' | 'copy_failed'>) =>
+  w.status === 'error' && (!!w.copy_failed || !hasUnsavedEdits(w))
+
 /** The darktable phone app reports os "android"; it only gets jobs addressed to it. */
 export const isPhoneAgent = (a: Pick<Agent, 'os'>) => a.os === 'android'
 
