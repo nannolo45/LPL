@@ -127,6 +127,20 @@ CREATE TABLE IF NOT EXISTS series_shapes (
     data TEXT NOT NULL DEFAULT '[]'
 );
 
+-- files the darktable Android app exported to LPL (R18, exports.py)
+CREATE TABLE IF NOT EXISTS photo_exports (
+    id INTEGER PRIMARY KEY,
+    photo_id INTEGER NOT NULL,
+    version INTEGER NOT NULL DEFAULT 0,
+    path TEXT NOT NULL,            -- relative to the library root when inside it, else absolute
+    name TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    format TEXT NOT NULL,
+    created REAL NOT NULL,
+    agent TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_photo_exports_photo ON photo_exports(photo_id);
+
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT

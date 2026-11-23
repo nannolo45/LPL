@@ -11,6 +11,7 @@ import { SeriesLine } from './SeriesLine'
 import { AutotagLine, useAutoTags } from './Autotag'
 import { buildTree } from '../seriesnav'
 import { bumpSeries } from '../seriesops'
+import { ExportsList } from './Exports'
 import { bumpVersions } from '../versions'
 import { useVersionsFor, VersionsStrip } from './Versions'
 
@@ -326,6 +327,7 @@ export function Inspector() {
             {one.title && <><span>Title</span><span>{one.title}</span></>}
           </div>
           {vv.list && <VersionsStrip p={one} list={vv.list} n={vv.n} />}
+          <ExportsList p={one} />
           <LastEdit p={one} />
           <WhereLine id={one.id} />
           <SeriesLine id={one.id} />

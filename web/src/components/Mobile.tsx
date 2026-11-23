@@ -16,6 +16,7 @@ import { useSeriesOps } from '../seriesops'
 import { DevicesIndicatorPhone } from './DevicesIndicator'
 import { SettingsDialog } from './Shortcuts'
 import { EditOnPhone, useListTitle } from './PhoneEdit'
+import { ExportsList } from './Exports'
 import { useVersionsFor, VersionBadge, VersionsStrip } from './Versions'
 import { selectionIds, takeDeepLink } from '../devices'
 import { useBackLayer } from '../back'
@@ -106,6 +107,7 @@ function PhotoPage({ id, onBack }: { id: number; onBack: () => void }) {
         </div>
         {vv.list && <VersionsStrip p={p} list={vv.list} n={vv.n} />}
         <RatingLabels photos={[vv.view ?? p]} big version={vv.mv} />
+        <ExportsList p={p} />
         <LastEdit p={p} />
         <WhereLine id={p.id} />
         <button className="btn primary big" onClick={() => s.editInDarktable([p.id])}>Edit in darktable</button>

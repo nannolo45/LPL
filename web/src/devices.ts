@@ -94,6 +94,7 @@ export const STEP_WORDS: Record<string, string> = {
   'sending edit': 'sending the edit',
   'rendering preview': 'rendering the preview',
   'sending preview': 'sending the preview',
+  exporting: 'exporting',
 }
 /** As on the server (api.py): a device not heard from for this long is offline. */
 export const AGENT_ONLINE_SECONDS = 15

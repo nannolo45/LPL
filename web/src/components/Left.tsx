@@ -154,11 +154,14 @@ export function FilterPanel() {
           })}
         </div>
       </Section>
-      <Section id="darktable" title="darktable" summary={f.edited === 'yes' ? 'edited' : f.edited === 'no' ? 'not edited' : ''}>
+      <Section id="darktable" title="darktable" summary={[f.edited === 'yes' ? 'edited' : f.edited === 'no' ? 'not edited' : '', f.exports === 'yes' ? 'has exports' : ''].filter(Boolean).join(' · ')}>
         <div className="row" style={{ gap: 4 }}>
           {[['', 'all'], ['yes', 'edited'], ['no', 'not edited']].map(([v, l]) => (
             <button key={v} className={'chip' + ((f.edited || '') === v ? ' on' : '')} onClick={() => s.patchFilters({ edited: v as any })}>{l}</button>
           ))}
+        </div>
+        <div className="row" style={{ gap: 4, marginTop: 4 }}>
+          <button className={'chip' + (f.exports === 'yes' ? ' on' : '')} aria-pressed={f.exports === 'yes'} onClick={() => s.patchFilters({ exports: f.exports === 'yes' ? '' : 'yes' })}>has exports</button>
         </div>
       </Section>
       <Section id="look" title="Look (auto)" defaultOpen={false} summary={picked((f.look || []).length)}

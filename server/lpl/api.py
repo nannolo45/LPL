@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import secrets
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -13,7 +14,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import db, edits, media, query, scanner, versions, xmp
+from . import db, edits, exports, media, query, scanner, versions, xmp
 from .config import RAW_EXTS  # which formats are RAW (the Format filter groups by it)
 from .config import config
 
@@ -866,7 +867,7 @@ def _match(sid: int, filters: Dict[str, Any], sort: List[Dict[str, str]]):
     f = dict(filters or {})
     for k in ("series", "ids", "not_in_series"):
         f.pop(k, None)
-    if not any(f.get(k) for k in ("folders", "folder", "ratings", "labels", "tags", "tag", "lenses", "cameras", "formats", "date_from", "date_to", "q", "edited", "month")):
+    if not any(f.get(k) for k in ("folders", "folder", "ratings", "labels", "tags", "tag", "lenses", "cameras", "formats", "date_from", "date_to", "q", "edited", "exports", "month")):
         raise HTTPException(400, "pick at least one folder or criterion")
     c = db.conn()
     where, args, join = query.build_where(f)
@@ -1082,6 +1083,8 @@ def heartbeat(body: Dict[str, Any] = Body(...)):
                       (now, aid, j["id"]))
             out.append({"id": j["id"], "kind": j["kind"], "payload": json.loads(j["payload"] or "{}")})
         extra = transfers.on_heartbeat(c, aid, body, out, now)  # nothing for a device that announces no caps
+        if transfers.caps_of(c, aid):  # R18: what this server can do, for a device that announces caps (others: no new key)
+            extra = {**extra, "server_caps": exports.SERVER_CAPS}
         c.commit()
     return {"jobs": out, "server_time": time.time(), **extra, **said}
 
@@ -1300,6 +1303,73 @@ async def put_preview(pid: int, request: Request, version: Optional[int] = None)
     if n == cover:
         autotag.mark([pid])
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- exports (R18, docs/exports-r18.md)
+@app.post("/api/photos/{pid}/exports")
+async def put_export(pid: int, request: Request, agent: str = "", version: Optional[int] = None, name: str = "", size: Optional[int] = None):
+    """A file the darktable app exported: streamed to disk (never held in memory), stored under the exports folder in
+    the photo's folder path, a name that is taken gets ' (2)'. size (optional) = the bytes the sender means to send."""
+    if config.local:
+        raise HTTPException(400, "this is a local library, not the NAS")
+    n = _version_arg(version)
+    r = photo_row(pid)
+    try:
+        name = exports.clean_name(name or request.headers.get("x-file-name", ""))
+        d = exports.target_dir(r["relpath"])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    fmt = exports.FORMATS[name.rsplit(".", 1)[-1].lower()]
+    d.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".lpl-export-", dir=str(d))
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as f:
+            async for chunk in request.stream():
+                if total == 0 and chunk and not exports.sniff_ok(chunk[:16], fmt):
+                    raise HTTPException(400, "the file is not a %s" % fmt)
+                total += len(chunk)
+                if total > exports.MAX_BYTES:
+                    raise HTTPException(413, "export too large")
+                f.write(chunk)
+        if total == 0:
+            raise HTTPException(400, "empty upload")
+        if size is not None and total != size:
+            raise HTTPException(400, "upload incomplete (%d of %d bytes)" % (total, size))
+        with db.write_lock:
+            out = exports.add(pid, n, Path(tmp), d, name, total, agent[:80] if agent else None)
+            db.conn().commit()
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return out
+
+
+@app.get("/api/photos/{pid}/exports")
+def list_exports(pid: int):
+    photo_row(pid)
+    return {"id": pid, "exports": exports.list_for(pid)}
+
+
+@app.get("/api/photos/{pid}/exports/{eid}/file")
+def export_file(pid: int, eid: int):
+    r = exports.get(pid, eid)
+    p = exports.path_of(r["path"]) if r else None
+    if not r or not p.is_file():
+        raise HTTPException(404, "no such export")
+    return FileResponse(p, filename=r["name"])
+
+
+@app.delete("/api/photos/{pid}/exports/{eid}")
+def delete_export(pid: int, eid: int):
+    """The file is moved to the backup folder, as other deletes do; it is not erased."""
+    with db.write_lock:
+        r = exports.get(pid, eid)
+        if not r:
+            raise HTTPException(404, "no such export")
+        dest = exports.delete(r)
+        db.conn().commit()
+    return {"ok": True, "moved_to": str(dest) if dest else None, "exports": exports.list_for(pid)}
 
 
 # ---------------------------------------------------------------- import (photos sent from a PC's local library)
