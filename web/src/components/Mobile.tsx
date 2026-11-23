@@ -16,6 +16,7 @@ import { useSeriesOps } from '../seriesops'
 import { DevicesIndicatorPhone } from './DevicesIndicator'
 import { SettingsDialog } from './Shortcuts'
 import { EditOnPhone, useListTitle } from './PhoneEdit'
+import { useVersionsFor, VersionBadge, VersionsStrip } from './Versions'
 import { selectionIds, takeDeepLink } from '../devices'
 import { useBackLayer } from '../back'
 import { phoneSpot } from '../phonetabs'
@@ -61,6 +62,7 @@ function MobileGrid({ selecting, onOpen }: { selecting: boolean; onOpen: (p: Pho
                 onClick={() => (selecting ? s.setSel(selSet.has(p.id) ? s.sel.filter(x => x !== p.id) : [...s.sel, p.id]) : onOpen(p))}>
                 <Thumb p={p} />
                 {p.rating > 0 && <span className="stars">{stars(p.rating)}</span>}
+                <VersionBadge p={p} />
               </button>
             ))}
           </div>
@@ -79,6 +81,7 @@ function PhotoPage({ id, onBack }: { id: number; onBack: () => void }) {
   const list = useListTitle()
   useEffect(() => { if (idx < 0) api.photo(id).then(setExtra).catch(() => {}) }, [id, idx])
   const p = idx >= 0 ? s.items[idx] : extra
+  const vv = useVersionsFor(p ?? null)  // versions (R17): rating, labels and tags below are those of the version being viewed
   if (!p) return null
   const nav = (d: number) => { const n = s.items[idx + d]; if (n) s.setSel([n.id]) }
   const openFull = () => s.setFullscreen(idx >= 0 ? { list: s.items, index: idx } : { list: [p], index: 0 })
@@ -101,14 +104,15 @@ function PhotoPage({ id, onBack }: { id: number; onBack: () => void }) {
           </div>
           <button className="btn big" disabled={idx < 0 || idx >= s.items.length - 1} onClick={() => nav(1)} aria-label="Next">›</button>
         </div>
-        <RatingLabels photos={[p]} big />
+        {vv.list && <VersionsStrip p={p} list={vv.list} n={vv.n} />}
+        <RatingLabels photos={[vv.view ?? p]} big version={vv.mv} />
         <LastEdit p={p} />
         <WhereLine id={p.id} />
         <button className="btn primary big" onClick={() => s.editInDarktable([p.id])}>Edit in darktable</button>
         <EditOnPhone ids={idx >= 0 ? s.items.map(x => x.id) : [p.id]} start={p.id} series={list.series} title={list.title} />
         <span className="small muted" style={{ marginTop: -6 }}>Opens on one of your devices (or as soon as it's online). Ratings, labels and tags are saved to the XMP right away.</span>
         <SeriesPicker ids={[p.id]} />
-        <TagPanel photos={[p]} />
+        <TagPanel photos={[vv.view ?? p]} version={vv.mv} />
         <HideButton photos={[p]} big />
         <button className="btn big" onClick={onBack}>Back to library</button>
       </div>

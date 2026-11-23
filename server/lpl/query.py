@@ -53,6 +53,8 @@ SELECT_COLS = (
     "p.id, p.relpath, p.folder, p.filename, p.ext, p.taken, p.import_ts, p.change_ts, p.export_ts, p.print_ts, "
     "p.camera, p.lens, p.focal, p.aperture, p.iso, p.exposure, p.width, p.height, p.orientation, p.rating, "
     "p.title, p.description, p.edited, p.preview_ver, p.preview_state, p.meta_mtime, p.hidden, "
+    "(SELECT COUNT(*) FROM photo_versions v WHERE v.photo_id=p.id) AS versions, "
+    "COALESCE((SELECT v.n FROM photo_versions v WHERE v.photo_id=p.id AND v.cover=1), 0) AS cover, "
     "(SELECT group_concat(label) FROM photo_labels pl WHERE pl.photo_id=p.id) AS labels_csv, "
     "(SELECT group_concat(t.path, char(31)) FROM photo_tags pt JOIN tags t ON t.id=pt.tag_id WHERE pt.photo_id=p.id) AS tags_us"
 )
@@ -218,6 +220,7 @@ def build_order(sort: List[Dict[str, str]], seed: int, has_series: bool) -> str:
 
 def row_to_photo(r) -> Dict[str, Any]:
     d = dict(r)
+    d["versions"] = max(1, d.get("versions") or 0)  # the number of versions (1: only the photo itself)
     d["labels"] = [int(x) for x in (d.pop("labels_csv") or "").split(",") if x]
     tags = [t for t in (d.pop("tags_us") or "").split("\x1f") if t]
     d["tags"] = sorted(t for t in tags if not t.startswith("darktable|"))

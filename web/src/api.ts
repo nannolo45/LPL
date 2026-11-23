@@ -26,6 +26,12 @@ export interface Photo {
   preview_state: number
   meta_mtime: number
   hidden?: number
+  /** how many versions the photo has (1: only the photo itself) and which one the tile shows (0 = the original) */
+  versions?: number
+  cover?: number
+  /** series and board entries only: the version pinned to the entry (null: follows the cover) and the one it shows */
+  pin?: number | null
+  show?: number
   labels: number[]
   tags: string[]
   dt_tags: string[]
@@ -39,9 +45,14 @@ export interface Photo {
   series?: { id: number; name: string; folder_id?: number | null; folder?: string | null; path?: string[]; color?: string; num?: number | null; count?: number }[]
   // photo detail only (GET /api/photos/{id})
   last_edit?: EditEvent | null
+  version_list?: VersionInfo[]
   /** photo detail (null: auto-tagging is off) and the auto-tagging review page: what the B&W rule found and why */
   autotag?: AutotagInfo | null
 }
+
+/** One version of a photo (GET /api/photos/{id}/versions): its own rating, labels and tags, stored in its XMP. */
+export interface VersionInfo { n: number; name: string; mtime: number | null; size: number | null; rating: number; labels: number[]; tags: string[]
+  edited: number; cover: boolean; has_file: boolean; preview_ver: number }
 
 /** A darktable module instance in an edit: operation, its English name (from module-names.json on the
  *  server, else the operation), the instance's name, on or off; label = name + instance name. */
@@ -140,7 +151,7 @@ export interface LinkState { linked: boolean; same: boolean; frames: number; ser
 export type LinkMode = 'strip' | 'board' | 'none'
 const tbase = (t: Target) => (t.kind === 'folder' ? `/api/series-folders/${t.id}` : `/api/series/${t.id}`)
 /** step and progress (0..1): what a device is doing with the photo right now, if it says (R16). */
-export interface WorkItem { id: number; filename: string; status: string; local_path?: string; error?: string; checkout_ts?: number; synced_ts?: number; step?: string; progress?: number }
+export interface WorkItem { id: number; version?: number; filename: string; status: string; local_path?: string; error?: string; checkout_ts?: number; synced_ts?: number; step?: string; progress?: number }
 export interface Agent { id: string; name: string; os: string; last_seen: number; online: boolean; state: { working_set?: WorkItem[]; darktable_running?: boolean; bridge_alive?: boolean; bridge_status?: string; version?: string; message?: string; local_url?: string; local_error?: string }
   /** what the device says it can do (batch, cancel, open); what is being sent to it; a batch that was stopped; folded on the Devices page (null: never chosen) */
   caps?: string[]; transfer?: import('./transfer').Transfer | null; stopped?: import('./transfer').StoppedRun | null; folded?: boolean | null; folded_phone?: boolean | null }
@@ -206,6 +217,12 @@ export const api = {
   autotagReview: (kind: string, offset = 0, limit = 120) => call<AutotagReview>('GET', `/api/autotag/review?kind=${kind}&offset=${offset}&limit=${limit}`),
   autotagCorrect: (ids: number[], verdict: 'bnw' | 'toned' | 'colour' | 'clear', apply = true) => call<{ items: Photo[]; added?: number; removed?: number }>('POST', '/api/autotag/correct', { ids, verdict, apply }),
   autotagApply: (enable: boolean) => call<{ added: number; removed: number; photos: number; counts: AutotagCounts }>('POST', '/api/autotag/apply', { enable }),
+  versions: (id: number) => call<{ id: number; versions: VersionInfo[]; cover: number; next: number }>('GET', `/api/photos/${id}/versions`),
+  setCover: (id: number, version: number) => call<{ cover: number; versions: VersionInfo[] }>('POST', `/api/photos/${id}/cover?version=${version}`),
+  deleteVersion: (id: number, version: number) => call<{ ok: boolean; cover: number; versions: VersionInfo[] }>('DELETE', `/api/photos/${id}/xmp?version=${version}`),
+  versionName: (id: number, version: number, name: string) => call<{ versions: VersionInfo[] }>('PUT', `/api/photos/${id}/version-name?version=${version}`, { name }),
+  seriesPin: (sid: number, photo_id: number, version: number | null) => call('PUT', `/api/series/${sid}/pin`, { photo_id, version }),
+  folderPin: (fid: number, photo_id: number, version: number | null) => call('PUT', `/api/series-folders/${fid}/pin`, { photo_id, version }),
   edits: (id: number) => call<{ edits: EditEvent[] }>('GET', `/api/photos/${id}/edits`),
   meta: (body: Record<string, unknown>) => call<{ items: Photo[]; errors: string[] }>('POST', '/api/meta', body),
   facets: () => call<{ lenses: { v: string; n: number }[]; cameras: { v: string; n: number }[]; formats: { v: string; n: number; raw?: boolean }[]; hidden_photos?: number }>('GET', '/api/facets'),
@@ -268,5 +285,9 @@ export const api = {
   jobs: () => call<{ jobs: { id: number; agent_id: string | null; kind: string; payload: any; created: number; status: string }[] }>('GET', '/api/jobs'),
 }
 
-export const thumbUrl = (p: { id: number; preview_ver?: number }, size: 't' | 'l' = 't') => `/api/preview/${p.id}?s=${size}&v=${p.preview_ver ?? 0}`
+export const thumbUrl = (p: { id: number; preview_ver?: number; pin?: number | null; show?: number; cover?: number }, size: 't' | 'l' = 't') =>
+  // an entry that shows another version than the photo's cover (a pinned version in a series or on a board)
+  p.show != null && p.show !== (p.cover ?? 0) ? `/api/preview/${p.id}?s=${size}&version=${p.show}&v=${p.preview_ver ?? 0}` : `/api/preview/${p.id}?s=${size}&v=${p.preview_ver ?? 0}`
+/** The preview of one version of a photo; ver (its preview_ver) tells the browser when it changed. */
+export const versionUrl = (id: number, n: number, ver = 0, size: 't' | 'l' = 't') => `/api/preview/${id}?s=${size}&version=${n}&v=${ver}`
 export const coverUrl = (c: { id: number; v: number }) => `/api/preview/${c.id}?s=t&v=${c.v}`

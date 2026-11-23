@@ -10,6 +10,7 @@ import { useBackLayer } from '../back'
 import { selectionIds } from '../devices'
 import { EditOnPhone } from './PhoneEdit'
 import { FolderIcon } from './SeriesTree'
+import { VersionBadge } from './Versions'
 import { byDay, tray, useTray } from '../tray'
 
 const hexA = (hex: string, a: number) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})` }
@@ -69,6 +70,7 @@ const LaneRow = memo(function LaneRow({ lane, shown, selKey, folder, linked, can
         {shown.map(p => (
           <button key={p.id} type="button" className={'sth' + (sel.has(p.id) ? ' sel' : '') + (p.hidden ? ' hid' : '')} data-id={p.id} aria-label={`${num2(p.num) || (p.hidden ? 'hidden' : 'not in the order')} ${p.filename}`} aria-pressed={sel.has(p.id)}>
             <span className="box"><img src={thumbUrl(p)} alt="" draggable={false} loading="lazy" />
+              <VersionBadge p={p} />
               {p.hidden ? <span className="num maybe">hidden</span> : <span className={'num' + (p.num ? '' : ' maybe')}>{num2(p.num) || '?'}</span>}</span>
             <span className="cap">{p.filename}</span>
           </button>

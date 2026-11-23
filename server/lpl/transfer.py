@@ -256,19 +256,30 @@ def _shapes_payload(sid: int, dest_by_id: Dict[int, str], table: str = "series_s
     return shapes
 
 
+def local_version_files(img) -> dict:
+    """{n: path} of the version sidecars (IMG_01_02.RAF.xmp, two digits, three from 100) beside a photo, n >= 1."""
+    from . import versions
+    out = {}
+    for f in img.parent.glob("*.xmp"):
+        pn = versions.parse_name(f.name)
+        if pn and pn[0] == img.name:
+            out[pn[1]] = f
+    return out
+
+
 def _delete_local(pid: int) -> None:
     r = db.conn().execute("SELECT relpath FROM photos WHERE id=?", (pid,)).fetchone()
     if not r:
         return
     img = scanner.abs_of(r["relpath"])
-    for f in [img, xmp.sidecar_path(img)] + sorted(img.parent.glob(img.stem + "_[0-9][0-9]." + img.name.rsplit(".", 1)[-1] + ".xmp")):
+    for f in [img, xmp.sidecar_path(img)] + sorted(local_version_files(img).values()):
         try:
             if f.exists():
                 f.unlink()
         except OSError as e:
             raise RuntimeError("could not delete %s: %s" % (f, e))
     c = db.conn()
-    for t in ("photo_labels", "photo_tags", "series_items", "folder_items"):
+    for t in ("photo_labels", "photo_tags", "series_items", "folder_items", "photo_versions", "photo_version_hw"):
         c.execute("DELETE FROM %s WHERE photo_id=?" % t, (pid,))
     c.execute("DELETE FROM photos WHERE id=?", (pid,))
     c.execute("DELETE FROM sent WHERE photo_id=?", (pid,))
@@ -310,6 +321,9 @@ def _run(items: List[dict], delete_after: bool) -> None:
             xm = sc.stat().st_mtime if sc.is_file() else None
             if xm and (pid not in sent_rows or abs((sent_rows[pid].get("xmp_mtime") or 0) - xm) > 1 or pl["status"] == "new"):
                 nas.put_bytes("/api/import/xmp?" + urllib.parse.urlencode({"dest": dest}), sc.read_bytes(), "application/rdf+xml")
+                state["sent_xmps"] += 1
+            for n, vf in sorted(local_version_files(img).items()):  # versions go with the photo, before the local copy may be deleted
+                nas.put_bytes("/api/import/xmp?" + urllib.parse.urlencode({"dest": dest, "version": n}), vf.read_bytes(), "application/rdf+xml")
                 state["sent_xmps"] += 1
             with db.write_lock:
                 db.conn().execute("INSERT INTO sent(photo_id,dest,size,sha256,xmp_mtime,ts) VALUES(?,?,?,?,?,?) ON CONFLICT(photo_id) DO UPDATE SET "

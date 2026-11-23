@@ -9,6 +9,7 @@ import { actionFor, comboOf, keysOf, typingIn, useShortcutsVersion } from '../sh
 import { getSettings, setSetting, Settings, useSettings } from '../settings'
 import { LABELS } from '../fields'
 import { EditOnPhone } from './PhoneEdit'
+import { VersionBadge } from './Versions'
 import { selectionIds } from '../devices'
 
 type Item = Photo & { x: number; y: number }
@@ -939,6 +940,7 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
                         <button key={it.id} className={'bitem' + (selSet.has(it.id) ? ' sel' : '') + (it.hidden ? ' hid' : '') + (moving?.photos.has(it.id) ? ' moving' : '')} style={{ left: it.x, top: it.y, width: w, height: h, zIndex: selSet.has(it.id) ? 5 : 1, cursor: grab }}
                           onPointerDown={e => onObjDown(e, { photo: it.id })} onDoubleClick={e => { e.stopPropagation(); if (tool === 'select') photoDouble(it.id) }} aria-label={it.filename + (n ? `, position ${n}` : ', maybe')}>
                           <img src={thumbUrl(it)} alt="" draggable={false} />
+                          <VersionBadge p={it} />
                           {it.hidden ? <span className="num maybe">hidden</span> : opt.boardNumbers && linked && <span className={'num' + (n ? '' : ' maybe')}>{n ? num2(n) : '?'}</span>}
                         </button>
                       )

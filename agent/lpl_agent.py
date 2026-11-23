@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -39,8 +40,9 @@ from queue import Queue
 VERSION = "0.1.0"
 # What this agent can do beyond the first protocol, announced in every heartbeat (docs/devices-stop-estimate.md):
 # batch = reports how far each edit job is; cancel = stops a job or leaves out photos when the heartbeat answer
-# says so; open = honours "open": false in an edit job (copy the photos, do not open darktable).
-CAPS = ["batch", "cancel", "open"]
+# says so; open = honours "open": false in an edit job (copy the photos, do not open darktable);
+# versions = darktable duplicates (IMG_01_02.RAF.xmp) are copied beside the RAW and sent back with version=n (R17).
+CAPS = ["batch", "cancel", "open", "versions"]
 CHUNK = 256 * 1024  # most bytes taken from a download at once; a Stop is noticed between two of them
 IS_WIN = os.name == "nt"
 NO_WINDOW = 0x08000000 if IS_WIN else 0  # CREATE_NO_WINDOW
@@ -209,6 +211,49 @@ class Server:
     def upload(self, path, data: bytes, ctype: str):
         with self._req("POST", path, data, ctype, timeout=120) as r:
             return r.read(), dict(r.headers)
+
+    def upload_version(self, path, data: bytes):
+        """POST an XMP of a version. Returns (body, headers, None), or (None, None, next) when LPL answers 409
+        version_exists (another device made that number): next is the free number it names."""
+        try:
+            body, headers = self.upload(path, data, "application/rdf+xml")
+            return body, headers, None
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                try:
+                    nxt = int(json.loads(e.read().decode() or "{}").get("next"))
+                except (ValueError, TypeError):
+                    nxt = 0
+                if nxt > 0:
+                    return None, None, nxt
+            raise
+
+
+# ------------------------------------------------------------------ versions (R17)
+_VERSION_NAME = re.compile(r"^(.+)_(\d{2,})\.([A-Za-z0-9]+)\.xmp$")
+
+
+def version_file(local: Path, n: int) -> Path:
+    """Where version n's sidecar lies beside the local copy of the photo: IMG_01.RAF -> IMG_01_02.RAF.xmp (two digits,
+    three from 100). darktable stores no number inside the XMP (darktable:xmp_version is the file format's), so the
+    name is the only place the number lives."""
+    stem, dot, ext = local.name.rpartition(".")
+    return local.with_name("%s_%02d%s%s.xmp" % (stem, n, dot, ext))
+
+
+def local_versions(local: Path) -> dict:
+    """{n: path} of the version sidecars (n >= 1) beside the local copy."""
+    stem, dot, ext = local.name.rpartition(".")
+    out = {}
+    for f in local.parent.glob(glob_escape(stem) + "_*" + dot + glob_escape(ext) + ".xmp"):
+        m = _VERSION_NAME.match(f.name)
+        if m and "%s.%s" % (m.group(1), m.group(3)) == local.name:
+            out[int(m.group(2))] = f
+    return out
+
+
+def glob_escape(t: str) -> str:
+    return re.sub(r"([\[\]*?])", r"[\1]", t)
 
 
 # ------------------------------------------------------------------ darktable
@@ -615,11 +660,12 @@ class Agent:
             with self.lock:
                 it = self.items.get(pid)
             if it and Path(it["local_path"]).is_file() and it.get("status") != "downloading":
+                self.refresh_versions(str(pid), it)
                 opened.append(Path(it["local_path"]))
                 self._mark(b, "present", pid)
                 continue
             try:
-                info = self.srv.json("GET", "/api/photos/%s/checkout" % pid)
+                info = self.srv.json("GET", "/api/photos/%s/checkout?agent=%s" % (pid, urllib.parse.quote(self.cfg["id"], safe="")))
             except Exception as e:
                 if b is None:
                     raise  # (an "open" of a photo that is not here: as before, the job fails)
@@ -647,6 +693,9 @@ class Agent:
                 xmp = Path(str(dest) + ".xmp")
                 self.srv.download("/api/photos/%s/xmp" % pid, xmp, None, given_up, (jid, str(pid)))
                 it["synced_mtime"] = xmp.stat().st_mtime
+                if "versions" in info:  # a server that knows versions (an old one does not say): copy them too
+                    it["versions"] = {}
+                    self.pull_versions(str(pid), it, info["versions"], given_up, (jid, str(pid)))
                 it["status"] = "ready"
                 opened.append(dest)
                 self._mark(b, "arrived", pid)
@@ -657,6 +706,11 @@ class Agent:
                         dest.unlink()
                     except OSError:
                         pass
+                    for f in local_versions(dest).values():
+                        try:
+                            f.unlink()
+                        except OSError:
+                            pass
                 with self.lock:
                     self.items.pop(pid, None)
                 self._copying(b)
@@ -738,29 +792,112 @@ class Agent:
                 log.warning("preview upload failed: %s", e)
             finally:
                 self.step(it)
-        if not xmp.is_file():
-            return
-        mtime = xmp.stat().st_mtime
-        if not force and abs(mtime - it.get("synced_mtime", 0)) < 0.01:
+        todo = self.versions_to_send(it)
+        v0 = xmp.is_file() and (force or abs(xmp.stat().st_mtime - it.get("synced_mtime", 0)) >= 0.01)
+        if not v0 and not todo:
             return
         it["status"] = "syncing"
         self.step(it, "sending edit")
         try:
-            # agent=: LPL records which device sent the edit ("last edited on Desktop")
-            body, headers = self.srv.upload("/api/photos/%s/xmp?checkout_ts=%s&agent=%s" % (
-                pid, it["checkout_ts"], urllib.parse.quote(self.cfg["id"], safe="")), xmp.read_bytes(), "application/rdf+xml")
-            merged = (headers.get("X-LPL-Merged") or headers.get("x-lpl-merged")) == "1"
-            if merged:
-                # LPL had newer rating/labels/tags: put them into the local file and tell darktable to re-read it
-                xmp.write_bytes(body)
-                self.bridge.add("reload", Path(it["local_path"]))
-            it.update(status="synced", synced_mtime=xmp.stat().st_mtime, synced_ts=time.time(), error="")
+            merged = False
+            if v0:
+                # agent=: LPL records which device sent the edit ("last edited on Desktop")
+                body, headers = self.srv.upload("/api/photos/%s/xmp?checkout_ts=%s&agent=%s" % (
+                    pid, it["checkout_ts"], urllib.parse.quote(self.cfg["id"], safe="")), xmp.read_bytes(), "application/rdf+xml")
+                merged = (headers.get("X-LPL-Merged") or headers.get("x-lpl-merged")) == "1"
+                if merged:
+                    # LPL had newer rating/labels/tags: put them into the local file and tell darktable to re-read it
+                    xmp.write_bytes(body)
+                    self.bridge.add("reload", Path(it["local_path"]))
+                if xmp.is_file():
+                    it["synced_mtime"] = xmp.stat().st_mtime
+            if todo:
+                self.send_versions(pid, it)
+            it.update(status="synced", synced_ts=time.time(), error="")
             log.info("synced %s%s", it["filename"], " (merged)" if merged else "")
         except Exception as e:
             it.update(status="error", error="sync failed: %s" % e)
         finally:
             self.step(it)
         self.save()
+
+    # --- versions (R17): only with a server that lists them (it["versions"] is None otherwise: as before)
+    def pull_versions(self, pid, it, listed, cancel=None, tag=None):
+        """Copy the version sidecars the server lists (n >= 1) beside the RAW; remember each one's time."""
+        local = Path(it["local_path"])
+        known = it.setdefault("versions", {})
+        for v in listed:
+            n = int(v["n"])
+            if n < 1 or not v.get("has_file", True):
+                continue
+            f = version_file(local, n)
+            if not f.is_file():
+                self.srv.download("/api/photos/%s/xmp?version=%d" % (pid, n), f, None, cancel, tag)
+                known[str(n)] = f.stat().st_mtime
+
+    def refresh_versions(self, pid, it):
+        """Before a send, and when a photo that is here is asked for again: copy versions made elsewhere; a version
+        deleted in LPL goes from here too if it is unchanged here, else it stays and is sent back (an edit wins).
+        (Asks /versions, not /checkout: a checkout would tell LPL this device has seen every number.)"""
+        if it.get("versions") is None:
+            return
+        try:
+            listed = self.srv.json("GET", "/api/photos/%s/versions" % pid)["versions"]
+        except Exception as e:
+            log.info("versions of %s not refreshed: %s", pid, e)
+            return
+        local = Path(it["local_path"])
+        on_server = {int(v["n"]) for v in listed if int(v["n"]) >= 1 and v.get("has_file", True)}
+        known = it["versions"]
+        for k in list(known):
+            if int(k) in on_server:
+                continue
+            f = version_file(local, int(k))
+            try:
+                if f.is_file() and abs(f.stat().st_mtime - known[k]) < 0.01:
+                    f.unlink()
+            except OSError as e:
+                log.warning("could not remove %s: %s", f, e)
+                continue
+            known.pop(k)  # a changed one stays as a new local version: send_versions posts it again
+        try:
+            self.pull_versions(pid, it, [v for v in listed if int(v["n"]) not in {int(k) for k in known}])
+        except Exception as e:
+            log.warning("versions of %s not copied: %s", pid, e)
+
+    def versions_to_send(self, it):
+        """Local version sidecars that are new or changed since the last send."""
+        if it.get("versions") is None:
+            return []
+        known = it["versions"]
+        return [n for n, f in sorted(local_versions(Path(it["local_path"])).items())
+                if str(n) not in known or abs(f.stat().st_mtime - known[str(n)]) >= 0.01]
+
+    def send_versions(self, pid, it):
+        self.refresh_versions(pid, it)
+        for n in self.versions_to_send(it):
+            self.post_version(pid, it, n)
+
+    def post_version(self, pid, it, n):
+        local = Path(it["local_path"])
+        f = version_file(local, n)
+        for _ in range(4):
+            body, headers, nxt = self.srv.upload_version("/api/photos/%s/xmp?checkout_ts=%s&agent=%s&version=%d" % (
+                pid, it["checkout_ts"], urllib.parse.quote(self.cfg["id"], safe=""), n), f.read_bytes())
+            if nxt is None:
+                break
+            # another device made this number first: ours becomes the free one LPL named (darktable keeps no number inside the XMP)
+            g = version_file(local, nxt)
+            if g.exists():
+                raise RuntimeError("version %d exists here as well" % nxt)
+            os.replace(f, g)
+            log.info("version %d of %s is taken in LPL: renamed to %d", n, it["filename"], nxt)
+            f, n = g, nxt
+        else:
+            raise RuntimeError("no free version number")
+        if (headers.get("X-LPL-Merged") or headers.get("x-lpl-merged")) == "1":
+            f.write_bytes(body)
+        it["versions"][str(n)] = f.stat().st_mtime
 
     def release(self, pid: str):
         it = self.items.get(pid)
@@ -775,7 +912,7 @@ class Agent:
             self.bridge.flush()
             time.sleep(1.5)
         try:
-            for f in (Path(str(p) + ".xmp"), p):
+            for f in [Path(str(p) + ".xmp"), p] + list(local_versions(p).values()):
                 if f.exists():
                     f.unlink()
             with self.lock:
@@ -809,10 +946,15 @@ class Agent:
         now = time.time()
         for pid, it in list(self.items.items()):
             xmp = Path(it["local_path"] + ".xmp")
-            if it["status"] in ("downloading", "syncing", "error") or not xmp.is_file():
+            if it["status"] in ("downloading", "syncing", "error"):
                 continue
-            m = xmp.stat().st_mtime
-            if abs(m - it.get("synced_mtime", 0)) > 0.01:
+            ms = [xmp.stat().st_mtime] if xmp.is_file() and abs(xmp.stat().st_mtime - it.get("synced_mtime", 0)) > 0.01 else []
+            vs = local_versions(Path(it["local_path"])) if it.get("versions") is not None else {}
+            ms += [vs[n].stat().st_mtime for n in self.versions_to_send(it) if n in vs]  # a new or changed version counts as an edit
+            if not xmp.is_file() and not ms:
+                continue
+            m = max(ms) if ms else 0
+            if ms:
                 if it["status"] != "dirty":
                     it["status"] = "dirty"
                     self.save()

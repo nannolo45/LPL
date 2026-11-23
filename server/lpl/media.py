@@ -100,9 +100,11 @@ def normalize(d: dict) -> dict:
     }
 
 
-def preview_paths(photo_id: int):
+def preview_paths(photo_id: int, version: int = 0):
+    """(thumbnail, large). A version >= 1 has its own pair (R17); version 0 is the photo's usual one."""
     sub = config.preview_dir / ("%02x" % (photo_id % 256))
-    return sub / ("%d_t.jpg" % photo_id), sub / ("%d_l.jpg" % photo_id)
+    k = "%d" % photo_id if version <= 0 else "%d_v%d" % (photo_id, version)
+    return sub / (k + "_t.jpg"), sub / (k + "_l.jpg")
 
 
 def _rotate(img: Image.Image, orientation: int) -> Image.Image:
@@ -168,8 +170,8 @@ def load_image(path: Path, ext: str, orientation: int) -> Image.Image:
     return img.convert("RGB")
 
 
-def save_previews(img: Image.Image, photo_id: int) -> None:
-    t, l = preview_paths(photo_id)
+def save_previews(img: Image.Image, photo_id: int, version: int = 0) -> None:
+    t, l = preview_paths(photo_id, version)
     t.parent.mkdir(parents=True, exist_ok=True)
     large = img.copy()
     large.thumbnail((config.large_size, config.large_size), Image.LANCZOS)

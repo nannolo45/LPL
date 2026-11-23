@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { Photo, thumbUrl } from '../api'
 import { libScroll, queryKey, useStore } from '../store'
 import { RetryImg } from './RetryImg'
+import { VersionBadge } from './Versions'
 import { captionValue, field, fmtMonth, groupLabel, LABELS, leaf, stars } from '../fields'
 
 export function Thumb({ p, size = 't', className, style }: { p: Photo; size?: 't' | 'l'; className?: string; style?: React.CSSProperties }) {
@@ -148,6 +149,7 @@ export function GridView() {
                   <span className="badges">{p.labels.map(l => <span key={l} style={{ background: LABELS[l].c }} />)}</span>
                   {p.rating > 0 && <span className="stars">{stars(p.rating)}</span>}
                   {!!p.edited && <span className="dt">dt</span>}
+                  <VersionBadge p={p} />
                   {!!p.hidden && <span className="hidtag">hidden</span>}
                 </button>
                 <span className="name ellipsis">{p.filename}</span>

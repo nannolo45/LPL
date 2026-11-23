@@ -185,9 +185,12 @@ def summary(changes: Optional[dict], modules: list, auto: set = frozenset()) -> 
 
 
 # ---------------------------------------------------------------- storage
-def baseline(pid: int) -> Optional[dict]:
-    """The last XMP state LPL recorded for this photo: {"history": [...], "mtime": float} or None."""
-    r = db.conn().execute("SELECT history, xmp_mtime FROM edit_baseline WHERE photo_id=?", (pid,)).fetchone()
+def baseline(pid: int, version: int = 0) -> Optional[dict]:
+    """The last XMP state LPL recorded for this photo (or one of its versions): {"history": [...], "mtime": float} or None."""
+    if version:
+        r = db.conn().execute("SELECT history, xmp_mtime FROM edit_baseline_v WHERE photo_id=? AND version=?", (pid, version)).fetchone()
+    else:
+        r = db.conn().execute("SELECT history, xmp_mtime FROM edit_baseline WHERE photo_id=?", (pid,)).fetchone()
     if not r:
         return None
     try:
@@ -196,8 +199,13 @@ def baseline(pid: int) -> Optional[dict]:
         return None
 
 
-def set_baseline(pid: int, hist: list, mtime: Optional[float]) -> None:
+def set_baseline(pid: int, hist: list, mtime: Optional[float], version: int = 0) -> None:
     """Caller holds db.write_lock and commits."""
+    if version:
+        db.conn().execute(
+            "INSERT INTO edit_baseline_v(photo_id, version, history, xmp_mtime) VALUES(?,?,?,?) ON CONFLICT(photo_id, version) DO UPDATE SET "
+            "history=excluded.history, xmp_mtime=excluded.xmp_mtime", (pid, version, json.dumps(hist), mtime or 0))
+        return
     db.conn().execute(
         "INSERT INTO edit_baseline(photo_id, history, xmp_mtime) VALUES(?,?,?) ON CONFLICT(photo_id) DO UPDATE SET "
         "history=excluded.history, xmp_mtime=excluded.xmp_mtime", (pid, json.dumps(hist), mtime or 0))
@@ -221,7 +229,7 @@ _tz_warned: list = []
 
 
 def record(pid: int, hist: list, prev: Optional[list], source: str, agent_id: Optional[str] = None,
-           ts: Optional[float] = None, mtime: Optional[float] = None) -> int:
+           ts: Optional[float] = None, mtime: Optional[float] = None, version: int = 0) -> int:
     """Store an edit event and make hist the photo's baseline. source: "agent", "outside", "import" (sent from a
     PC's local library) or "local" (darktable on the PC of a local library).
 
@@ -238,7 +246,9 @@ def record(pid: int, hist: list, prev: Optional[list], source: str, agent_id: Op
             device, device_os = a["name"], a["os"]
     t = time.time()
     ts = min(ts, t) if ts else t  # a file time from a PC with its clock ahead must not sort after later edits
-    last = c.execute("SELECT * FROM edit_events WHERE photo_id=? ORDER BY ts DESC, id DESC LIMIT 1", (pid,)).fetchone()
+    last = c.execute("SELECT e.*, COALESCE(v.version, 0) AS version FROM edit_events e LEFT JOIN edit_event_version v ON v.event_id=e.id "
+                     "WHERE e.photo_id=? AND COALESCE(v.version, 0)=? ORDER BY e.ts DESC, e.id DESC LIMIT 1",
+                     (pid, version)).fetchone()
     same = (last is not None and last["source"] == source and (last["agent_id"] or "") == (agent_id or "")
             and day_of(last["ts"]) == day_of(ts) and ts >= last["ts"])
     if same:
@@ -261,11 +271,13 @@ def record(pid: int, hist: list, prev: Optional[list], source: str, agent_id: Op
             "VALUES(?,?,?,?,?,?,?,?,?,1,?)",
             (pid, ts, source, agent_id, device, device_os, modules, stored_changes, ts,
              None if before is None else json.dumps(before))).lastrowid
-    set_baseline(pid, hist, mtime)
+        if version:  # events of version 0 have no row here (older libraries stay as they are)
+            c.execute("INSERT OR REPLACE INTO edit_event_version(event_id, version) VALUES(?,?)", (rid, version))
+    set_baseline(pid, hist, mtime, version)
     return rid
 
 
-def observe_scan(pid: int, x: dict) -> Optional[int]:
+def observe_scan(pid: int, x: dict, version: int = 0) -> Optional[int]:
     """The scanner read this photo's XMP (x from xmp.read_for_image). Records "edited outside LPL" when the
     modules differ from the last recorded state and the file is newer than it. Without an earlier record the
     state is only remembered: what changed cannot be known, and the change may be a rating only.
@@ -274,17 +286,17 @@ def observe_scan(pid: int, x: dict) -> Optional[int]:
     if hist is None:
         return None
     mtime = x.get("mtime") or 0
-    base = baseline(pid)
+    base = baseline(pid, version)
     if base is None:
-        set_baseline(pid, hist, mtime)
+        set_baseline(pid, hist, mtime, version)
         return None
     if mtime <= base["mtime"] + 0.001:
         return None  # read before a newer XMP was recorded (an agent posted meanwhile)
     if signature(hist) == signature(base["history"]):
-        set_baseline(pid, hist, mtime)  # rating, labels, tags or LPL's own write: not an edit
+        set_baseline(pid, hist, mtime, version)  # rating, labels, tags or LPL's own write: not an edit
         return None
     # a local library (LPL on a PC) has no agents: darktable on that PC edits the photos where they are
-    return record(pid, hist, base["history"], "local" if config.local else "outside", ts=mtime, mtime=mtime)
+    return record(pid, hist, base["history"], "local" if config.local else "outside", ts=mtime, mtime=mtime, version=version)
 
 
 def event_dict(r) -> dict:
@@ -295,6 +307,7 @@ def event_dict(r) -> dict:
     return {
         "id": r["id"], "photo_id": r["photo_id"], "time": r["ts"], "source": r["source"], "agent_id": r["agent_id"],
         "device": r["device"], "device_os": r["device_os"],
+        "version": (r["version"] if "version" in keys else 0) or 0,
         "modules": [public(m, auto) for m in modules],
         "changes": None if changes is None else {k: [public(m) for m in v] for k, v in changes.items()},
         "summary": summary(changes, modules, auto),
@@ -305,7 +318,8 @@ def event_dict(r) -> dict:
 
 
 def events(pid: int, limit: int = 200) -> list:
-    rows = db.conn().execute("SELECT * FROM edit_events WHERE photo_id=? ORDER BY ts DESC, id DESC LIMIT ?", (pid, limit)).fetchall()
+    rows = db.conn().execute("SELECT e.*, COALESCE(v.version, 0) AS version FROM edit_events e LEFT JOIN edit_event_version v ON v.event_id=e.id "
+                             "WHERE e.photo_id=? ORDER BY e.ts DESC, e.id DESC LIMIT ?", (pid, limit)).fetchall()
     return [event_dict(r) for r in rows]
 
 

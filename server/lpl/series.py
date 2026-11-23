@@ -1419,10 +1419,14 @@ def folder_board(fid: int):
     head = _folder_head(c, fid)
     root = head["root"]["id"]
     frames = [dict(r) for r in c.execute("SELECT %s,series_id,sub_id FROM folder_frames WHERE folder_id=? ORDER BY id" % FRAME_COLS, (root,)).fetchall()]
-    pos = {r["photo_id"]: r for r in c.execute("SELECT photo_id,x,y FROM folder_items WHERE folder_id=?", (root,)).fetchall()}
+    pos = {r["photo_id"]: r for r in c.execute("SELECT photo_id,x,y,version FROM folder_items WHERE folder_id=?", (root,)).fetchall()}
     items = api.photo_dicts(list(pos.keys()))
     mem, ords = members(c, root)
     nums = {sid: nums_of(c, sid) for sid in set(mem.values())}
+    from . import versions
+    spins = {(r["series_id"], r["photo_id"]): r["version"] for r in c.execute(
+        "SELECT series_id, photo_id, version FROM series_items WHERE series_id IN (%s)" % (",".join(str(x) for x in set(mem.values())) or "0")).fetchall()}
+    versions.decorate(items, {k: (spins.get((mem.get(k), k)) if spins.get((mem.get(k), k)) is not None else v["version"]) for k, v in pos.items()})
     for it in items:
         r = pos[it["id"]]
         sid = mem.get(it["id"])
@@ -1457,6 +1461,32 @@ def folder_shapes_save(fid: int, body: Dict[str, Any] = Body(...)):
         c.execute("INSERT INTO folder_shapes(folder_id,data) VALUES(?,?) ON CONFLICT(folder_id) DO UPDATE SET data=excluded.data", (fid, data))
         c.commit()
     return {"ok": True, "n": len(shapes)}
+
+
+@router.put("/api/series-folders/{fid}/pin")
+def folder_pin(fid: int, body: Dict[str, Any] = Body(...)):
+    """"Use in series" on a folder board (R17): the entry shows version `version` (null: the cover). A photo that is
+    in one of the folder's series is pinned there (the series and the board agree); another entry on this board is
+    pinned on the board itself."""
+    from . import versions
+    c = db.conn()
+    root = _folder_head(c, fid)["root"]["id"]
+    pid = int(body.get("photo_id"))
+    n = body.get("version")
+    n = None if n is None else int(n)
+    mem, _ords = members(c, root)
+    with db.write_lock:
+        try:
+            if mem.get(pid):
+                versions.set_pin("series_items", "series_id", mem[pid], pid, n)
+            else:
+                versions.set_pin("folder_items", "folder_id", root, pid, n)
+        except KeyError:
+            raise HTTPException(404, "no such version")
+        except LookupError:
+            raise HTTPException(404, "the photo is not on this board")
+        c.commit()
+    return {"ok": True, "photo_id": pid, "version": n}
 
 
 @router.put("/api/series-folders/{fid}/board")
@@ -1662,6 +1692,9 @@ def _photos(c, ids: List[int], sid: Optional[int], nums: Dict[int, int], ords: D
     out = api.photo_dicts(ids)
     for p in out:
         p["ord"], p["num"], p["series_id"] = ords.get(p["id"]), nums.get(p["id"]), sid
+    if sid is not None:  # versions pinned to entries of this series (R17)
+        from . import versions
+        versions.decorate(out, {r["photo_id"]: r["version"] for r in c.execute("SELECT photo_id, version FROM series_items WHERE series_id=?", (sid,)).fetchall()})
     return out
 
 
