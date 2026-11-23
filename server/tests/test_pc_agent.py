@@ -352,3 +352,51 @@ def test_download_never_leaves_a_short_file(base_url, agent_mod, tmp_path, big):
     assert not dest.exists() and not (tmp_path / "x.RAF.part").exists()
     srv.download("/api/photos/%d/original" % big[0], dest)
     assert dest.stat().st_size == BIG and srv.current is None
+
+
+# ---------------------------------------------------------------- a copy that failed; names
+def test_failed_copy_is_retried_and_can_be_forgotten(clean, base_url, agent_mod, monkeypatch, tmp_path):
+    """A copy that failed is not taken for a photo that is here: Retry copies it again, release/forget delete what
+    it left (release used to return early for any photo with an error, so it could never leave the list)."""
+    cfg = {"id": "pc-agent-fail", "name": "Laptop", "server": base_url, "password": "", "auto_sync_seconds": 0}
+    a = agent_mod.Agent(cfg)
+    monkeypatch.setattr(a, "open_paths", lambda paths: None)
+    real = a.srv.download
+    boom = {"on": True}
+
+    def flaky(path, dest, *args, **kw):
+        if boom["on"] and path.endswith("/xmp"):
+            raise OSError("NAS read timed out")
+        return real(path, dest, *args, **kw)
+    monkeypatch.setattr(a.srv, "download", flaky)
+    a.edit(["2"], {"id": 0, "payload": {}})
+    w = a.state()["working_set"][0]
+    assert w["status"] == "error" and w["copy_failed"] is True
+    boom["on"] = False
+    a.edit(["2"], {"id": 0, "payload": {}})                       # Retry: copied again, not "present"
+    assert a.items["2"]["status"] == "ready" and "copy_failed" not in a.state()["working_set"][0]
+    a.forget("2", "failed")                                        # a good copy is not a failed one: stays
+    assert "2" in a.items
+    a.forget("2", "keep")                                          # forget, keep the files
+    assert "2" not in a.items
+    boom["on"] = True
+    a.edit(["2"], {"id": 0, "payload": {}})
+    p = Path(a.items["2"]["local_path"])
+    a.handle({"id": 999999, "kind": "release", "payload": {"ids": [2]}})
+    assert "2" not in a.items and not p.exists()
+
+
+def test_agent_takes_a_rename_and_rereads_its_config(base_url, agent_mod, monkeypatch, tmp_path):
+    cfgfile = tmp_path / "agent.json"
+    monkeypatch.setattr(agent_mod, "config_path", lambda: cfgfile)
+    cfg = {"id": "pc-agent-name", "name": "fedora", "server": base_url, "password": ""}
+    agent_mod.save_config(cfg)
+    a = agent_mod.Agent(dict(cfg))
+    assert a.heartbeat_body()["name"] == "fedora"
+    import json as _j, os as _os
+    cfgfile.write_text(_j.dumps(dict(cfg, name="Laptop")))         # the setup run again while the agent runs
+    _os.utime(cfgfile, (time.time() + 5, time.time() + 5))
+    assert a.heartbeat_body()["name"] == "Laptop"
+    a.take({"rename": "Portatile"})
+    assert a.cfg["name"] == "Portatile" and _j.loads(cfgfile.read_text())["name"] == "Portatile"
+    assert isinstance(agent_mod.machine_id(), str)

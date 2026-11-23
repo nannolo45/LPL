@@ -533,7 +533,7 @@ def test_migrating_a_library_from_before(tmp_path):
     con.row_factory = None
     names = {r[0] for r in con.execute("SELECT name FROM sqlite_master")}
     assert {"transfers", "transfer_items", "idx_transfers_agent"} <= names
-    assert [r[1] for r in con.execute("PRAGMA table_info(agents)")] == ["id", "name", "os", "last_seen", "state", "caps"]
+    assert [r[1] for r in con.execute("PRAGMA table_info(agents)")][:6] == ["id", "name", "os", "last_seen", "state", "caps"]
     assert [r[:5] for r in con.execute("SELECT * FROM agents ORDER BY rowid")] == before["agents"]
     assert [r[5] for r in con.execute("SELECT * FROM agents")] == [None, None]
     assert con.execute("SELECT * FROM jobs ORDER BY rowid").fetchall() == before["jobs"]

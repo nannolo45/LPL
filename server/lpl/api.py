@@ -988,8 +988,10 @@ def series_add_matching(sid: int, body: Dict[str, Any] = Body(...)):
 
 # ---------------------------------------------------------------- agents + jobs (hand-off to darktable)
 from . import transfers  # noqa: E402  batches of photos sent to a device: totals, Stop, Resume (see transfers.py)
+from . import identity  # noqa: E402  device names, renames from LPL, one computer under two ids (see identity.py)
 
 app.include_router(transfers.router)
+app.include_router(identity.router)
 
 
 def list_agents() -> List[dict]:
@@ -1008,7 +1010,8 @@ def list_agents() -> List[dict]:
                     it.pop("step", None)
                     it.pop("progress", None)
         out.append(d)
-    transfers.decorate(out)  # caps, transfer, stopped, folded
+    transfers.decorate(out)  # caps, transfer, stopped, failed, folded
+    identity.decorate(out)   # same_machine, renaming, merged_from
     return out
 
 
@@ -1058,9 +1061,12 @@ def heartbeat(body: Dict[str, Any] = Body(...)):
         _clean_progress(state.get("working_set"))
     with db.write_lock:
         c = db.conn()
+        was_new = c.execute("SELECT 1 FROM agents WHERE id=?", (aid,)).fetchone() is None
+        name, said = identity.name_for(c, aid, body)  # a rename given in LPL wins until the device has taken it
         c.execute("INSERT INTO agents(id,name,os,last_seen,state) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
                   "name=excluded.name, os=excluded.os, last_seen=excluded.last_seen, state=excluded.state",
-                  (aid, body.get("name"), body.get("os"), time.time(), json.dumps(state)))
+                  (aid, name, body.get("os"), time.time(), json.dumps(state)))
+        identity.after_heartbeat(c, aid, body, was_new, time.time())  # the same computer under an old id: merged
         # an Android agent (the darktable phone app) only takes jobs addressed to it, never ones meant for any PC
         anyone = "" if body.get("os") == "android" else " OR agent_id IS NULL"
         now = time.time()
@@ -1077,13 +1083,13 @@ def heartbeat(body: Dict[str, Any] = Body(...)):
             out.append({"id": j["id"], "kind": j["kind"], "payload": json.loads(j["payload"] or "{}")})
         extra = transfers.on_heartbeat(c, aid, body, out, now)  # nothing for a device that announces no caps
         c.commit()
-    return {"jobs": out, "server_time": time.time(), **extra}
+    return {"jobs": out, "server_time": time.time(), **extra, **said}
 
 
 @app.post("/api/jobs")
 def job_create(body: Dict[str, Any] = Body(...)):
     kind = body.get("kind")
-    if kind not in ("edit", "sync", "release", "open"):
+    if kind not in ("edit", "sync", "release", "open", "forget"):
         raise HTTPException(400, "unknown job")
     if config.local:
         if kind not in ("edit", "open"):

@@ -3,9 +3,11 @@
 // how far a batch is, how long it will take, what the Devices page and the top bar say about it.
 // Plain functions without React, tested with Node (web/tests/transfer.test.ts). See docs/devices-stop-estimate.md.
 import type { Agent, WorkItem } from './api'
-import { AGENT_ONLINE_SECONDS, agentLabel, hasUnsavedEdits, isPhoneAgent } from './devices.ts'
+import { AGENT_ONLINE_SECONDS, agentLabel, hasUnsavedEdits, isCopyFailed, isPhoneAgent } from './devices.ts'
 
 export interface TransferItem { id: number; filename: string; job: number }
+/** A photo the device could not copy: from the server's batches, or the device's own list (error is then its words). */
+export interface FailedItem { id: number; filename: string; job?: number; time?: number; error?: string }
 /** What is being sent to a device right now, all its batches added up. state: queued = the device has not
  *  taken it yet; stopping = Stop was pressed and the device has not confirmed. samples: [server time, bytes
  *  done, photos done] of the last minute and a half, for the estimate. known false: the device says nothing
@@ -24,7 +26,7 @@ export interface StoppedRun {
   unsent: TransferItem[]; arrived: number[]
 }
 
-type Dev = Pick<Agent, 'id' | 'name' | 'os' | 'online' | 'last_seen' | 'state'> & { transfer?: Transfer | null; stopped?: StoppedRun | null; folded?: boolean | null }
+type Dev = Pick<Agent, 'id' | 'name' | 'os' | 'online' | 'last_seen' | 'state'> & { transfer?: Transfer | null; stopped?: StoppedRun | null; folded?: boolean | null; failed?: FailedItem[] }
 
 // ---------------------------------------------------------------- how long it will take
 /** window: the rate is the average over this many seconds (what keeps it from jumping around);
@@ -127,7 +129,7 @@ export function stoppedLines(s: StoppedRun, name: string): { title: string; deta
 /** The line next to a device's name: "12 photos · 3 edited, not saved yet", "38 photos · receiving 82 more",
  *  "4 photos · all saved to the NAS", "38 photos · sending stopped". */
 export function deviceCounts(a: Dev): string {
-  const ws = (a.state?.working_set || []).filter(w => w.status !== 'downloading')
+  const ws = (a.state?.working_set || []).filter(w => w.status !== 'downloading' && !isCopyFailed(w))
   const parts = [ws.length ? photos(ws.length) : 'no photos']
   const unsaved = ws.filter(hasUnsavedEdits).length
   if (unsaved) parts.push(`${unsaved} edited, not saved yet`)
@@ -144,14 +146,19 @@ export function deviceCounts(a: Dev): string {
  *  them are folded. */
 export function isFolded(a: Dev): boolean {
   if (a.folded != null) return a.folded
-  if (a.transfer || a.stopped) return false
+  if (a.transfer || a.stopped || deviceRows(a).failed.length) return false
   return !a.online || !(a.state?.working_set || []).length
 }
 
 /** The rows of a device's table, in the order they are shown: what is being copied, what waits, what is on
  *  the device (errors and unsaved edits first, then the latest), and what a stop left unsent. */
-export function deviceRows(a: Dev): { copying: WorkItem[]; waiting: TransferItem[]; arrived: WorkItem[]; unsent: TransferItem[] } {
-  const ws = a.state?.working_set || []
+export function deviceRows(a: Dev): { failed: FailedItem[]; copying: WorkItem[]; waiting: TransferItem[]; arrived: WorkItem[]; unsent: TransferItem[] } {
+  const all = a.state?.working_set || []
+  const bad = all.filter(isCopyFailed)
+  const ws = all.filter(w => !isCopyFailed(w))
+  const good = new Set(ws.map(w => w.id))
+  const failed: FailedItem[] = [...bad.map(w => ({ id: w.id, filename: w.filename, error: w.error, time: w.checkout_ts })),
+    ...(a.failed || []).filter(f => !good.has(f.id) && !bad.some(w => w.id === f.id))]
   const here = new Set(ws.map(w => w.id))
   const rank = (w: WorkItem) => (w.status === 'error' ? 0 : hasUnsavedEdits(w) ? 1 : 2)
   const arrived = ws.filter(w => w.status !== 'downloading')
@@ -161,7 +168,7 @@ export function deviceRows(a: Dev): { copying: WorkItem[]; waiting: TransferItem
   if (cur && !here.has(cur.id) && a.online)  // reported as under way, not in the working set yet
     copying.push({ id: cur.id, filename: cur.filename, status: 'downloading', step: 'downloading', progress: cur.size ? cur.bytes / cur.size : undefined })
   return {
-    copying, arrived,
+    failed, copying, arrived,
     waiting: (a.transfer?.waiting || []).filter(w => !here.has(w.id)),
     unsent: a.transfer ? [] : (a.stopped?.unsent || []),
   }
@@ -221,3 +228,29 @@ export function overall(agents: Dev[], now: number): Overall {
 
 /** "2 of 3 online" */
 export const onlineCount = (agents: Pick<Agent, 'online'>[]) => `${agents.filter(a => a.online).length} of ${agents.length} online`
+
+// ---------------------------------------------------------------- the Devices page's filter chips
+export type RowFilter = 'all' | 'failed' | 'sending' | 'ready' | 'unsaved' | 'saved' | 'unsent'
+type Rows = ReturnType<typeof deviceRows>
+const isSaved = (w: WorkItem) => w.status === 'synced'
+
+/** How many rows each chip stands for (the chips with 0 are not shown, except All). */
+export function filterCounts(r: Rows): Record<RowFilter, number> {
+  return {
+    all: r.failed.length + r.copying.length + r.waiting.length + r.arrived.length + r.unsent.length,
+    failed: r.failed.length, sending: r.copying.length + r.waiting.length,
+    ready: r.arrived.filter(w => !hasUnsavedEdits(w) && !isSaved(w)).length,
+    unsaved: r.arrived.filter(hasUnsavedEdits).length, saved: r.arrived.filter(isSaved).length, unsent: r.unsent.length,
+  }
+}
+
+/** The rows a chip shows, in the same groups (the others empty). */
+export function filterRows(r: Rows, f: RowFilter): Rows {
+  if (f === 'all') return r
+  const none: Rows = { failed: [], copying: [], waiting: [], arrived: [], unsent: [] }
+  if (f === 'failed') return { ...none, failed: r.failed }
+  if (f === 'sending') return { ...none, copying: r.copying, waiting: r.waiting }
+  if (f === 'unsent') return { ...none, unsent: r.unsent }
+  const keep = f === 'unsaved' ? hasUnsavedEdits : f === 'saved' ? isSaved : (w: WorkItem) => !hasUnsavedEdits(w) && !isSaved(w)
+  return { ...none, arrived: r.arrived.filter(keep) }
+}

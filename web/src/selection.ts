@@ -3,7 +3,7 @@
 // selection, of one device; `order` is every photo row of that device in the order shown, also the rows hidden
 // behind "N more · show them".
 
-export type RowKind = 'copying' | 'waiting' | 'arrived' | 'unsent'
+export type RowKind = 'failed' | 'copying' | 'waiting' | 'arrived' | 'unsent'
 export interface SelRow { id: number; kind: RowKind; /** can be left out of the batch right now */ droppable?: boolean; unsaved?: boolean }
 export interface Selection { agent: string; ids: number[]; anchor: number | null }
 
@@ -44,6 +44,8 @@ export interface Bulk {
   /** the selected photos "Don't send" can really take out, and how many selected ones it cannot */
   drop: number[]; stuck: number
   open: number[]; save: number[]; done: number[]
+  /** photos it could not copy: send again, or take off the page */
+  retry: number[]; clear: number[]
   /** Show in library: every selected photo */
   show: number[]
 }
@@ -52,7 +54,8 @@ export interface Bulk {
 export function bulkActions(rows: SelRow[], ids: number[]): Bulk {
   const chosen = new Set(ids)
   const sel = rows.filter(r => chosen.has(r.id))
-  const queued = sel.filter(r => r.kind !== 'arrived')
+  const queued = sel.filter(r => r.kind !== 'arrived' && r.kind !== 'failed')
+  const failed = sel.filter(r => r.kind === 'failed').map(r => r.id)
   const on = sel.filter(r => r.kind === 'arrived')
   return {
     drop: queued.filter(r => r.droppable).map(r => r.id),
@@ -60,6 +63,7 @@ export function bulkActions(rows: SelRow[], ids: number[]): Bulk {
     open: on.map(r => r.id),
     save: on.filter(r => r.unsaved).map(r => r.id),
     done: on.map(r => r.id),
+    retry: failed, clear: failed,
     show: sel.map(r => r.id),
   }
 }

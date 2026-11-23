@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS transfer_items (
 #   skipped   taken out with "Don't send"
 #   unsent    not copied because the batch was stopped (Resume sends these)
 #   dup       waits in an earlier batch for the same device already (counted there)
+#   retried   was failed; Retry sent it again in a new batch
+#   cleared   was failed; "Clear from queue" took it off the Devices page
 
 LIVE = ("queued", "running", "stopping")
 SAMPLE_SECONDS = 90          # how far back the progress samples for the estimate go
@@ -390,6 +392,21 @@ def decorate(agents: List[dict]) -> None:
         a["folded"] = fold.get(a["id"])   # true / false as the user left it; null = never chosen
         a["folded_phone"] = fold.get("phone:" + a["id"])   # the same for the phone layout, which folds by itself
         a.update(_summary(c, a, caps))
+        a["failed"] = failed_items(c, a["id"])
+
+
+def failed_items(c, aid: str) -> list:
+    """Photos this device could not copy, in any batch that is not over and done with (newest first, each once),
+    until Retry or "Clear from queue". Before, a failed photo was only a number in a batch that had ended."""
+    rows = c.execute("SELECT i.photo_id, i.filename, i.job_id, COALESCE(t.ended, t.started, t.created) ts FROM transfer_items i"
+                     " JOIN transfers t ON t.job_id=i.job_id WHERE t.agent_id=? AND i.state='failed'"
+                     " AND t.state NOT IN ('cancelled','legacy') ORDER BY i.job_id DESC LIMIT 500", (aid,)).fetchall()
+    out, seen = [], set()
+    for r in rows:
+        if r["photo_id"] not in seen:
+            seen.add(r["photo_id"])
+            out.append({"id": r["photo_id"], "filename": r["filename"], "job": r["job_id"], "time": r["ts"]})
+    return out
 
 
 # ---------------------------------------------------------------- what the web app can ask for
@@ -493,6 +510,62 @@ def dont_send(aid: str, body: Dict[str, Any] = Body(...)):
             n += len(mine)
         c.commit()
     return {"ok": True, "photos": n}
+
+
+def _working_errors(c, aid: str, ids) -> List[int]:
+    """Of these photos, the ones the device lists as a copy that failed (status error, no edits of its own)."""
+    r = c.execute("SELECT state FROM agents WHERE id=?", (aid,)).fetchone()
+    try:
+        ws = (json.loads((r["state"] if r else None) or "{}") or {}).get("working_set") or []
+    except ValueError:
+        ws = []
+    want = set(ids)
+    return [w["id"] for w in ws if isinstance(w, dict) and w.get("id") in want and w.get("status") == "error"
+            and (w.get("copy_failed") or "sync" not in str(w.get("error") or "").lower())]
+
+
+@router.post("/api/agents/{aid}/retry")
+def retry(aid: str, body: Dict[str, Any] = Body(...)):
+    """Send photos that could not be copied again: one new batch for this device. A device from before this does
+    not copy again a photo it lists with an error; the agent from 23 Nov 2026 on does."""
+    ids = _ints(body.get("ids"))
+    if not ids:
+        raise HTTPException(400, "ids required")
+    with db.write_lock:
+        c = db.conn()
+        _agent(c, aid)
+        for pid in ids:
+            c.execute("UPDATE transfer_items SET state='retried' WHERE photo_id=? AND state='failed' AND job_id IN"
+                      " (SELECT job_id FROM transfers WHERE agent_id=?)", (pid, aid))
+        payload = {"ids": ids}
+        jid = c.execute("INSERT INTO jobs(agent_id,kind,payload,created) VALUES(?,?,?,?)", (aid, "edit", json.dumps(payload), time.time())).lastrowid
+        live = _live(c, aid)
+        register(c, jid, aid, payload, run=live[0]["run"] if live else None)
+        c.commit()
+    return {"ok": True, "id": jid, "photos": len(ids)}
+
+
+@router.post("/api/agents/{aid}/clear")
+def clear(aid: str, body: Dict[str, Any] = Body(...)):
+    """"Clear from queue": photos that could not be copied leave the Devices page. Nothing of them is on the device
+    (what a failed copy left there, the device deletes: a "forget" job). Photos with edits are never touched here."""
+    ids = _ints(body.get("ids"))
+    if not ids:
+        raise HTTPException(400, "ids required")
+    with db.write_lock:
+        c = db.conn()
+        _agent(c, aid)
+        n = 0
+        for pid in ids:
+            n += c.execute("UPDATE transfer_items SET state='cleared' WHERE photo_id=? AND state='failed' AND job_id IN"
+                           " (SELECT job_id FROM transfers WHERE agent_id=?)", (pid, aid)).rowcount
+        there = _working_errors(c, aid, ids)
+        jid = None
+        if there:
+            jid = c.execute("INSERT INTO jobs(agent_id,kind,payload,created) VALUES(?,?,?,?)",
+                            (aid, "forget", json.dumps({"ids": there, "mode": "failed"}), time.time())).lastrowid
+        c.commit()
+    return {"ok": True, "cleared": n, "on_device": len(there), "id": jid}
 
 
 @router.post("/api/agents/{aid}/dismiss")
