@@ -7,8 +7,9 @@ import queue
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
-from . import db, edits, media, xmp
+from . import db, edits, media, versions, xmp
 from .config import SKIP_DIRS, SUPPORTED_EXTS, config
 
 log = logging.getLogger("lpl.scan")
@@ -49,7 +50,8 @@ def _excluded_abs() -> set:
     return out
 
 
-def _walk(root: Path, skip: set = frozenset()):
+def _walk(root: Path, skip: set = frozenset(), side: Optional[list] = None):
+    """Photos under root. side, when given, collects (directory, name) of the *_nn.EXT.xmp files met on the way (versions)."""
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS
                        and str(Path(dirpath) / d) not in skip]
@@ -59,6 +61,8 @@ def _walk(root: Path, skip: set = frozenset()):
             ext = fn.rsplit(".", 1)[-1].lower() if "." in fn else ""
             if ext in SUPPORTED_EXTS:
                 yield Path(dirpath) / fn, ext
+            elif side is not None and ext == "xmp" and versions.parse_name(fn):
+                side.append((Path(dirpath), fn))
 
 
 def roots():
@@ -98,8 +102,21 @@ def abs_of(relpath: str) -> Path:
     return p
 
 
-def apply_xmp_to_db(photo_id: int, x: dict, touch: bool = False) -> None:
+def apply_xmp_to_db(photo_id: int, x: dict, touch: bool = False, version: int = 0) -> None:
+    """What an XMP says, into the database. version: which sidecar it is (R17). The photo's own columns show the
+    cover version: they follow this XMP only when it is the cover's."""
     c = db.conn()
+    if version or versions.has_rows(photo_id):
+        versions.upsert(photo_id, version, x, touch=touch)
+        if versions.cover_of(photo_id) != version:
+            if version == 0:  # the file's time and stamps still belong to the photo
+                c.execute("UPDATE photos SET change_ts=COALESCE(?, change_ts), export_ts=COALESCE(?, export_ts), "
+                          "print_ts=COALESCE(?, print_ts), import_ts=COALESCE(?, import_ts), xmp_mtime=? WHERE id=?",
+                          (x["change_ts"], x["export_ts"], x["print_ts"], x["import_ts"], x.get("mtime"), photo_id))
+            return
+        if version:
+            versions.mirror_cover(photo_id, touch=touch)
+            return
     db.set_photo_meta(photo_id, rating=x["rating"], labels=x["labels"], tags=x["tags"],
                       title=x["title"], description=x["description"], touch=touch)
     c.execute(
@@ -179,13 +196,14 @@ def scan(full: bool = False) -> None:
         known = {r["relpath"]: r for r in db.conn().execute(
             "SELECT id, relpath, size, mtime, xmp_mtime, missing FROM photos").fetchall()}
         seen = set()
+        side = []         # (folder, name) of the version sidecars (IMG_01_02.RAF.xmp) met on the way
         changed = []      # (path, ext, rel, stat)
         xmp_changed = []  # (id, xmp dict)
         skip = _excluded_abs()
         def walk_all():
             for _, r in rts:
                 if r.is_dir():
-                    yield from _walk(r, skip)
+                    yield from _walk(r, skip, side)
         offline = tuple("%s/" % n for n, r in rts if n and not r.is_dir())
         for path, ext in walk_all():
             rel = rel_of(path)
@@ -222,6 +240,11 @@ def scan(full: bool = False) -> None:
                 db.conn().commit()
             from . import autotag
             autotag.mark([pid for pid, _x in xmp_changed])
+        try:
+            nv = versions.sync(side, seen, rel_of, edits)  # versions of photos (also those whose photo did not change)
+        except Exception:  # pragma: no cover
+            log.exception("version scan failed")
+            nv = 0
         # photos in a folder that is currently unplugged (e.g. external drive) are kept as they are
         missing = [r["id"] for rel, r in known.items() if rel not in seen and not r["missing"] and not (offline and rel.startswith(offline))]
         if missing:
@@ -229,7 +252,7 @@ def scan(full: bool = False) -> None:
                 db.conn().executemany("UPDATE photos SET missing=1 WHERE id=?", [(m,) for m in missing])
                 db.conn().commit()
         status.update(state="idle", phase="", last_scan=time.time())
-        log.info("scan done: %d new/changed, %d xmp changed, %d missing", len(changed), len(xmp_changed), len(missing))
+        log.info("scan done: %d new/changed, %d xmp changed, %d versions, %d missing", len(changed), len(xmp_changed), nv, len(missing))
     except Exception as e:  # pragma: no cover
         log.exception("scan failed")
         status.update(state="error", error=str(e))

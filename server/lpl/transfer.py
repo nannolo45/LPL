@@ -268,7 +268,7 @@ def _delete_local(pid: int) -> None:
         except OSError as e:
             raise RuntimeError("could not delete %s: %s" % (f, e))
     c = db.conn()
-    for t in ("photo_labels", "photo_tags", "series_items", "folder_items"):
+    for t in ("photo_labels", "photo_tags", "series_items", "folder_items", "photo_versions", "photo_version_hw"):
         c.execute("DELETE FROM %s WHERE photo_id=?" % t, (pid,))
     c.execute("DELETE FROM photos WHERE id=?", (pid,))
     c.execute("DELETE FROM sent WHERE photo_id=?", (pid,))

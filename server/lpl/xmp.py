@@ -59,6 +59,14 @@ def sidecar_path(image_path: Path) -> Path:
     return image_path.with_name(image_path.name + ".xmp")
 
 
+def version_sidecar_path(image_path: Path, n: int) -> Path:
+    """darktable duplicates: IMG_01.RAF, version n -> IMG_01_02.RAF.xmp (two digits, three from 100). n = 0: the usual sidecar."""
+    if n <= 0:
+        return sidecar_path(image_path)
+    stem, dot, ext = image_path.name.rpartition(".")
+    return image_path.with_name("%s_%02d%s%s.xmp" % (stem, n, dot, ext))
+
+
 def alt_sidecar_path(image_path: Path) -> Path:
     """Other apps: IMG.RAF -> IMG.xmp (read only fallback)"""
     return image_path.with_suffix(".xmp")
@@ -217,6 +225,7 @@ def parse(data: bytes) -> dict:
         "export_ts": dt_timestamp(_get_attr_or_child(desc, "darktable", "export_timestamp")),
         "print_ts": dt_timestamp(_get_attr_or_child(desc, "darktable", "print_timestamp")),
         "history": history(desc),
+        "version_name": (_get_attr_or_child(desc, "darktable", "version_name") or "").strip(),
     }
 
 
@@ -257,6 +266,21 @@ def _set_alt(desc, prefix, name, value):
     li = etree.SubElement(alt, q("rdf", "li"))
     li.set(q("xml", "lang"), "x-default")
     li.text = value
+
+
+def set_version_name(data: bytes, name: str) -> bytes:
+    """Write (or clear) darktable:version_name."""
+    tree = _parse_bytes(data)
+    desc = _description(tree)
+    key = q("darktable", "version_name")
+    child = desc.find(key)
+    if child is not None:
+        desc.remove(child)
+    if name:
+        desc.set(key, name)
+    elif desc.get(key) is not None:
+        del desc.attrib[key]
+    return etree.tostring(tree, xml_declaration=True, encoding="UTF-8") + b"\n"
 
 
 def apply_meta(data: Optional[bytes], rating: Optional[int] = None, labels: Optional[Iterable[int]] = None,

@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import db, edits, media, query, scanner, xmp
+from . import db, edits, media, query, scanner, versions, xmp
 from .config import RAW_EXTS  # which formats are RAW (the Format filter groups by it)
 from .config import config
 
@@ -92,29 +92,42 @@ def category_tags() -> List[str]:
     return [r["path"] for r in db.conn().execute("SELECT path FROM tags WHERE category=1").fetchall()]
 
 
-def write_xmp(pid: int, cats: Optional[List[str]] = None) -> Optional[str]:
-    """Write the DB state (rating, labels, tags) of one photo into its sidecar. Returns an error message or None."""
+def write_xmp(pid: int, cats: Optional[List[str]] = None, version: Optional[int] = None) -> Optional[str]:
+    """Write the DB state (rating, labels, tags) of one photo into its sidecar. Returns an error message or None.
+    version: which sidecar (R17); None = the cover version (version 0 unless the owner chose another)."""
     r = photo_row(pid)
+    n = versions.cover_of(pid) if version is None else version
     try:
         img = scanner.abs_of(r["relpath"])
-        sc = xmp.sidecar_path(img)
+        sc = versions.version_path(img, n)
         data = sc.read_bytes() if sc.is_file() else None
-        tags = [t for t in db.photo_tags(pid) if not t.startswith("darktable|")]
-        new = xmp.apply_meta(data, rating=r["rating"], labels=db.photo_labels(pid), tags=tags,
+        if n == 0 and not versions.has_rows(pid):
+            rating, labels, tags = r["rating"], db.photo_labels(pid), db.photo_tags(pid)
+        else:
+            m = versions.meta_of(pid, n)
+            if m is None:
+                return "%s: no version %d" % (r["relpath"], n)
+            rating, labels, tags = m["rating"], m["labels"], m["tags"]
+        tags = [t for t in tags if not t.startswith("darktable|")]
+        new = xmp.apply_meta(data, rating=rating, labels=labels, tags=tags,
                              category_tags=cats if cats is not None else category_tags())
-        xmp.atomic_write(sc, new, config.backup_dir, r["relpath"])
-        db.conn().execute("UPDATE photos SET xmp_mtime=? WHERE id=?", (sc.stat().st_mtime, pid))
+        xmp.atomic_write(sc, new, config.backup_dir, versions.rel_of_version(r["relpath"], n))
+        mt = sc.stat().st_mtime
+        if n == 0:
+            db.conn().execute("UPDATE photos SET xmp_mtime=? WHERE id=?", (mt, pid))
+        if versions.has_rows(pid):
+            db.conn().execute("UPDATE photo_versions SET mtime=? WHERE photo_id=? AND n=?", (mt, pid, n))
         return None
     except Exception as e:
         log.warning("XMP write failed for %s: %s", r["relpath"], e)
         return "%s: %s" % (r["relpath"], e)
 
 
-def write_xmps(ids: List[int]) -> List[str]:
+def write_xmps(ids: List[int], version: Optional[int] = None) -> List[str]:
     cats = category_tags()
     errs = []
     for pid in ids:
-        e = write_xmp(pid, cats)
+        e = write_xmp(pid, cats, version)
         if e:
             errs.append(e)
     return errs
@@ -190,7 +203,61 @@ def photo_detail(pid: int):
     d["series"] = series_mod.photo_series(pid)
     d["last_edit"] = edits.last(pid)
     d["autotag"] = autotag.photo_info(pid)
+    d["version_list"] = versions.list_versions(pid)
     return d
+
+
+@app.get("/api/photos/{pid}/versions")
+def photo_versions(pid: int):
+    photo_row(pid)
+    return {"id": pid, "versions": versions.list_versions(pid), "cover": versions.cover_of(pid), "next": versions.next_n(pid)}
+
+
+def _version_arg(version: Optional[int], allow_none: bool = False) -> int:
+    if version is None:
+        return 0
+    if version < 0 or version > 9999:
+        raise HTTPException(400, "bad version")
+    return version
+
+
+@app.post("/api/photos/{pid}/cover")
+def photo_cover(pid: int, version: int = 0):
+    """Make a version the one the tile, filters, series and board show (R17)."""
+    photo_row(pid)
+    _version_arg(version)
+    with db.write_lock:
+        try:
+            versions.set_cover(pid, version)
+        except KeyError:
+            raise HTTPException(404, "no such version")
+        db.conn().commit()
+    autotag.mark([pid])
+    return {"id": pid, "cover": versions.cover_of(pid), "versions": versions.list_versions(pid)}
+
+
+@app.put("/api/photos/{pid}/version-name")
+def photo_version_name(pid: int, version: int, body: Dict[str, Any] = Body(...)):
+    """Name a version ("black and white"); stored in its XMP as darktable does."""
+    r = photo_row(pid)
+    name = str(body.get("name") or "").strip()[:80]
+    n = _version_arg(version)
+    img = scanner.abs_of(r["relpath"])
+    sc = versions.version_path(img, n)
+    with db.write_lock:
+        c = db.conn()
+        if not (n == 0 or versions.row_of(pid, n)):
+            raise HTTPException(404, "no such version")
+        data = sc.read_bytes() if sc.is_file() else None
+        if data is None:
+            data = xmp.apply_meta(None, rating=(versions.meta_of(pid, n) or {}).get("rating"), category_tags=category_tags())
+        xmp.atomic_write(sc, xmp.set_version_name(data, name), config.backup_dir, versions.rel_of_version(r["relpath"], n))
+        versions.ensure_rows(pid)
+        c.execute("UPDATE photo_versions SET name=?, mtime=?, xmp_path=? WHERE photo_id=? AND n=?", (name, sc.stat().st_mtime, sc.name, pid, n))
+        if n == 0:
+            c.execute("UPDATE photos SET xmp_mtime=? WHERE id=?", (sc.stat().st_mtime, pid))
+        c.commit()
+    return {"id": pid, "versions": versions.list_versions(pid)}
 
 
 @app.get("/api/photos/{pid}/edits")
@@ -201,8 +268,13 @@ def photo_edits(pid: int, limit: int = 200):
 
 
 @app.get("/api/preview/{pid}")
-def preview(pid: int, s: str = "t"):
-    t, l = media.preview_paths(pid)
+def preview(pid: int, s: str = "t", version: Optional[int] = None):
+    """The preview of a photo: its cover version's (R17), or, with version=n, that version's. A version that has no
+    preview of its own yet shows the original's."""
+    n = versions.cover_of(pid) if version is None else max(0, version)
+    t, l = media.preview_paths(pid, n)
+    if n and not t.is_file() and not l.is_file():
+        t, l = media.preview_paths(pid, 0)
     p = l if s == "l" else t
     if not p.is_file():
         if s == "l" and t.is_file():
@@ -213,23 +285,42 @@ def preview(pid: int, s: str = "t"):
     return FileResponse(p, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
+def _meta_of(pid: int, version: Optional[int]):
+    """(rating, labels, tags, via_version): the values of the version an edit applies to. version None = the cover.
+    via_version is False for a photo without versions (its values are the photo's own)."""
+    n = versions.cover_of(pid) if version is None else version
+    if n == 0 and not versions.has_rows(pid):
+        return None, set(db.photo_labels(pid)), set(db.photo_tags(pid)), False
+    m = versions.meta_of(pid, n)
+    if m is None:
+        raise KeyError(n)
+    return m["rating"], set(m["labels"]), set(m["tags"]), True
+
+
 @app.post("/api/meta")
 def set_meta(body: Dict[str, Any] = Body(...)):
     """Change rating / labels / tags of many photos at once and write their XMP files.
 
-    body: ids, rating, add_labels, remove_labels, toggle_label, attach, detach, title, description
+    body: ids, rating, add_labels, remove_labels, toggle_label, attach, detach, title, description,
+    version (R17: which version of each photo; absent = the cover version)
     """
     ids = [int(i) for i in body.get("ids") or []]
     if not ids:
         return {"items": [], "errors": []}
+    ver = int(body["version"]) if body.get("version") is not None else None
+    errors: List[str] = []
     with db.write_lock:
         c = db.conn()
+        done = []
         for pid in ids:
-            labels = set(db.photo_labels(pid))
-            tags = set(db.photo_tags(pid))
+            try:
+                _r, labels, tags, via = _meta_of(pid, ver)
+            except KeyError:
+                errors.append("photo %d has no version %s" % (pid, ver))
+                continue
             if "toggle_label" in body:
                 lab = int(body["toggle_label"])
-                all_have = all(lab in db.photo_labels(i) for i in ids)
+                all_have = all(lab in _meta_of_safe(i, ver) for i in ids)
                 labels.discard(lab) if all_have else labels.add(lab)
             for lab in body.get("add_labels") or []:
                 labels.add(int(lab))
@@ -241,12 +332,26 @@ def set_meta(body: Dict[str, Any] = Body(...)):
                     tags.add(t)
             for t in body.get("detach") or []:
                 tags.discard(t)
-            db.set_photo_meta(pid, rating=body.get("rating"), labels=sorted(labels), tags=sorted(tags),
-                              title=body.get("title"), description=body.get("description"))
+            if via:
+                n = versions.cover_of(pid) if ver is None else ver
+                versions.set_meta(pid, n, rating=body.get("rating"), labels=sorted(labels), tags=sorted(tags))
+                if body.get("title") is not None or body.get("description") is not None:
+                    db.set_photo_meta(pid, title=body.get("title"), description=body.get("description"), touch=False)
+            else:
+                db.set_photo_meta(pid, rating=body.get("rating"), labels=sorted(labels), tags=sorted(tags),
+                                  title=body.get("title"), description=body.get("description"))
+            done.append(pid)
         c.commit()
-        errors = write_xmps(ids)
+        errors += write_xmps(done, ver)
         c.commit()
     return {"items": photo_dicts(ids), "errors": errors}
+
+
+def _meta_of_safe(pid: int, version: Optional[int]) -> set:
+    try:
+        return _meta_of(pid, version)[1]
+    except KeyError:
+        return set()
 
 
 # ---------------------------------------------------------------- facets, folders, timeline
@@ -375,11 +480,13 @@ def folders_exclude(body: Dict[str, Any] = Body(...)):
 
 def _drop_previews(ids) -> None:
     for pid in ids:
-        for p in media.preview_paths(pid):
-            try:
-                p.unlink()
-            except OSError:
-                pass
+        vs = [v["n"] for v in versions.list_versions(pid)] or [0]
+        for n in sorted(set(vs) | {0}):
+            for p in media.preview_paths(pid, n):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
 
 
 @app.post("/api/folders/order")
@@ -616,11 +723,12 @@ def series_board(sid: int):
     s = _series(sid)
     c = db.conn()
     frames = [dict(r) for r in c.execute("SELECT id,label,x,y,w,h,maybe,color,border FROM series_frames WHERE series_id=? ORDER BY id", (sid,)).fetchall()]
-    pos = {r["photo_id"]: r for r in c.execute("SELECT photo_id,x,y,ord FROM series_items WHERE series_id=?", (sid,)).fetchall()}
+    pos = {r["photo_id"]: r for r in c.execute("SELECT photo_id,x,y,ord,version FROM series_items WHERE series_id=?", (sid,)).fetchall()}
     items = photo_dicts(list(pos.keys()))
     for it in items:
         r = pos[it["id"]]
         it["x"], it["y"], it["ord"] = r["x"], r["y"], r["ord"]
+    versions.decorate(items, {k: v["version"] for k, v in pos.items()})  # a pinned version (R17)
     try:
         last_add = json.loads(db.get_setting(_add_criteria_key(sid)) or "null")
     except ValueError:
@@ -632,6 +740,23 @@ def series_board(sid: int):
         shapes = []
     return {"series": {"id": s["id"], "name": s["name"]}, "frames": frames, "items": items, "last_add": last_add, "shapes": shapes,
             **series_mod.board_extra(s, items)}
+
+
+@app.put("/api/series/{sid}/pin")
+def series_pin(sid: int, body: Dict[str, Any] = Body(...)):
+    """"Use in series" (R17): this series shows version `version` of the photo (null: the photo's cover again)."""
+    _series(sid)
+    pid = int(body.get("photo_id"))
+    n = body.get("version")
+    with db.write_lock:
+        try:
+            versions.set_pin("series_items", "series_id", sid, pid, None if n is None else int(n))
+        except KeyError:
+            raise HTTPException(404, "no such version")
+        except LookupError:
+            raise HTTPException(404, "the photo is not in this series")
+        db.conn().commit()
+    return {"ok": True, "photo_id": pid, "version": n}
 
 
 @app.put("/api/series/{sid}/shapes")
@@ -996,10 +1121,20 @@ def job_done(jid: int, body: Dict[str, Any] = Body(default={})):
 
 
 @app.get("/api/photos/{pid}/checkout")
-def checkout(pid: int):
+def checkout(pid: int, agent: str = ""):
+    """What an agent needs to take a photo. With agent=<id> whose heartbeat caps contain "versions" the answer also
+    lists the versions (R17); for everyone else it is exactly what it was."""
     r = photo_row(pid)
-    return {"id": pid, "relpath": r["relpath"], "filename": r["filename"], "size": r["size"], "mtime": r["mtime"],
-            "meta_mtime": r["meta_mtime"], "server_time": time.time()}
+    out = {"id": pid, "relpath": r["relpath"], "filename": r["filename"], "size": r["size"], "mtime": r["mtime"],
+           "meta_mtime": r["meta_mtime"], "server_time": time.time()}
+    if agent and "versions" in transfers.caps_of(db.conn(), agent[:80]):
+        vs = [{"n": v["n"], "name": v["name"], "mtime": v["mtime"], "size": v["size"], "has_file": v["has_file"]}
+              for v in versions.list_versions(pid)]
+        out["versions"] = vs
+        out["cover"] = versions.cover_of(pid)
+        out["next"] = versions.next_n(pid)
+        versions.record_checkout(agent[:80], pid, [v["n"] for v in vs])
+    return out
 
 
 @app.get("/api/photos/{pid}/original")
@@ -1012,16 +1147,37 @@ def original(pid: int):
 
 
 @app.get("/api/photos/{pid}/xmp")
-def get_xmp(pid: int):
+def get_xmp(pid: int, version: Optional[int] = None):
+    n = _version_arg(version)
     r = photo_row(pid)
-    sc = xmp.sidecar_path(scanner.abs_of(r["relpath"]))
+    sc = versions.version_path(scanner.abs_of(r["relpath"]), n)
     if sc.is_file():
         data = sc.read_bytes()
+    elif n:
+        raise HTTPException(404, "no such version")
     else:
-        data = xmp.apply_meta(None, rating=r["rating"], labels=db.photo_labels(pid),
-                              tags=[t for t in db.photo_tags(pid) if not t.startswith("darktable|")],
+        m = versions.meta_of(pid, 0) if versions.has_rows(pid) else {"rating": r["rating"], "labels": db.photo_labels(pid), "tags": db.photo_tags(pid)}
+        data = xmp.apply_meta(None, rating=m["rating"], labels=m["labels"],
+                              tags=[t for t in m["tags"] if not t.startswith("darktable|")],
                               category_tags=category_tags())
     return Response(data, media_type="application/rdf+xml")
+
+
+@app.delete("/api/photos/{pid}/xmp")
+def delete_xmp(pid: int, version: Optional[int] = None):
+    """Delete a version (R17): LPL moves its sidecar to the backup folder, it does not erase it. Version 0 is never
+    deleted this way."""
+    n = _version_arg(version)
+    if n == 0:
+        raise HTTPException(400, "version 0 cannot be deleted")
+    r = photo_row(pid)
+    with db.write_lock:
+        if not versions.row_of(pid, n) and not versions.version_path(scanner.abs_of(r["relpath"]), n).is_file():
+            raise HTTPException(404, "no such version")
+        dest = versions.delete(pid, n, scanner.abs_of(r["relpath"]), r["relpath"])
+        db.conn().commit()
+    autotag.mark([pid])
+    return {"ok": True, "moved_to": str(dest) if dest else None, "cover": versions.cover_of(pid), "versions": versions.list_versions(pid)}
 
 
 def _posting_agent(pid: int, agent: str) -> Optional[str]:
@@ -1034,7 +1190,7 @@ def _posting_agent(pid: int, agent: str) -> Optional[str]:
     return having[0] if len(having) == 1 else None
 
 
-def _record_post(pid: int, sc: Path, new_hist: list, source: str, agent_id: Optional[str]) -> None:
+def _record_post(pid: int, sc: Path, new_hist: list, source: str, agent_id: Optional[str], version: int = 0) -> None:
     """Before the posted XMP replaces sc: record it as an edit event, compared with the file it replaces.
     If that file had changed since LPL last recorded it (darktable on a PC that wrote to the NAS directly),
     that change is recorded first, as edited outside LPL. Caller holds db.write_lock."""
@@ -1045,71 +1201,94 @@ def _record_post(pid: int, sc: Path, new_hist: list, source: str, agent_id: Opti
             old_mtime = sc.stat().st_mtime
         except Exception:
             old = None
-    base = edits.baseline(pid)
+    base = edits.baseline(pid, version)
     if old is not None and base is not None and old_mtime > base["mtime"] + 0.001 \
             and edits.signature(old) != edits.signature(base["history"]):
-        edits.record(pid, old, base["history"], "outside", ts=old_mtime, mtime=old_mtime)
+        edits.record(pid, old, base["history"], "outside", ts=old_mtime, mtime=old_mtime, version=version)
     prev = old if old is not None else (base["history"] if base else None)
-    edits.record(pid, new_hist, prev, source, agent_id=agent_id)
+    edits.record(pid, new_hist, prev, source, agent_id=agent_id, version=version)
 
 
 @app.post("/api/photos/{pid}/xmp")
-async def put_xmp(pid: int, request: Request, checkout_ts: float = 0, agent: str = ""):
+async def put_xmp(pid: int, request: Request, checkout_ts: float = 0, agent: str = "", version: Optional[int] = None):
     """Sync-back from the agent. darktable's edit always wins; for rating/labels/tags the LPL values win
-    if they were changed in LPL after the checkout. agent = the posting agent's id (recorded as who edited)."""
+    if they were changed in LPL after the checkout. agent = the posting agent's id (recorded as who edited).
+    version = which sidecar (R17; absent = 0). A version that already exists and was not in this agent's checkout
+    is a number two devices made at the same time: 409 {"error":"version_exists","next":n}, nothing is overwritten."""
+    n = _version_arg(version)
     data = await request.body()
     try:
         xmp.parse(data)
     except Exception:
         raise HTTPException(400, "not a valid XMP file")
     r = photo_row(pid)
+    agent_id = _posting_agent(pid, agent)
+    img = scanner.abs_of(r["relpath"])
+    sc = versions.version_path(img, n)
+    if n and (versions.row_of(pid, n) is not None or sc.is_file()) and not versions.in_checkout(agent_id or "", pid, n):
+        return JSONResponse({"error": "version_exists", "next": versions.next_n(pid)}, status_code=409)
     data = xmp.set_derived_from(data, r["filename"])
     merged = False
-    if (r["meta_mtime"] or 0) > checkout_ts > 0:
-        data = xmp.apply_meta(data, rating=r["rating"], labels=db.photo_labels(pid),
-                              tags=[t for t in db.photo_tags(pid) if not t.startswith("darktable|")],
-                              category_tags=category_tags())
-        merged = True
-    sc = xmp.sidecar_path(scanner.abs_of(r["relpath"]))
-    agent_id = _posting_agent(pid, agent)
+    lpl_meta_ts = r["meta_mtime"] or 0
+    if n or versions.has_rows(pid):
+        lpl_meta_ts = versions.meta_mtime(pid, n, lpl_meta_ts)
+    if lpl_meta_ts > checkout_ts > 0:
+        m = versions.meta_of(pid, n)
+        if m is not None:
+            data = xmp.apply_meta(data, rating=m["rating"], labels=m["labels"], tags=m["tags"],
+                                  category_tags=category_tags())
+            merged = True
     with db.write_lock:
         x = xmp.parse(data)
         try:
-            _record_post(pid, sc, x["history"], "agent", agent_id)
+            _record_post(pid, sc, x["history"], "agent", agent_id, n)
         except Exception:  # the record must never cost the edit
             log.exception("could not record the edit of photo %s", pid)
         try:
-            xmp.atomic_write(sc, data, config.backup_dir, r["relpath"])
+            xmp.atomic_write(sc, data, config.backup_dir, versions.rel_of_version(r["relpath"], n))
         except Exception:
             db.conn().rollback()  # no record of an edit that was not stored
             raise
         x["mtime"] = sc.stat().st_mtime
-        scanner.apply_xmp_to_db(pid, x, touch=False)
-        edits.set_baseline(pid, x["history"], x["mtime"])
-        autotag.xmp_arrived(pid)
+        scanner.apply_xmp_to_db(pid, x, touch=False, version=n)
+        if n:
+            db.conn().execute("UPDATE photo_versions SET size=? WHERE photo_id=? AND n=?", (len(data), pid, n))
+        edits.set_baseline(pid, x["history"], x["mtime"], n)
+        if n == versions.cover_of(pid):
+            autotag.xmp_arrived(pid)
         db.conn().commit()
     autotag.mark([pid])
     return Response(data, media_type="application/rdf+xml", headers={"X-LPL-Merged": "1" if merged else "0"})
 
 
 @app.post("/api/photos/{pid}/preview")
-async def put_preview(pid: int, request: Request):
-    """darktable's rendered JPEG replaces the embedded-preview thumbnails."""
+async def put_preview(pid: int, request: Request, version: Optional[int] = None):
+    """darktable's rendered JPEG replaces the embedded-preview thumbnails. version (R17): the rendering of that
+    version; LPL keeps one per version and shows the cover's on the tile."""
     import io
     from PIL import Image
+    n = _version_arg(version)
     photo_row(pid)
     data = await request.body()
     try:
         img = Image.open(io.BytesIO(data))
         img.load()
-        media.save_previews(img.convert("RGB"), pid)
+        media.save_previews(img.convert("RGB"), pid, n)
     except Exception as e:
         raise HTTPException(400, "bad image: %s" % e)
+    cover = versions.cover_of(pid)
     with db.write_lock:
-        db.conn().execute("UPDATE photos SET preview_ver=preview_ver+1, preview_state=1 WHERE id=?", (pid,))
-        autotag.preview_changed(pid, rendered=True)
-        db.conn().commit()
-    autotag.mark([pid])
+        c = db.conn()
+        if n == cover:  # the tile's picture
+            c.execute("UPDATE photos SET preview_ver=preview_ver+1, preview_state=1 WHERE id=?", (pid,))
+            autotag.preview_changed(pid, rendered=True)
+        elif n == 0:
+            c.execute("UPDATE photos SET preview_state=1 WHERE id=?", (pid,))
+        if n and versions.row_of(pid, n):
+            c.execute("UPDATE photo_versions SET preview_ver=preview_ver+1 WHERE photo_id=? AND n=?", (pid, n))
+        c.commit()
+    if n == cover:
+        autotag.mark([pid])
     return {"ok": True}
 
 
