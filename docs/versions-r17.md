@@ -19,6 +19,7 @@ another is chosen; versions may be deleted (confirmation, file moved to the back
 
 ## Notes for the reviewer
 - **PC agent.** The design said the agent already copied `_nn` files; it did not (`transfer.py` only deleted them), so it was built (owner's yes). darktable writes no duplicate number inside the XMP (`xmp_version` is the file format's; fixtures show none), so a 409 rename is a file rename only. The agent asks `/versions` (not `/checkout`) when refreshing, because a checkout records that the device has seen every number, which would hide a collision. Versions are refreshed when a photo already here is asked for again and before versions are sent; a deleted-in-LPL version is not noticed at other times.
+- 409 rule: besides the numbers listed at checkout, every number an agent itself posts is recorded as known to it, so its later posts of that number succeed; a number another device made since still gives 409 (PC agents too). Test: `test_own_post_is_known_...`.
 - Existing test `test_pc_agent.py` now expects the caps `["batch","cancel","open","versions"]` (the only edit to an existing test).
 - `/checkout` needs `?agent=<id>` to know the caps (an app that never sends it gets the old answer). The 409 rule uses what that
   agent was told at its last checkout (`version_checkouts`); a post to an existing number from an agent without a recorded checkout is a 409.
@@ -29,7 +30,7 @@ another is chosen; versions may be deleted (confirmation, file moved to the back
 - If the *last* version of a photo is removed (outside LPL or here), its rows are dropped: it is a plain photo again.
 
 ## Tests
-- Server: `cd server && pip install -r requirements-dev.txt && python -m pytest -q` : 177 passed (151 before; `tests/test_versions.py` adds 18 and `test_pc_agent_versions.py` 8: scan with gaps, missing v0, 100, own-photo sidecar, ignored orphan; checkout with and without the cap; xmp/preview/delete with version; 409; per-version merge; cover; series pin; edit events; migration of an older library; working-set version).
+- Server: `cd server && pip install -r requirements-dev.txt && python -m pytest -q` : 178 passed (151 before; `tests/test_versions.py` adds 18 and `test_pc_agent_versions.py` 8: scan with gaps, missing v0, 100, own-photo sidecar, ignored orphan; checkout with and without the cap; xmp/preview/delete with version; 409; per-version merge; cover; series pin; edit events; migration of an older library; working-set version).
 - Web: `cd web && npm ci && npm test && npm run build` : 71 passed (10 new in `tests/versions.test.ts`: badge, strip, cover url, pin, delete text, R1 link, where line); build passes.
 - Headless Chrome: `python web/tests/versions-check.py <python> <folder>` (after `npm run build`): badge, strip, rating goes to one version's XMP only, cover, delete confirmation, phone page and badge. Output of the committed run: all 8 checks passed.
 - PC agent: `tests/test_pc_agent_versions.py` (8 tests, a real agent against the server over HTTP: caps, copy, post, 409 rename, deletion rules, old server, release, transfer's file set).

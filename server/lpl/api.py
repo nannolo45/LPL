@@ -1256,6 +1256,8 @@ async def put_xmp(pid: int, request: Request, checkout_ts: float = 0, agent: str
         if n:
             db.conn().execute("UPDATE photo_versions SET size=? WHERE photo_id=? AND n=?", (len(data), pid, n))
         edits.set_baseline(pid, x["history"], x["mtime"], n)
+        if n:
+            versions.add_known(agent_id or "", pid, n)  # this agent knows the number now
         if n == versions.cover_of(pid):
             autotag.xmp_arrived(pid)
         db.conn().commit()

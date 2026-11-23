@@ -299,6 +299,23 @@ def record_checkout(agent: str, pid: int, ns: List[int]) -> None:
         db.conn().commit()
 
 
+def add_known(agent: str, pid: int, n: int) -> None:
+    """An agent posted version n: it knows that number now, so its later posts of it are edits, not a clash.
+    (Numbers other devices make afterwards are still unknown to it.) Caller holds write_lock."""
+    if not agent:
+        return
+    c = db.conn()
+    r = c.execute("SELECT ns FROM version_checkouts WHERE agent_id=? AND photo_id=?", (agent, pid)).fetchone()
+    try:
+        ns = json.loads(r["ns"]) if r else []
+    except ValueError:
+        ns = []
+    if n not in ns:
+        ns.append(n)
+    c.execute("INSERT INTO version_checkouts(agent_id,photo_id,ts,ns) VALUES(?,?,?,?) ON CONFLICT(agent_id,photo_id) "
+              "DO UPDATE SET ns=excluded.ns", (agent, pid, db.now(), json.dumps(ns)))
+
+
 def in_checkout(agent: str, pid: int, n: int) -> bool:
     if not agent:
         return False

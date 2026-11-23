@@ -308,3 +308,22 @@ def test_working_set_items_carry_a_version(client, lib):
     assert client.post("/api/agents/heartbeat", json=body).status_code == 200
     ws = {w["id"]: w for a in client.get("/api/agents").json()["agents"] if a["id"] == PHONE["id"] for w in a["state"]["working_set"]}
     assert ws[ids["A.jpg"]]["version"] == 2 and "version" not in ws[ids["B.jpg"]] and "version" not in ws[ids["C.jpg"]]
+
+
+def test_own_post_is_known_to_the_agent_but_not_a_later_number_of_another(client, lib):
+    d, ids = lib
+    pid = ids["C.jpg"]
+    beat(client, PHONE, ["versions"])
+    client.get("/api/photos/%d/checkout?agent=%s" % (pid, PHONE["id"]))
+    url = "/api/photos/%d/xmp?agent=%s&version=" % (pid, PHONE["id"])
+    assert client.post(url + "5", content=sidecar(rating=1)).status_code == 200
+    assert client.post(url + "5", content=sidecar(rating=2)).status_code == 200   # its own number again: an edit
+    (d / "C_06.jpg.xmp").write_bytes(sidecar(rating=3))                           # another device, since the checkout
+    scanner.scan()
+    r = client.post(url + "6", content=sidecar(rating=4))
+    assert r.status_code == 409 and r.json()["next"] == 7
+    assert xmp.parse((d / "C_06.jpg.xmp").read_bytes())["rating"] == 3
+    # a post from an agent that was never checked out still clashes with an existing number, and a PC agent is no different
+    assert client.post("/api/photos/%d/xmp?agent=%s&version=5" % (pid, PC["id"]), content=sidecar()).status_code == 409
+    assert client.post("/api/photos/%d/xmp?agent=%s&version=8" % (pid, PC["id"]), content=sidecar()).status_code == 200
+    assert client.post("/api/photos/%d/xmp?agent=%s&version=8" % (pid, PC["id"]), content=sidecar(rating=2)).status_code == 200
