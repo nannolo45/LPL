@@ -14,13 +14,12 @@ another is chosen; versions may be deleted (confirmation, file moved to the back
 | Web, desktop and phone: count badge on tiles (grid, phone grid, strip, board), versions strip (thumbnail, number, name, rating, labels, cover mark), set as cover, delete with confirmation, name, "edit this version" in darktable and on this phone, rating/labels/tags apply to the viewed version | done |
 | Series and board entries pin a version: `PUT /api/series/{id}/pin`, `PUT /api/series-folders/{id}/pin`; entries carry `pin` and `show`; a deleted pinned version falls back to the cover; "Use in series" in the strip | done (API and button; the board thumbnail shows `show`) |
 | R1 link `&version=n`; the "edit" job payload carries `version` | done (link, job payload); the phone app reads it later |
-| PC agent | not changed, see below |
+| PC agent (`agent/lpl_agent.py`): caps `versions`; checkout with `?agent=`; copies every version sidecar beside the RAW; posts new and changed versions with `version=n`; 409 -> renames the local sidecar to `next` and posts again; a version deleted in LPL is removed on the PC only if unchanged there, else posted back; release removes them; a server that does not list versions: as before | done |
+| `transfer.py` (local library -> NAS): versions are sent with the photo (`PUT /api/import/xmp?version=n`, adopted by `import/index`) before the local copy is deleted; the delete now also covers three-digit numbers | done |
 
 ## Notes for the reviewer
-- **PC agent: the design's premise was wrong.** `transfer.py` only *deletes* `_nn` files (after a send to the NAS); neither it nor `agent/lpl_agent.py`
-  copies them. The agent downloads `GET /xmp` (version 0 only) and posts without `version`, which is exactly the old behaviour,
-  so nothing breaks, but a PC never receives versions and a duplicate made in darktable on a PC stays there. Giving the agent the
-  `versions` cap (download every version, post with `version=`, handle 409) is a separate small package; not built, as the brief said no agent change.
+- **PC agent.** The design said the agent already copied `_nn` files; it did not (`transfer.py` only deleted them), so it was built (owner's yes). darktable writes no duplicate number inside the XMP (`xmp_version` is the file format's; fixtures show none), so a 409 rename is a file rename only. The agent asks `/versions` (not `/checkout`) when refreshing, because a checkout records that the device has seen every number, which would hide a collision. Versions are refreshed when a photo already here is asked for again and before versions are sent; a deleted-in-LPL version is not noticed at other times.
+- Existing test `test_pc_agent.py` now expects the caps `["batch","cancel","open","versions"]` (the only edit to an existing test).
 - `/checkout` needs `?agent=<id>` to know the caps (an app that never sends it gets the old answer). The 409 rule uses what that
   agent was told at its last checkout (`version_checkouts`); a post to an existing number from an agent without a recorded checkout is a 409.
 - Cover change: `photos.rating/labels/tags/edited` are copied from the cover version and `preview_ver` goes up. A photo's tile
@@ -30,12 +29,13 @@ another is chosen; versions may be deleted (confirmation, file moved to the back
 - If the *last* version of a photo is removed (outside LPL or here), its rows are dropped: it is a plain photo again.
 
 ## Tests
-- Server: `cd server && pip install -r requirements-dev.txt && python -m pytest -q` : 169 passed (151 before; `tests/test_versions.py` adds 18: scan with gaps, missing v0, 100, own-photo sidecar, ignored orphan; checkout with and without the cap; xmp/preview/delete with version; 409; per-version merge; cover; series pin; edit events; migration of an older library; working-set version).
+- Server: `cd server && pip install -r requirements-dev.txt && python -m pytest -q` : 177 passed (151 before; `tests/test_versions.py` adds 18 and `test_pc_agent_versions.py` 8: scan with gaps, missing v0, 100, own-photo sidecar, ignored orphan; checkout with and without the cap; xmp/preview/delete with version; 409; per-version merge; cover; series pin; edit events; migration of an older library; working-set version).
 - Web: `cd web && npm ci && npm test && npm run build` : 71 passed (10 new in `tests/versions.test.ts`: badge, strip, cover url, pin, delete text, R1 link, where line); build passes.
 - Headless Chrome: `python web/tests/versions-check.py <python> <folder>` (after `npm run build`): badge, strip, rating goes to one version's XMP only, cover, delete confirmation, phone page and badge. Output of the committed run: all 8 checks passed.
+- PC agent: `tests/test_pc_agent_versions.py` (8 tests, a real agent against the server over HTTP: caps, copy, post, 409 rename, deletion rules, old server, release, transfer's file set).
 - x86_64 build workspace numbers, not a phone's.
 
 ## Open questions
-1. Should the PC agent get the `versions` cap now (see above)?
+1. (answered: yes, built)
 2. "Every version its own tile" stays a later setting, as decided.
 3. `/checkout` identifies the agent by `?agent=`: the app must send it (the app brief should say so).

@@ -1365,7 +1365,7 @@ async def import_file(request: Request, dest: str, size: int):
 
 
 @app.put("/api/import/xmp")
-async def import_xmp(request: Request, dest: str):
+async def import_xmp(request: Request, dest: str, version: Optional[int] = None):
     """The sidecar for an image sent earlier (or right before). darktable's latest edit wins."""
     if config.local:
         raise HTTPException(400, "this is a local library, not the NAS")
@@ -1376,8 +1376,16 @@ async def import_xmp(request: Request, dest: str):
         x = xmp.parse(data)
     except Exception:
         raise HTTPException(400, "not a valid XMP file")
-    sc = xmp.sidecar_path(img)
+    n = _version_arg(version)
+    sc = versions.version_path(img, n)
     sc.parent.mkdir(parents=True, exist_ok=True)
+    if n:  # a version (R17): written beside the photo and listed under it, now if the photo is known, else by import/index
+        with db.write_lock:
+            xmp.atomic_write(sc, data, config.backup_dir, versions.rel_of_version(scanner.rel_of(img), n))
+            row = db.conn().execute("SELECT id FROM photos WHERE relpath=?", (scanner.rel_of(img),)).fetchone()
+        if row:
+            versions.adopt(row["id"], img, edits)
+        return {"ok": True}
     with db.write_lock:
         row = db.conn().execute("SELECT id FROM photos WHERE relpath=?", (scanner.rel_of(img),)).fetchone()
         if row:
@@ -1409,6 +1417,10 @@ def import_index(body: Dict[str, Any] = Body(...)):
         raise HTTPException(400, "this is a local library, not the NAS")
     paths = [_dest(d) for d in body.get("dests") or []]
     ids = scanner.index_paths(paths)
+    for pth in paths:  # versions that came with the photos (R17)
+        pid = ids.get(scanner.rel_of(pth))
+        if pid:
+            versions.adopt(pid, pth, edits)
     by_dest = {d: ids.get(scanner.rel_of(_dest(d))) for d in body.get("dests") or []}
     merged = []
     added_by_series: Dict[str, list] = {}

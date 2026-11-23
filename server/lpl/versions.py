@@ -401,3 +401,31 @@ def set_pin(table: str, key: str, owner: int, pid: int, n: Optional[int]) -> Non
     if not c.execute("SELECT 1 FROM %s WHERE %s=? AND photo_id=?" % (table, key), (owner, pid)).fetchone():
         raise LookupError(pid)
     c.execute("UPDATE %s SET version=? WHERE %s=? AND photo_id=?" % (table, key), (n, owner, pid))
+
+
+def adopt(pid: int, img: Path, edits_mod=None) -> int:
+    """Read the version sidecars lying beside a photo that was just put there (a send from a PC's local library) and
+    list them under it. Returns how many were new or changed."""
+    found = {}
+    for f in img.parent.glob("*.xmp"):
+        pn = parse_name(f.name)
+        if pn and pn[0] == img.name:
+            found[pn[1]] = f
+    k = 0
+    with db.write_lock:
+        for n, f in sorted(found.items()):
+            try:
+                st = f.stat()
+                x = xmp.parse(f.read_bytes())
+            except Exception:
+                continue
+            row = row_of(pid, n)
+            if row is not None and row["mtime"] is not None and abs(row["mtime"] - st.st_mtime) <= 1:
+                continue
+            x["mtime"] = st.st_mtime
+            upsert(pid, n, x, mtime=st.st_mtime, size=st.st_size)
+            if edits_mod is not None:
+                edits_mod.observe_scan(pid, x, version=n)
+            k += 1
+        db.conn().commit()
+    return k
