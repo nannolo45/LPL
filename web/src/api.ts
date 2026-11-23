@@ -175,13 +175,13 @@ export interface SendState { running: boolean; phase: string; done: number; tota
 
 /** Auto-tagging (Settings > Auto-tagging): the B&W rule's settings, a photo's verdict, the counts of a run. */
 export interface AutotagRule { enabled: boolean; tag_bnw: string; tag_toned: string; toned: 'bnw+toned' | 'bnw' | 'colour'
-  use_rendered: boolean; use_history: boolean; use_camera: boolean; disagree_review: boolean; strictness: number; band: number
+  use_rendered: boolean; use_history: boolean; use_camera: boolean; disagree_review: boolean; camera_over_edit: boolean; strictness: number; band: number
   folders: string[]; remove_stale: boolean; managed: string[] }
 export interface AutotagSettings { auto: boolean; bnw: AutotagRule }
 export type AutotagVerdict = 'bnw' | 'colour' | 'unsure' | 'none'
 export interface AutotagInfo { rule?: string; enabled?: boolean; verdict: AutotagVerdict | null; toned?: number; source?: string; score?: number | null; detail?: string
   checked?: number | null; override?: { verdict: AutotagVerdict; toned: number } | null; tags?: string[] }
-export interface AutotagStatus { state: 'idle' | 'running' | 'error'; done: number; total: number; apply: boolean; error: string; finished: number; last_apply?: { added: number; removed: number; photos: number } }
+export interface AutotagStatus { state: 'idle' | 'running' | 'error'; done: number; rate?: number; total: number; apply: boolean; error: string; finished: number; last_apply?: { added: number; removed: number; photos: number } }
 export interface AutotagCounts { bnw: number; toned: number; colour: number; unsure: number; none: number; camera: number; checked: number; corrected: number; photos: number }
 export interface AutotagReview { counts: { unsure: number; bnw: number; toned: number; removals: number; adds: number }; total: number; items: Photo[]; status: AutotagStatus; settings: AutotagSettings }
 

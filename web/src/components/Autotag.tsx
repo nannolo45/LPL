@@ -90,7 +90,7 @@ export function AutotagSettingsPanel() {
             {counts && counts.checked > 0
               ? `${last ? 'last run ' + last.toLocaleString() + ' · ' : ''}${n(counts.bnw)} B&W${counts.camera ? ` (${n(counts.camera)} shot B&W in camera)` : ''} · ${n(counts.toned)} toned · ${n(counts.unsure)} unsure`
               : 'not run yet'}
-            {status?.state === 'running' ? ` · checking ${n(status.done)} of ${n(status.total)}…` : ''}
+            {status?.state === 'running' ? ` · checking ${n(status.done)} of ${n(status.total)}${status.rate ? ` (${status.rate}/s)` : ''}…` : ''}
           </span>
           <button type="button" className="btn" onClick={() => setReview(true)}>Preview run…</button>
         </div>
@@ -101,11 +101,13 @@ export function AutotagSettingsPanel() {
             <Source num={1} title="darktable rendered preview" on={b.use_rendered} set={v => put({ use_rendered: v })}
               help="The JPEG the bridge sends back after you edit. Shows exactly what you see in darktable." />
             <Source num={2} title="darktable edit history" on={b.use_history} set={v => put({ use_history: v })}
-              help="The active modules in the XMP: monochrome, color calibration's gray tab. Only the latest state of each module counts. B&W made with other modules needs 1." />
+              help="The active modules in the XMP: monochrome, color calibration's gray tab, channel mixer gray, color balance rgb at chroma -100%, a B&W LUT or style (Acros, Ilford, Tri-X…). Only the latest state of each module counts. B&W made other ways needs 1." />
             <Source num={3} title="Camera preview (unedited photos)" on={b.use_camera} set={v => put({ use_camera: v })}
               help="The JPEG inside the raw (or the image itself): shows what you shot in B&W in camera. Replaced by 1 and 2 once you edit the photo." />
             <label className="row small" style={{ gap: 8 }}><input type="checkbox" checked={b.disagree_review} onChange={e => put({ disagree_review: e.target.checked })} />
               When sources disagree, send the photo to review instead of tagging it</label>
+            <label className="row small" style={{ gap: 8 }}><input type="checkbox" checked={b.camera_over_edit} onChange={e => put({ camera_over_edit: e.target.checked })} />
+              Edited photos shot B&amp;W in camera count as B&amp;W while there's no darktable render to check and no B&amp;W module is found</label>
           </div>
           <div className="col" style={{ gap: 12 }}>
             <span className="caps">Tags</span>

@@ -38,7 +38,11 @@ router = APIRouter()
 
 RULE = "bnw"
 # bumped when the way a photo is judged changes, so verdicts stored by an older LPL are looked at again
-ENGINE = 2
+ENGINE = 3
+# words in a darktable style name or a LUT file name that mean black & white (lower case)
+BNW_WORDS = ("black and white", "black & white", "black&white", "b&w", "b & w", "bw ", " bw", "monochrom", "mono ", " mono",
+             "acros", "neopan", "ilford", "delta 100", "delta 400", "delta 3200", "hp5", "fp4", "pan f", "panf", "tri-x", "trix",
+             "t-max", "tmax", "noir", "grayscale", "greyscale", "schwarzweiss", "schwarz-weiss", "bianco e nero")
 VERDICTS = ("bnw", "colour", "unsure", "none")
 DEFAULTS: Dict[str, Any] = {
     "auto": True,  # check new and changed photos by themselves (only once the rule is switched on)
@@ -51,6 +55,7 @@ DEFAULTS: Dict[str, Any] = {
         "use_history": True,
         "use_camera": True,
         "disagree_review": True,    # sources disagree: unsure instead of a tag
+        "camera_over_edit": True,   # edited, no darktable render to look at, no B&W module found, camera shot B&W: B&W
         "strictness": 50,           # 0 strict (any tint is colour) .. 100 lenient
         "band": 30,                 # how wide "unsure" is above the limit, 0..100
         "folders": [],              # [] = whole library, else these library folders (with their subfolders)
@@ -142,7 +147,7 @@ def save_settings(new: dict) -> dict:
 
 
 def _sig_settings(b: dict) -> str:
-    keys = ("use_rendered", "use_history", "use_camera", "disagree_review", "strictness", "band")
+    keys = ("use_rendered", "use_history", "use_camera", "disagree_review", "camera_over_edit", "strictness", "band")
     return hashlib.sha1(json.dumps([ENGINE] + [b[k] for k in keys]).encode()).hexdigest()[:10]
 
 
@@ -167,6 +172,26 @@ def _gray_in_use(params: Optional[bytes], version: int) -> Optional[bool]:
         return None
     g = struct.unpack_from("<3f", params, 80)
     return any(abs(x) > 1e-6 for x in g)
+
+
+def _mixer_gray(params: Optional[bytes]) -> bool:
+    """The old channel mixer (channelmixer, used by t3mujinpack's B&W films): red[7], green[7], blue[7]; index 6 of
+    each is the gray output, and any of them not 0 turns the picture monochrome."""
+    if params is None or len(params) < 84:
+        return False
+    return any(abs(struct.unpack_from("<f", params, off)[0]) > 1e-6 for off in (24, 52, 80))
+
+
+def _bnw_name(text: str) -> bool:
+    t = " %s " % (text or "").lower().replace("_", " ").replace("-", " ").replace("/", " ").replace("\\", " ").replace(".", " ")
+    return any(w.replace("-", " ") in t for w in BNW_WORDS)
+
+
+def _lut_name(params: Optional[bytes]) -> str:
+    """The LUT file a lut3d instance uses (a text field at the start of its settings)."""
+    if not params:
+        return ""
+    return params[:512].split(b"\0", 1)[0].decode("utf-8", "replace")
 
 
 def _chroma_off(params: Optional[bytes]) -> bool:
@@ -218,6 +243,22 @@ def read_history(desc) -> Dict[str, Any]:
         if m["op"] == "colorbalancergb" and _chroma_off(decode_params(m["params"])):
             bnw, why = True, "color balance rgb (chroma -100%)"
             break
+        if m["op"] == "channelmixer" and _mixer_gray(decode_params(m["params"])):
+            bnw, why = True, "channel mixer (gray)"
+            break
+        if m["op"] == "lut3d":
+            lut = _lut_name(decode_params(m["params"]))
+            if _bnw_name(lut):
+                bnw, why = True, "LUT 3D (%s)" % lut.replace("\\", "/").split("/")[-1]
+                break
+        if m["name"] and _bnw_name(m["name"]):
+            bnw, why = True, "%s instance \"%s\"" % (m["op"], m["name"])
+            break
+    if not bnw:  # a darktable style applied to the photo leaves a tag darktable|style|<group>|<name>
+        for t in xmp._list_items(desc, "lr", "hierarchicalSubject") + xmp._list_items(desc, "dc", "subject"):
+            if t.startswith("darktable|style|") and _bnw_name(t[16:]):
+                bnw, why = True, "style " + t[16:].replace("|", " › ")
+                break
     if bnw:
         unknown = False
     return {"bnw": bnw, "why": why, "sig": sig, "unknown": unknown}
@@ -290,6 +331,7 @@ def measure_preview(pid: int) -> Optional[Dict[str, float]]:
         return None
     try:
         with Image.open(t) as im:
+            im.draft("RGB", (200, 200))  # JPEG: decode at a fraction of the size, much faster on a NAS CPU
             return measure(im)
     except Exception as e:
         log.debug("measure failed for %s: %s", pid, e)
@@ -297,9 +339,10 @@ def measure_preview(pid: int) -> Optional[Dict[str, float]]:
 
 
 # ---------------------------------------------------------------- one photo
-def classify(row, b: dict) -> Dict[str, Any]:
+def classify(row, b: dict, h: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """What the B&W rule says about one photo (a photos row). Returns verdict, toned, source, score, detail, sig."""
-    h = history_of(row["relpath"])
+    if h is None:
+        h = history_of(row["relpath"])
     edited = h["bnw"] is not None
     src = row["preview_src"] or ""
     rendered = src == "rendered" and (not row["rendered_hist"] or row["rendered_hist"] == h["sig"])
@@ -316,14 +359,22 @@ def classify(row, b: dict) -> Dict[str, Any]:
                     if b["disagree_review"]:
                         out["verdict"] = "unsure"
                 return out
+        if b["use_history"] and h["bnw"]:
+            out.update(verdict="bnw", source="history", detail="darktable edit: %s" % h["why"])
+            return out
+        if b["use_camera"] and b["camera_over_edit"] and not rendered and src != "rendered" and row["preview_state"] == 1:
+            # the preview LPL has is the camera's own: if the camera shot B&W, the photo is meant as B&W
+            m = measure_preview(row["id"])
+            if m is not None:
+                j = judge(m, b)
+                if j["verdict"] == "bnw":
+                    out.update(j, source="camera", detail="Shot B&W in camera (camera preview); the darktable edit has no B&W module LPL knows")
+                    return out
         if b["use_history"]:
-            if h["bnw"]:
-                out.update(verdict="bnw", source="history", detail="darktable edit: %s" % h["why"])
+            if h["unknown"]:  # could not read color calibration: let the user say
+                out.update(verdict="unsure", source="history", detail="darktable edit: color calibration could not be read")
             else:
-                if h["unknown"]:  # could not read color calibration: let the user say
-                    out.update(verdict="unsure", source="history", detail="darktable edit: color calibration could not be read")
-                else:
-                    out.update(verdict="colour", source="history", detail="darktable edit: no B&W module found")
+                out.update(verdict="colour", source="history", detail="darktable edit: no B&W module found")
         return out
     if b["use_camera"] and row["preview_state"] == 1:
         m = measure_preview(row["id"])
@@ -394,45 +445,70 @@ def _store(pid: int, r: Dict[str, Any]) -> None:
         (pid, RULE, r["verdict"], int(r["toned"] or 0), r["source"], r["score"], r["detail"], r["sig"], time.time()))
 
 
+def _one(row, b: dict, known: Dict[int, str], force: bool):
+    """Work for one photo, safe to run in a worker thread: (row id, rendered_hist to remember or None, result or None)."""
+    h = history_of(row["relpath"])  # read once per photo
+    remember = None
+    if row["preview_src"] == "rendered" and not row["rendered_hist"] and h["sig"]:
+        # the rendered preview's edit is remembered the first time it is looked at (put_preview / the bridge clear it)
+        remember = h["sig"]
+        row = dict(row)
+        row["rendered_hist"] = h["sig"]
+    if not force and row["id"] in known:
+        sig = "|".join([_sig_settings(b), str(row["preview_ver"]), row["preview_src"] or "", h["sig"]])
+        if sig == known[row["id"]]:
+            return row["id"], remember, None  # same inputs as last time: keep the stored verdict
+    return row["id"], remember, classify(row, b, h)
+
+
+def _workers() -> int:
+    import os
+    return max(1, min(4, (os.cpu_count() or 2)))
+
+
 def evaluate(ids: Optional[Iterable[int]] = None, force: bool = False, progress: bool = False) -> List[int]:
     """Classify photos (all, or these) and store the verdicts. Photos whose inputs did not change keep their row.
-    Returns the ids that were looked at."""
+    Returns the ids that were looked at. Photos are read and measured in a few worker threads (the image decoding
+    and numpy work let go of the GIL); the database is written in batches."""
+    from concurrent.futures import ThreadPoolExecutor
     st = get_settings()
     b = st["bnw"]
     rows = [r for r in _rows(ids) if _in_scope(r, b)]
     known = {r["photo_id"]: r["sig"] for r in db.conn().execute("SELECT photo_id, sig FROM autotag_results WHERE rule=?", (RULE,)).fetchall()}
-    # the rendered preview's edit is remembered the first time it is looked at (put_preview / the bridge clear it)
+    t0 = time.time()
     if progress:
-        status.update(total=len(rows), done=0)
-    done = []
-    pend = 0
-    for n, row in enumerate(rows):
-        if row["preview_src"] == "rendered" and not row["rendered_hist"]:
-            h = history_of(row["relpath"])
-            if h["sig"]:
-                with db.write_lock:
-                    db.conn().execute("UPDATE photos SET rendered_hist=? WHERE id=?", (h["sig"], row["id"]))
-                row = dict(row)
-                row["rendered_hist"] = h["sig"]
-        r = classify(row, b) if force or row["id"] not in known else None
-        if r is None:
-            # same inputs as last time: keep the stored verdict (cheap check without reading the image)
-            h = history_of(row["relpath"])
-            sig = "|".join([_sig_settings(b), str(row["preview_ver"]), row["preview_src"] or "", h["sig"]])
-            if sig != known[row["id"]]:
-                r = classify(row, b)
-        if r is not None:
-            with db.write_lock:
-                _store(row["id"], r)
-                pend += 1
-                if pend >= 200:
-                    db.conn().commit()
-                    pend = 0
-        done.append(row["id"])
-        if progress:
-            status["done"] = n + 1
-    with db.write_lock:
-        db.conn().commit()
+        status.update(total=len(rows), done=0, rate=0.0)
+    done: List[int] = []
+    pending: List[tuple] = []
+
+    def flush():
+        if not pending:
+            return
+        with db.write_lock:
+            for pid, remember, r in pending:
+                if remember:
+                    db.conn().execute("UPDATE photos SET rendered_hist=? WHERE id=?", (remember, pid))
+                if r is not None:
+                    _store(pid, r)
+            db.conn().commit()
+        pending.clear()
+
+    with ThreadPoolExecutor(max_workers=_workers(), thread_name_prefix="autotag-w") as ex:
+        for n, (pid, remember, r) in enumerate(ex.map(lambda row: _one(row, b, known, force), rows, chunksize=16)):
+            if remember or r is not None:
+                pending.append((pid, remember, r))
+                if len(pending) >= 200:
+                    flush()
+            done.append(pid)
+            if progress:
+                status["done"] = n + 1
+                el = time.time() - t0
+                if el > 0:
+                    status["rate"] = round((n + 1) / el, 1)
+    flush()
+    el = time.time() - t0
+    if len(rows) > 50:
+        log.info("auto-tagging looked at %d photos in %.1fs (%.1f/s)", len(rows), el, len(rows) / el if el else 0)
     return done
 
 

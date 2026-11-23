@@ -233,3 +233,40 @@ def test_marking_by_hand_tags_with_the_rule_off(lib):
     assert {p["id"] for p in q["items"]} == {ids["colour"], ids["grey"]}
     client.post("/api/autotag/correct", json={"ids": [ids["colour"]], "verdict": "colour"})
     assert tags(client, ids["colour"]) == []
+
+
+def test_history_old_channel_mixer_lut_and_style():
+    gray = struct.pack("<21f", *([0, 0, 0, 1, 0, 0, 0.3] + [0, 0, 0, 0, 1, 0, 0.6] + [0, 0, 0, 0, 0, 1, 0.1])).hex() + "01000000"
+    plain = struct.pack("<21f", *([0, 0, 0, 1, 0, 0, 0] + [0, 0, 0, 0, 1, 0, 0] + [0, 0, 0, 0, 0, 1, 0])).hex() + "01000000"
+    assert hist([li(0, "channelmixer", params=gray, version=2)])["bnw"] is True
+    assert hist([li(0, "channelmixer", params=plain, version=2)])["bnw"] is False
+    lut = (b"Fuji/Fuji XTrans III - Acros.png".ljust(512, b"\0") + b"\0" * 200).hex()
+    r = hist([li(0, "lut3d", params=lut, version=3)])
+    assert r["bnw"] is True and "Acros" in r["why"]
+    lut = (b"Fuji/Fuji XTrans III - Velvia.png".ljust(512, b"\0") + b"\0" * 200).hex()
+    assert hist([li(0, "lut3d", params=lut, version=3)])["bnw"] is False
+    from lpl import autotag, xmp
+    styled = HIST.replace('<darktable:history>', '<lr:hierarchicalSubject xmlns:lr="http://ns.adobe.com/lightroom/1.0/"><rdf:Bag>'
+                          '<rdf:li>darktable|style|t3mujinpack - Black and White|Ilford Delta 400</rdf:li></rdf:Bag></lr:hierarchicalSubject><darktable:history>')
+    assert styled != HIST
+    data = (styled % (1, li(0, "tonecurve"))).encode()
+    r = autotag.read_history(xmp._description(xmp._parse_bytes(data)))
+    assert r["bnw"] is True and "style" in r["why"]
+
+
+def test_shot_bnw_in_camera_and_edited(lib):
+    """Edited in darktable with no B&W module LPL knows and no darktable render: the camera's B&W preview decides."""
+    client, ids, d = lib
+    (d / "grey.jpg.xmp").write_text(HIST % (1, li(0, "exposure")))
+    (d / "colour.jpg.xmp").write_text(HIST % (1, li(0, "exposure")))
+    from lpl import scanner
+    scanner.scan()
+    client.post("/api/autotag/run", json={"wait": True, "apply": True, "force": True})
+    info = client.get("/api/photos/%d" % ids["grey"]).json()["autotag"]
+    assert info["verdict"] == "bnw" and info["source"] == "camera" and "in camera" in info["detail"]
+    assert tags(client, ids["grey"]) == ["auto|look|bnw"]
+    assert client.get("/api/photos/%d" % ids["colour"]).json()["autotag"]["verdict"] == "colour"
+    client.put("/api/autotag", json={"bnw": {"camera_over_edit": False}})
+    client.post("/api/autotag/run", json={"wait": True, "apply": True})
+    assert client.get("/api/photos/%d" % ids["grey"]).json()["autotag"]["verdict"] == "colour"
+    client.put("/api/autotag", json={"bnw": {"camera_over_edit": True}})
