@@ -41,7 +41,8 @@ def hidden_folders() -> list:
 
 
 def _excluded_abs() -> set:
-    out = set()
+    from . import exports
+    out = set() if config.local else exports.skip_dirs()  # R18: received exports are not photos
     for f in excluded_folders():
         try:
             out.add(str(abs_of(f)))
