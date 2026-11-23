@@ -1025,6 +1025,8 @@ def _clean_progress(ws) -> None:
             it.pop("step")
         elif "step" in it:
             it["step"] = it["step"].strip()[:40]
+        if "version" in it and (isinstance(it["version"], bool) or not isinstance(it["version"], int) or it["version"] < 0):
+            it.pop("version")  # R17: the version of the photo that is checked out (0 = the original)
         if "progress" in it:
             p = it["progress"]
             if isinstance(p, bool) or not isinstance(p, (int, float)) or p != p:

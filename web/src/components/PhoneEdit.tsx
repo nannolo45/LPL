@@ -16,8 +16,8 @@ export function useListTitle(): { series: number | null; title: string | null } 
  *  opens apps only on a tap), so no job is made. Chrome goes to android-app.html by itself when the app is
  *  missing; Firefox doesn't reliably, so if the page is still showing a moment after the tap, a note says so.
  *  The LPL shell app handles the link itself and says so natively when the app is missing: no note there. */
-export function EditOnPhone({ ids, start, series, title, className = 'btn big', label = 'Edit on this phone' }: {
-  ids: number[]; start: number; series?: number | null; title?: string | null; className?: string; label?: string
+export function EditOnPhone({ ids, start, series, title, version, className = 'btn big', label = 'Edit on this phone' }: {
+  ids: number[]; start: number; series?: number | null; title?: string | null; version?: number | null; className?: string; label?: string
 }) {
   const s = useStore()
   const [missing, setMissing] = useState(false)
@@ -28,7 +28,7 @@ export function EditOnPhone({ ids, start, series, title, className = 'btn big', 
     return () => { document.removeEventListener('visibilitychange', h); window.clearTimeout(timer.current) }
   }, [])
   if (!isAndroidBrowser() || !s.status || s.isLocal) return null
-  const href = phoneEditLink({ origin: location.origin, ids, start, series, title })
+  const href = phoneEditLink({ origin: location.origin, ids, start, series, title, version })
   const tapped = () => {
     setMissing(false)
     window.clearTimeout(timer.current)

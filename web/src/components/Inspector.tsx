@@ -11,9 +11,17 @@ import { SeriesLine } from './SeriesLine'
 import { AutotagLine, useAutoTags } from './Autotag'
 import { buildTree } from '../seriesnav'
 import { bumpSeries } from '../seriesops'
+import { bumpVersions } from '../versions'
+import { useVersionsFor, VersionsStrip } from './Versions'
 
-export function RatingLabels({ photos, big = false }: { photos: Photo[]; big?: boolean }) {
+/** s.meta for one version of the photos (R17): sends `version`, and has the versions strip load again afterwards. */
+function metaFor(meta: (b: Record<string, unknown>, ids?: number[]) => Promise<void>, version?: number) {
+  return (b: Record<string, unknown>, ids?: number[]) => version == null ? meta(b, ids) : meta({ ...b, version }, ids).then(bumpVersions)
+}
+
+export function RatingLabels({ photos, big = false, version }: { photos: Photo[]; big?: boolean; version?: number }) {
   const s = useStore()
+  const m = metaFor(s.meta, version)  // version (R17): a rating or label of that version, not of the cover
   const ids = photos.map(p => p.id)
   const r = photos.length && photos.every(p => p.rating === photos[0].rating) ? photos[0].rating : null
   return (
@@ -21,17 +29,17 @@ export function RatingLabels({ photos, big = false }: { photos: Photo[]; big?: b
       <div className="row" style={{ gap: 2 }}>
         {[1, 2, 3, 4, 5].map(n => (
           <button key={n} className={'starbtn' + (r !== null && r >= n ? ' on' : '')} style={big ? { fontSize: 28, width: 44, height: 44 } : undefined}
-            aria-label={`Rate ${n} stars`} onClick={() => s.meta({ rating: r === n && photos.length === 1 ? 0 : n }, ids)}>★</button>
+            aria-label={`Rate ${n} stars`} onClick={() => m({ rating: r === n && photos.length === 1 ? 0 : n }, ids)}>★</button>
         ))}
-        <button className="btn" style={{ marginLeft: 6 }} onClick={() => s.meta({ rating: 0 }, ids)}>0</button>
-        <button className={'btn' + (r === -1 ? ' danger' : '')} onClick={() => s.meta({ rating: r === -1 ? 0 : -1 }, ids)}>reject</button>
+        <button className="btn" style={{ marginLeft: 6 }} onClick={() => m({ rating: 0 }, ids)}>0</button>
+        <button className={'btn' + (r === -1 ? ' danger' : '')} onClick={() => m({ rating: r === -1 ? 0 : -1 }, ids)}>reject</button>
       </div>
       <div className="row" style={{ gap: big ? 12 : 8 }}>
         {LABELS.map(l => {
           const all = photos.length > 0 && photos.every(p => p.labels.includes(l.i))
           const some = !all && photos.some(p => p.labels.includes(l.i))
           return <button key={l.i} aria-label={`Toggle ${l.name} label`} className={'dot' + (all ? ' on' : some ? '' : ' dim')}
-            style={{ background: l.c, ...(big ? { width: 36, height: 36, borderWidth: 3 } : {}) }} onClick={() => s.meta({ toggle_label: l.i }, ids)} />
+            style={{ background: l.c, ...(big ? { width: 36, height: 36, borderWidth: 3 } : {}) }} onClick={() => m({ toggle_label: l.i }, ids)} />
         })}
       </div>
     </div>
@@ -98,9 +106,10 @@ export function HideButton({ photos, big }: { photos: Photo[]; big?: boolean }) 
   )
 }
 
-export function TagPanel({ photos }: { photos: Photo[] }) {
+export function TagPanel({ photos, version }: { photos: Photo[]; version?: number }) {
   const autoTags = useAutoTags()
   const s = useStore()
+  const m = metaFor(s.meta, version)
   const [q, setQ] = useState('')
   const [sugg, setSugg] = useState<string[]>([])
   const [exp, setExp] = useState<Record<string, 1>>(() => { try { return JSON.parse(localStorage.getItem('lpl.tagexp') || '{}') } catch { return {} } })
@@ -149,14 +158,14 @@ export function TagPanel({ photos }: { photos: Photo[] }) {
 
   const attach = (t: string) => {
     if (!photos.length) { s.patchFilters({ tag: t }); if (!['grid', 'list'].includes(s.view)) s.setView('grid'); return }
-    s.meta({ attach: [t] }, ids)
+    m({ attach: [t] }, ids)
   }
-  const detach = (t: string) => s.meta({ detach: [t] }, ids)
+  const detach = (t: string) => m({ detach: [t] }, ids)
   const toggle = (path: string) => setExp(e => { const n = { ...e }; if (n[path]) delete n[path]; else n[path] = 1; return n })
   const submit = async () => {
     const t = q.trim().replace(/^\|+|\|+$/g, '')
     if (!t) return
-    if (photos.length) await s.meta({ attach: [t] }, ids)
+    if (photos.length) await m({ attach: [t] }, ids)
     else { await api.tagCreate(t); s.reloadTags(); s.toast(`Tag “${t}” created`) }
     setQ('')
   }
@@ -287,6 +296,8 @@ export function Inspector() {
   useShortcutsVersion()
   const photos = s.selPhotos
   const one = photos.length === 1 ? photos[0] : null
+  const vv = useVersionsFor(one)  // versions (R17): rating, labels and tags below are those of the version being viewed
+  const shown = vv.view ? [vv.view] : photos
   return (
     <div className="right">
       {!photos.length && (
@@ -314,6 +325,7 @@ export function Inspector() {
             <span>darktable</span><span>{one.edited ? 'edited' : 'not edited'}</span>
             {one.title && <><span>Title</span><span>{one.title}</span></>}
           </div>
+          {vv.list && <VersionsStrip p={one} list={vv.list} n={vv.n} />}
           <LastEdit p={one} />
           <WhereLine id={one.id} />
           <SeriesLine id={one.id} />
@@ -330,7 +342,7 @@ export function Inspector() {
       )}
       {photos.length > 0 && (
         <>
-          <RatingLabels photos={photos} />
+          <RatingLabels photos={shown} version={vv.mv} />
           <button className="btn primary" onClick={() => s.editInDarktable(photos.map(p => p.id))}>
             {photos.length > 1 ? `Edit ${photos.length} in darktable` : 'Edit in darktable'}
           </button>
@@ -342,7 +354,7 @@ export function Inspector() {
         </>
       )}
       <div className="hr" />
-      <TagPanel photos={photos} />
+      <TagPanel photos={shown} version={vv.mv} />
     </div>
   )
 }

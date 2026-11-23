@@ -297,3 +297,14 @@ def test_migration_of_an_older_library(tmp_path):
     db.migrate(c)
     assert {r[1] for r in c.execute("PRAGMA table_info(photo_versions)")} >= {"photo_id", "n", "name", "xmp_path", "mtime", "cover"}
     assert "version" in {r[1] for r in c.execute("PRAGMA table_info(series_items)")}
+
+
+def test_working_set_items_carry_a_version(client, lib):
+    d, ids = lib
+    body = dict(PHONE, caps=["versions"], state={"working_set": [
+        {"id": ids["A.jpg"], "filename": "A.jpg", "status": "edited", "version": 2},
+        {"id": ids["B.jpg"], "filename": "B.jpg", "status": "edited", "version": "x"},
+        {"id": ids["C.jpg"], "filename": "C.jpg", "status": "edited"}]})
+    assert client.post("/api/agents/heartbeat", json=body).status_code == 200
+    ws = {w["id"]: w for a in client.get("/api/agents").json()["agents"] if a["id"] == PHONE["id"] for w in a["state"]["working_set"]}
+    assert ws[ids["A.jpg"]]["version"] == 2 and "version" not in ws[ids["B.jpg"]] and "version" not in ws[ids["C.jpg"]]

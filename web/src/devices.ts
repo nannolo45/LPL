@@ -78,7 +78,7 @@ export function photoWhere(agents: Pick<Agent, 'id' | 'name' | 'os' | 'state'>[]
   const out: string[] = []
   for (const a of agents) {
     const w = (a.state?.working_set || []).find(x => x.id === id)
-    if (w) out.push(`on ${agentLabel(a, agents)}: ${(STATUS[w.status] || [w.status])[0]}`)
+    if (w) out.push(`on ${agentLabel(a, agents)}: ${w.version ? `version ${w.version}, ` : ''}${(STATUS[w.status] || [w.status])[0]}`)
   }
   return out
 }
@@ -120,8 +120,9 @@ export function photoActivity(agents: Pick<Agent, 'id' | 'name' | 'os' | 'state'
     const w = (a.state?.working_set || []).find(x => x.id === id)
     if (!w) continue
     const pr = itemProgress(a, w, now)
-    out.push(pr ? { text: `on ${agentLabel(a, agents)}: ${pr.step}`, progress: pr.fraction }
-      : { text: `on ${agentLabel(a, agents)}: ${(STATUS[w.status] || [w.status])[0]}` })
+    const ver = w.version ? `version ${w.version}, ` : ''  // R17: the version that is checked out
+    out.push(pr ? { text: `on ${agentLabel(a, agents)}: ${ver}${pr.step}`, progress: pr.fraction }
+      : { text: `on ${agentLabel(a, agents)}: ${ver}${(STATUS[w.status] || [w.status])[0]}` })
   }
   return out
 }
@@ -140,7 +141,7 @@ export function selectionIds(list: number[], sel: number[]): number[] {
 /** The link that opens the darktable phone app on these photos ("Edit on this phone").
  *  ids: the list in display order; start: the photo to open first. More than PHONE_LINK_MAX photos:
  *  the ones around start. Never carries the password or the login cookie. */
-export function phoneEditLink(o: { origin: string; ids: number[]; start: number; series?: number | null; title?: string | null }): string {
+export function phoneEditLink(o: { origin: string; ids: number[]; start: number; series?: number | null; title?: string | null; version?: number | null }): string {
   let ids = o.ids.includes(o.start) ? o.ids : [o.start, ...o.ids]
   if (ids.length > PHONE_LINK_MAX) {
     const k = ids.indexOf(o.start)
@@ -148,6 +149,7 @@ export function phoneEditLink(o: { origin: string; ids: number[]; start: number;
     ids = ids.slice(from, from + PHONE_LINK_MAX)
   }
   let q = `server=${encodeURIComponent(o.origin)}&ids=${ids.join(',')}&start=${o.start}`
+  if (o.version != null) q += `&version=${o.version}`  // R17: the version to open first (default: the cover)
   if (o.series != null) q += `&series=${o.series}`
   if (o.title) q += `&title=${encodeURIComponent(o.title)}`
   const fallback = encodeURIComponent(o.origin + '/android-app.html')

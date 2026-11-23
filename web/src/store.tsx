@@ -60,10 +60,11 @@ export interface Store {
   seriesFolders: SeriesFolder[]
   agents: Agent[]; status: any; isLocal: boolean
   sendIds: number[] | null; setSendIds: (ids: number[] | null) => void
-  editInDarktable: (ids: number[]) => Promise<void>
+  /** version (R17): open that version of the photo (the job carries it); absent = the cover */
+  editInDarktable: (ids: number[], version?: number) => Promise<void>
   /** "Edit in darktable" with several devices: the photos waiting for the user to pick a device, and sending them to one. */
   devicePick: number[] | null; closeDevicePick: () => void
-  editOn: (ids: number[], agentId: string) => Promise<void>
+  editOn: (ids: number[], agentId: string, version?: number) => Promise<void>
   toast: (m: string) => void; toastMsg: string
   viewer: number | null; setViewer: (id: number | null) => void
   boardSeries: number | null; setBoardSeries: (id: number | null) => void
@@ -125,6 +126,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [boardSeries, setBoardSeries] = useState<number | null>(null)
   const [sendIds, setSendIds] = useState<number[] | null>(null)
   const [devicePick, setDevicePick] = useState<number[] | null>(null)
+  const pickVer = useRef<number | undefined>(undefined)  // the version to open, kept while the device is being chosen
   const [revealId, setRevealId] = useState<number | null>(null)
   const [fullscreen, setFullscreen] = useState<Store['fullscreen']>(null)
   const [revealTick, setRevealTick] = useState(0)
@@ -247,28 +249,30 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     } catch (e: any) { toast(e.message || String(e)) }
   }, [sel, mergePhotos, toast, reloadTags])
 
-  const editInDarktable = useCallback(async (ids: number[]) => {
+  const editInDarktable = useCallback(async (ids: number[], version?: number) => {
     if (!ids.length) return
+    const payload: Record<string, unknown> = version != null ? { ids, version } : { ids }
     try {
       if (status?.mode === 'local') {
-        const r = await api.job('edit', { ids })
+        const r = await api.job('edit', payload)
         toast(r.message || 'Opening in darktable…')
         return
       }
-      if (needsDeviceChoice(agents)) { setDevicePick(ids); return }  // which device: DevicePicker, then editOn
+      if (needsDeviceChoice(agents)) { pickVer.current = version; setDevicePick(ids); return }  // which device: DevicePicker, then editOn
       const online = agents.filter(a => a.online)
-      const r = await api.job('edit', { ids }, online.length === 1 ? online[0].id : undefined)
+      const r = await api.job('edit', payload, online.length === 1 ? online[0].id : undefined)
       const ag = agents.find(a => a.id === r.agent_id)
       toast(ag && ag.online ? `Sending ${ids.length} photo${ids.length > 1 ? 's' : ''} to darktable on ${agentLabel(ag, agents)}…`
         : 'Queued. It opens in darktable as soon as your PC agent is online.')
     } catch (e: any) { toast(e.message || String(e)) }
   }, [agents, toast, status])
 
-  const editOn = useCallback(async (ids: number[], agentId: string) => {
+  const editOn = useCallback(async (ids: number[], agentId: string, version: number | undefined = pickVer.current) => {
     setDevicePick(null)
+    pickVer.current = undefined
     try {
       localStorage.setItem('lpl.editDevice', agentId)
-      await api.job('edit', { ids }, agentId)
+      await api.job('edit', version != null ? { ids, version } : { ids }, agentId)
       const ag = agents.find(a => a.id === agentId)
       const name = ag ? agentLabel(ag, agents) : agentId
       toast(ag && ag.online ? `Sending ${ids.length} photo${ids.length > 1 ? 's' : ''} to darktable on ${name}…`
