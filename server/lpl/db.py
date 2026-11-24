@@ -273,6 +273,8 @@ def migrate(c: sqlite3.Connection) -> None:
     identity.migrate(c)
     from . import autotag  # auto-tagging: results, corrections, where each preview came from
     autotag.migrate(c)
+    from . import shared  # shared darktable styles, presets and module layouts (R11)
+    shared.migrate(c)
     c.commit()
 
 
