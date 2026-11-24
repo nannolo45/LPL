@@ -2,22 +2,28 @@
 """Import from Miro: a Miro board becomes a new LPL series laid out the same way.
 
 Flow (Series view → "Import from Miro…"):
-  1. POST /api/miro/preview {url, token?, remember?} reads the board through Miro's REST API (v2, a personal access
+  1. POST /api/miro/preview {url, token?, remember?, scope?} reads the board through Miro's REST API (v2, a personal access
      token with boards:read) and matches its pictures to photos in the library. Nothing is written. The answer says
      how many matched and how, lists what did not, and carries a `key` for step 2.
   2. POST /api/miro/import {key, name} creates the series: photos where they were, frames (nested ones too, Miro's
      colours mapped to LPL's), sticky notes, text and shapes with text as notes, connectors as arrows. A picture
      with no photo leaves a grey note "Not found: <title>" where it was, so the layout keeps its gaps.
 
-Matching a picture (its Miro title, usually the file name it was uploaded with):
-  - by name: the title without extension against the photos' file names without extension, case-insensitive
-    (DSCF4821.jpg finds DSCF4821.RAF). Export suffixes like "_01", "-1", " (2)", "-edit" are tried off as well.
-    Several photos with that name: the RAW, then the one in the folders most of the board comes from, then the
-    one that looks most like the picture (a difference hash of Miro's preview against LPL's thumbnail).
-  - by picture: a picture whose name finds nothing is compared with every photo in the folders the matched ones
-    come from (at most MAX_VISUAL photos), and taken only when the two are clearly the same.
+Matching a picture. Miro's REST API gives no title (and no size) for pictures dropped onto a board, although
+Miro shows their file names; so:
+  - by name, when there is one: the API title, or the file name in the link to the original (when Miro's storage
+    link gives it away). The name without extension against the photos' file names without extension,
+    case-insensitive (DSCF4821.jpg finds DSCF4821.RAF); export suffixes like "_01", " (2)", "-edit" tried off.
+  - by picture otherwise (and to tell apart several photos with one name): Miro's preview against LPL's thumbnails,
+    a 256-bit difference hash of the contrast-stretched grey image. LPL's side is hashed at several centre crops,
+    because an exported edit is often cropped; the hashes are kept in table photo_phash (per preview version), so
+    only the first run over a library is slow. Where to look: the folder / dates the user gives, else the folders
+    the name matches come from, else the whole library. Close and clearly closer than the next photo: placed.
+    A bit less sure: placed but listed to check. Unsure: not placed, listed with its best guess.
+The preview runs in a thread (POST starts it, GET /api/miro/preview/{key} reports progress, then the result).
 
-Places: Miro gives item centres, relative to the board or to the parent frame's top-left; LPL keeps top-left
+Places: Miro gives item centres (pictures dropped onto a board have no size: the spacing between neighbours
+stands in for picture + gap), relative to the board or to the parent frame's top-left; LPL keeps top-left
 corners. Everything is scaled so the typical picture is as wide as an LPL tile (150 px), then moved so the board
 starts at (40, 40). The series is linked, so its order is read from the board as usual.
 """
@@ -126,22 +132,51 @@ def read_board(bid: str, token: str) -> dict:
     return {"name": info.get("name") or "Miro board", "items": items, "connectors": conns}
 
 
-def image_bytes(item: dict, token: str) -> Optional[bytes]:
-    """Miro's preview of a picture. Its imageUrl answers either the image or a little JSON with the real link."""
+def _resource(item: dict, token: str, fmt: str) -> Optional[str]:
+    """The real address of a picture's file (Miro answers a little JSON with it when asked with redirect=false)."""
     url = (item.get("data") or {}).get("imageUrl")
     if not url:
         return None
+    url = re.sub(r"format=\w+", "format=" + fmt, url) if "format=" in url else url + ("&" if "?" in url else "?") + "format=" + fmt
+    url = re.sub(r"redirect=\w+", "redirect=false", url) if "redirect=" in url else url + "&redirect=false"
     try:
-        url = re.sub(r"format=original", "format=preview", url)
-        data, ctype = fetch(url, token, raw=True)
-        if "json" in ctype or data[:1] == b"{":
-            link = json.loads(data.decode("utf-8")).get("url")
-            if not link:
-                return None
-            with urllib.request.urlopen(link, timeout=30) as r:
-                data = r.read()
-        return data
-    except Exception as e:  # a picture that can't be read is simply not compared
+        r = fetch(url, token)
+        return r.get("url") if isinstance(r, dict) else None
+    except Exception as e:
+        log.info("miro resource %s: %s", item.get("id"), e)
+        return None
+
+
+NAMEISH = re.compile(r"\.(jpe?g|png|tiff?|webp|heic|avif)$", re.I)
+
+
+def original_name(item: dict, token: str) -> str:
+    """The uploaded file's name, when the address of the original gives it away (a file name in the path, or a
+    content-disposition in a signed link). Miro's API has no title for pictures dropped onto a board."""
+    link = _resource(item, token, "original")
+    if not link:
+        return ""
+    u = urllib.parse.urlparse(link)
+    for k, vs in urllib.parse.parse_qs(u.query).items():
+        if "disposition" in k.lower():
+            m = re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)", " ".join(vs), re.I)
+            if m and NAMEISH.search(urllib.parse.unquote(m.group(1))):
+                return urllib.parse.unquote(m.group(1))
+    base = urllib.parse.unquote(u.path.rsplit("/", 1)[-1])
+    if NAMEISH.search(base) and not re.fullmatch(r"[0-9a-f\-]{16,}\.\w+", base, re.I):
+        return base
+    return ""
+
+
+def image_bytes(item: dict, token: str) -> Optional[bytes]:
+    """Miro's preview of a picture."""
+    link = _resource(item, token, "preview")
+    if not link:
+        return None
+    try:
+        with urllib.request.urlopen(link, timeout=30) as r:
+            return r.read()
+    except Exception as e:
         log.info("miro image %s: %s", item.get("id"), e)
         return None
 
@@ -247,41 +282,165 @@ def photo_index() -> Dict[str, List[dict]]:
     return idx
 
 
-def dhash(data_or_img) -> Optional[int]:
+# pictures: a 256-bit difference hash of the grey image (contrast stretched, so exposure and colour edits change
+# little) plus the aspect ratio. LPL's hashes are kept in photo_phash, per preview version.
+def phash(data_or_img) -> Optional[Tuple[bytes, float]]:
     from PIL import Image, ImageOps
     try:
         img = data_or_img if isinstance(data_or_img, Image.Image) else Image.open(io.BytesIO(data_or_img))
-        img = ImageOps.exif_transpose(img).convert("L").resize((9, 8), Image.LANCZOS)
+        img.draft("L", (128, 128))
+        img = ImageOps.exif_transpose(img)
+        ar = img.width / max(1, img.height)
+        g = ImageOps.autocontrast(img.convert("L").resize((17, 16), Image.LANCZOS), cutoff=1)
     except Exception:
         return None
-    px = list(img.getdata())
+    px = list(g.getdata())
     v = 0
-    for row in range(8):
-        for col in range(8):
-            v = (v << 1) | (px[row * 9 + col] > px[row * 9 + col + 1])
-    return v
+    for row in range(16):
+        for col in range(16):
+            v = (v << 1) | (px[row * 17 + col] > px[row * 17 + col + 1])
+    return v.to_bytes(32, "big"), ar
 
 
-def photo_hash(pid: int, memo: Dict[int, Optional[int]]) -> Optional[int]:
-    if pid not in memo:
+CROPS = (0, .03, .06, .09, .12, .16)   # an edit is often cropped: LPL's side is hashed at several centre crops
+
+
+def phash_crops(data: bytes) -> Optional[Tuple[bytes, float]]:
+    from PIL import Image, ImageOps
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.draft("RGB", (256, 256))
+        img = ImageOps.exif_transpose(img).convert("L")
+    except Exception:
+        return None
+    ar = img.width / max(1, img.height)
+    parts = []
+    for c in CROPS:
+        w, h = img.size
+        hh = phash(img.crop((round(w * c), round(h * c), round(w * (1 - c)), round(h * (1 - c)))))
+        if not hh:
+            return None
+        parts.append(hh[0])
+    return b"".join(parts), ar
+
+
+def _hash_table(c) -> None:
+    c.execute("CREATE TABLE IF NOT EXISTS photo_phash (photo_id INTEGER PRIMARY KEY, ver INTEGER, h BLOB, ar REAL)")
+
+
+def pool_hashes(ids: List[int], progress: Callable[[int, int], None] = lambda d, t: None):
+    """(ids, hashes as an N x 32 uint8 array, aspect ratios) for these photos, computing what is not cached."""
+    import numpy as np
+    from concurrent.futures import ThreadPoolExecutor
+    c = db.conn()
+    with db.write_lock:
+        _hash_table(c)
+        c.commit()
+    ver = {}
+    for i in range(0, len(ids), 900):
+        part = ids[i:i + 900]
+        for r in c.execute("SELECT id, preview_ver FROM photos WHERE id IN (%s)" % ",".join(str(int(x)) for x in part)).fetchall():
+            ver[r["id"]] = r["preview_ver"] or 0
+    have: Dict[int, Tuple[bytes, float]] = {}
+    for i in range(0, len(ids), 900):
+        part = ids[i:i + 900]
+        for r in c.execute("SELECT photo_id, ver, h, ar FROM photo_phash WHERE photo_id IN (%s)" % ",".join(str(int(x)) for x in part)).fetchall():
+            if ver.get(r["photo_id"]) == r["ver"] and r["h"] and len(r["h"]) == 32 * len(CROPS):
+                have[r["photo_id"]] = (bytes(r["h"]), r["ar"])
+    todo = [i for i in ids if i in ver and i not in have]
+
+    def one(pid):
         t, _ = media.preview_paths(pid)
-        memo[pid] = dhash(t.read_bytes()) if t.exists() else None
-    return memo[pid]
+        try:
+            return pid, phash_crops(t.read_bytes()) if t.exists() else None
+        except OSError:
+            return pid, None
+
+    done = len(ids) - len(todo)
+    progress(done, len(ids))
+    batch = []
+    with ThreadPoolExecutor(4) as ex:
+        for pid, h in ex.map(one, todo):
+            done += 1
+            if h:
+                have[pid] = h
+                batch.append((pid, ver[pid], h[0], h[1]))
+            if len(batch) >= 500 or (done == len(ids) and batch):
+                with db.write_lock:
+                    db.conn().executemany("INSERT OR REPLACE INTO photo_phash(photo_id, ver, h, ar) VALUES(?,?,?,?)", batch)
+                    db.conn().commit()
+                batch = []
+            if done % 200 == 0:
+                progress(done, len(ids))
+    if batch:
+        with db.write_lock:
+            db.conn().executemany("INSERT OR REPLACE INTO photo_phash(photo_id, ver, h, ar) VALUES(?,?,?,?)", batch)
+            db.conn().commit()
+    progress(len(ids), len(ids))
+    got = [i for i in ids if i in have]
+    H = np.frombuffer(b"".join(have[i][0] for i in got), dtype=np.uint8).reshape(-1, len(CROPS), 32) if got else np.zeros((0, len(CROPS), 32), np.uint8)
+    AR = np.array([have[i][1] for i in got], dtype=float)
+    return got, H, AR
 
 
-def bits(a: int, b: int) -> int:
-    return bin(a ^ b).count("1")
+SURE, LIKELY, MARGIN_SURE, MARGIN_LIKELY = 50, 76, 16, 10   # bits of 256 (unrelated photos: about 110-130)
 
 
-def match(pictures: List[dict], token: str, picture_bytes: Callable = image_bytes) -> Dict[str, dict]:
-    """miro id -> {photo, how} (how: name / name+picture / picture), or {photo: None}."""
+_POP = __import__("numpy").array([bin(i).count("1") for i in range(256)], dtype=__import__("numpy").uint8)
+
+
+def closest(h: Tuple[bytes, float], ids: List[int], H, AR) -> List[Tuple[int, int]]:
+    """(distance, photo id) of the best three; a different aspect ratio (a crop) counts against a photo."""
+    import numpy as np
+    if not ids:
+        return []
+    q = np.frombuffer(h[0], dtype=np.uint8)
+    d = _POP[np.bitwise_xor(H, q)].sum(axis=2, dtype=np.int32).min(axis=1).astype(float)
+    d += np.where(np.abs(np.log(AR / h[1])) > 0.25, 16, 0)  # portrait against landscape
+    best = np.argsort(d)[:3]
+    return [(int(d[i]), ids[int(i)]) for i in best]
+
+
+def scope_ids(scope: Dict[str, Any]) -> List[int]:
+    """The library photos to compare pictures with: all, or those in folders whose path contains a text and/or
+    taken between two dates."""
+    where, args = ["COALESCE(missing,0)=0"], []
+    t = str((scope or {}).get("folder") or "").strip()
+    if t:
+        where.append("folder LIKE ? COLLATE NOCASE")
+        args.append("%" + t.replace("%", "") + "%")
+    if (scope or {}).get("date_from"):
+        where.append("taken >= ?")
+        args.append(str(scope["date_from"]))
+    if (scope or {}).get("date_to"):
+        where.append("taken < ?")
+        args.append(str(scope["date_to"]) + "T99")
+    return [r["id"] for r in db.conn().execute("SELECT id FROM photos WHERE %s" % " AND ".join(where), args).fetchall()]
+
+
+def match(pictures: List[dict], token: str, scope: Optional[Dict[str, Any]] = None,
+          progress: Callable[[str, int, int], None] = lambda s, d, t: None, picture_bytes: Callable = None,
+          names: Callable = None) -> Tuple[Dict[str, dict], Dict[str, bytes]]:
+    """miro id -> {photo, how, dist?, guess?}. how: name / name+picture / picture / likely (placed, worth a look);
+    photo None with a guess: not placed, but there is a candidate. Also the pictures downloaded, for the review."""
+    picture_bytes = picture_bytes or image_bytes
+    names = names or original_name
+    from concurrent.futures import ThreadPoolExecutor
     idx = photo_index()
+    titles = {it["id"]: text_of((it.get("data") or {}).get("title") or "") for it in pictures}
+    untitled = [it for it in pictures if not titles[it["id"]]]
+    if untitled and names(untitled[0], token):  # the file names can be had from the originals' links
+        progress("names", 0, len(untitled))
+        with ThreadPoolExecutor(4) as ex:
+            for k, (it, n) in enumerate(zip(untitled, ex.map(lambda it: names(it, token), untitled))):
+                titles[it["id"]] = n
+                if k % 20 == 0:
+                    progress("names", k, len(untitled))
     out: Dict[str, dict] = {}
     pending: List[Tuple[dict, List[dict]]] = []
     for it in pictures:
-        title = (it.get("data") or {}).get("title") or ""
         cands: List[dict] = []
-        for s in stems(text_of(title)):
+        for s in stems(titles[it["id"]]) if titles[it["id"]] else []:
             cands = idx.get(s) or []
             if cands:
                 break
@@ -291,51 +450,98 @@ def match(pictures: List[dict], token: str, picture_bytes: Callable = image_byte
             out[it["id"]] = {"photo": cands[0]["id"], "how": "name", "folder": cands[0]["folder"]}
         else:
             pending.append((it, cands))
-    # the folders the board mostly comes from settle most of the rest
     folders: Dict[str, int] = {}
     for m in out.values():
         folders[m["folder"]] = folders.get(m["folder"], 0) + 1
-    memo: Dict[int, Optional[int]] = {}
-    pool: Optional[List[int]] = None
+    still = []
     for it, cands in pending:
-        if cands:
-            near = [c for c in cands if c["folder"] in folders]
-            if len(near) == 1:
-                out[it["id"]] = {"photo": near[0]["id"], "how": "name", "folder": near[0]["folder"]}
-                continue
-            h = dhash(picture_bytes(it, token) or b"")
-            if h is not None:
-                scored = sorted((bits(h, ph), c["id"], c["folder"]) for c in (near or cands) if (ph := photo_hash(c["id"], memo)) is not None)
-                if scored and scored[0][0] <= SAME_PICTURE * 2:
-                    out[it["id"]] = {"photo": scored[0][1], "how": "name+picture", "folder": scored[0][2]}
-                    continue
-            # still unsure: the one in the busiest folder
-            best = max(cands, key=lambda c: (folders.get(c["folder"], 0), -c["id"]))
-            out[it["id"]] = {"photo": best["id"], "how": "name (guess)", "folder": best["folder"]}
-            continue
-        if not folders:
-            out[it["id"]] = {"photo": None}
-            continue
-        if pool is None:
-            marks = ",".join("?" * len(folders))
-            pool = [r["id"] for r in db.conn().execute(
-                "SELECT id FROM photos WHERE COALESCE(missing,0)=0 AND folder IN (%s) LIMIT %d" % (marks, MAX_VISUAL), list(folders)).fetchall()]
-        h = dhash(picture_bytes(it, token) or b"")
+        near = [c for c in cands if c["folder"] in folders]
+        if len(near) == 1:
+            out[it["id"]] = {"photo": near[0]["id"], "how": "name"}
+        else:
+            still.append((it, near or cands))
+    pics: Dict[str, bytes] = {}
+    if not still:
+        return out, pics
+    # the rest by picture: Miro's previews against LPL's thumbnails
+    if scope and any(scope.get(k) for k in ("folder", "date_from", "date_to")):
+        pool = scope_ids(scope)
+    elif folders:
+        pool = [r["id"] for r in db.conn().execute("SELECT id FROM photos WHERE COALESCE(missing,0)=0 AND folder IN (%s)" % ",".join("?" * len(folders)), list(folders)).fetchall()]
+    else:
+        pool = scope_ids({})
+    ids, H, AR = pool_hashes(pool, lambda d, t: progress("library", d, t))
+    progress("pictures", 0, len(still))
+    with ThreadPoolExecutor(6) as ex:
+        got = list(ex.map(lambda x: picture_bytes(x[0], token), still))
+    for k, ((it, cands), data) in enumerate(zip(still, got)):
+        if k % 20 == 0:
+            progress("pictures", k, len(still))
+        h = phash(data) if data else None
         if h is None:
             out[it["id"]] = {"photo": None}
             continue
-        scored = sorted((bits(h, ph), pid) for pid in pool if (ph := photo_hash(pid, memo)) is not None)
-        if scored and scored[0][0] <= SAME_PICTURE and (len(scored) == 1 or scored[1][0] - scored[0][0] >= SURE_GAP):
-            out[it["id"]] = {"photo": scored[0][1], "how": "picture"}
-        else:
+        pics[it["id"]] = data
+        if cands:  # several photos with this name: the one that looks like it
+            cid = [c["id"] for c in cands]
+            sub = [i for i, x in enumerate(ids) if x in set(cid)]
+            best = closest(h, [ids[i] for i in sub], H[sub], AR[sub]) if sub else []
+            if best:
+                out[it["id"]] = {"photo": best[0][1], "how": "name+picture", "dist": best[0][0]}
+            else:
+                out[it["id"]] = {"photo": cands[0]["id"], "how": "likely", "dist": None}
+            continue
+        best = closest(h, ids, H, AR)
+        if not best:
             out[it["id"]] = {"photo": None}
-    return out
+            continue
+        d0 = best[0][0]
+        gap = (best[1][0] - d0) if len(best) > 1 else 99
+        if d0 <= SURE and gap >= MARGIN_SURE:
+            out[it["id"]] = {"photo": best[0][1], "how": "picture", "dist": d0}
+        elif d0 <= LIKELY and gap >= MARGIN_LIKELY:
+            out[it["id"]] = {"photo": best[0][1], "how": "likely", "dist": d0}
+        else:
+            out[it["id"]] = {"photo": None, "guess": best[0][1], "dist": d0}
+    # the same photo found for two pictures: keep the closer one sure, the other only "likely"
+    taken: Dict[int, str] = {}
+    for mid, m in out.items():
+        p = m.get("photo")
+        if p is None or m.get("how") == "name":
+            continue
+        if p in taken:
+            other = out[taken[p]]
+            loser = mid if (m.get("dist") or 0) >= (other.get("dist") or 0) else taken[p]
+            out[loser]["how"] = "likely"
+            if loser == taken[p]:
+                taken[p] = mid
+        else:
+            taken[p] = mid
+    progress("pictures", len(still), len(still))
+    return out, pics
 
 
 # ------------------------------------------------------------------ layout
 def _tile(p: dict) -> Tuple[int, int]:
     from .api import _tile as tile
     return tile(p.get("width"), p.get("height"), p.get("orientation"))
+
+
+def spacing(gs: List[dict]) -> float:
+    """The usual distance from a picture's centre to its nearest neighbour's (sideways neighbours count most)."""
+    pts = [(g["cx"], g["cy"]) for g in gs]
+    if len(pts) < 2:
+        return 165.0
+    nn = []
+    for i, (x, y) in enumerate(pts):
+        best = None
+        for j, (x2, y2) in enumerate(pts):
+            if i != j:
+                d = ((x - x2) ** 2 + (2 * (y - y2)) ** 2) ** .5  # rows: the vertical gap counts double, so a row neighbour wins
+                if best is None or d < best[0]:
+                    best = (d, abs(x - x2), abs(y - y2))
+        nn.append(max(best[1], best[2] * 1.4))
+    return max(1.0, statistics.median(nn))
 
 
 def layout(board: dict, matches: Dict[str, dict]) -> dict:
@@ -355,9 +561,11 @@ def layout(board: dict, matches: Dict[str, dict]) -> dict:
         g = geo.get(str(it["id"]))
         if m.get("photo") in photos and g and g["w"] > 0:
             ratios.append(_tile(photos[m["photo"]])[0] / g["w"])
-    if not ratios:
-        ratios = [150 / g["w"] for it in pics if (g := geo.get(str(it["id"]))) and g["w"] > 0] or [1.0]
-    k = statistics.median(ratios)
+    sized = sum(1 for it in pics if (g := geo.get(str(it["id"]))) and g["w"] > 0)
+    if ratios and sized * 2 >= len(pics):
+        k = statistics.median(ratios)
+    else:  # Miro gives no sizes for pictures dropped onto a board: neighbours' spacing is about a picture and a gap
+        k = 165 / spacing([geo[str(it["id"])] for it in pics if str(it["id"]) in geo]) if pics else 1.0
 
     def box(iid):
         g = geo[str(iid)]
@@ -463,49 +671,108 @@ def miro_forget():
     return {"ok": True}
 
 
-@router.post("/api/miro/preview")
-def miro_preview(body: Dict[str, Any] = Body(...)):
-    bid = board_id(body.get("url"))
-    token = _token(body)
-    board = read_board(bid, token)
-    pics = [it for it in board["items"] if it.get("type") == "image"]
-    matches = match(pics, token)
+def _report(job: dict) -> dict:
+    board, matches = job["board"], job["matches"]
     lay = layout(board, matches)
+    pics = [it for it in board["items"] if it.get("type") == "image"]
     how: Dict[str, int] = {}
     for m in matches.values():
         if m.get("photo"):
             how[m["how"]] = how.get(m["how"], 0) + 1
+    check = [{"miro_id": mid, "photo": m["photo"], "dist": m.get("dist"), "placed": True}
+             for mid, m in matches.items() if m.get("photo") and m.get("how") == "likely"]
+    check += [{"miro_id": mid, "photo": m["guess"], "dist": m.get("dist"), "placed": False}
+              for mid, m in matches.items() if not m.get("photo") and m.get("guess")]
+    check.sort(key=lambda x: (x["placed"], -(x["dist"] or 0)))
+    taken = db.conn().execute("SELECT 1 FROM series WHERE name=?", (board["name"],)).fetchone()
+    return {"state": "done", "key": job["key"], "name": board["name"], "name_taken": bool(taken), "pictures": len(pics), "matched": len(lay["items"]),
+            "how": how, "duplicates": lay["duplicates"], "unmatched": lay["unplaced"], "frames": len(lay["frames"]),
+            "notes": sum(1 for x in lay["shapes"] if x["kind"] == "note") - len(lay["unplaced"]),
+            "arrows": sum(1 for x in lay["shapes"] if x["kind"] == "arrow"), "skipped": lay["skipped"],
+            "sample": [i["id"] for i in lay["items"][:12]], "check": check[:400]}
+
+
+def _run(job: dict, bid: str, token: str, scope: Dict[str, Any]) -> None:
+    def prog(stage, done, total):
+        job.update(stage=stage, done=done, total=total)
+    try:
+        prog("board", 0, 0)
+        board = read_board(bid, token)
+        pics = [it for it in board["items"] if it.get("type") == "image"]
+        matches, data = match(pics, token, scope, prog)
+        job.update(board=board, matches=matches, pics=data, state="done")
+    except HTTPException as e:
+        job.update(state="error", error=e.detail)
+    except Exception as e:  # shown in the dialog
+        log.exception("miro import")
+        job.update(state="error", error=str(e))
+
+
+def _job(key: str) -> dict:
+    with _cache_lock:
+        job = _cache.get(key)
+    if not job:
+        raise HTTPException(410, "The board was read too long ago: read it again")
+    return job
+
+
+@router.post("/api/miro/preview")
+def miro_preview(body: Dict[str, Any] = Body(...)):
+    """Starts reading the board and matching its pictures; GET /api/miro/preview/{key} says how far it got."""
+    bid = board_id(body.get("url"))
+    token = _token(body)
     key = secrets.token_urlsafe(12)
     now = time.time()
+    job = {"key": key, "ts": now, "state": "running", "stage": "board", "done": 0, "total": 0}
     with _cache_lock:
         for k in [k for k, v in _cache.items() if now - v["ts"] > CACHE_TTL]:
             del _cache[k]
-        _cache[key] = {"ts": now, "layout": lay, "name": board["name"]}
-    names = {}
-    for f in lay["frames"]:
-        names[f["label"]] = names.get(f["label"], 0) + 1
-    taken = db.conn().execute("SELECT 1 FROM series WHERE name=?", (board["name"],)).fetchone()
-    return {"key": key, "name": board["name"], "name_taken": bool(taken), "pictures": len(pics), "matched": len(lay["items"]), "how": how,
-            "duplicates": lay["duplicates"], "unmatched": lay["unplaced"], "frames": len(lay["frames"]),
-            "notes": sum(1 for s in lay["shapes"] if s["kind"] == "note") - len(lay["unplaced"]),
-            "arrows": sum(1 for s in lay["shapes"] if s["kind"] == "arrow"), "skipped": lay["skipped"],
-            "sample": [i["id"] for i in lay["items"][:12]]}
+        _cache[key] = job
+    t = threading.Thread(target=_run, args=(job, bid, token, body.get("scope") or {}), daemon=True)
+    t.start()
+    if body.get("wait"):
+        t.join()
+    return miro_progress(key)
+
+
+@router.get("/api/miro/preview/{key}")
+def miro_progress(key: str):
+    job = _job(key)
+    if job["state"] == "error":
+        raise HTTPException(400, job.get("error") or "Reading the board failed")
+    if job["state"] != "done":
+        return {"state": "running", "key": key, "stage": job.get("stage"), "done": job.get("done", 0), "total": job.get("total", 0)}
+    return _report(job)
+
+
+@router.get("/api/miro/pic/{key}/{mid}")
+def miro_pic(key: str, mid: str):
+    """Miro's preview of a picture, for the review pairs in the dialog."""
+    from fastapi.responses import Response
+    data = (_job(key).get("pics") or {}).get(mid)
+    if not data:
+        raise HTTPException(404, "no picture")
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=1800"})
 
 
 @router.post("/api/miro/import")
 def miro_import(body: Dict[str, Any] = Body(...)):
+    """key, name, missing_notes, use: {miro id: photo id or null} (the user's answers in the review)."""
     from . import api, series as series_mod
-    with _cache_lock:
-        got = _cache.get(str(body.get("key") or ""))
-    if not got:
-        raise HTTPException(410, "The board was read too long ago: read it again")
-    lay = got["layout"]
+    job = _job(str(body.get("key") or ""))
+    if job.get("state") != "done":
+        raise HTTPException(409, "Still reading the board")
+    matches = {k: dict(v) for k, v in job["matches"].items()}
+    for mid, pid in (body.get("use") or {}).items():
+        if mid in matches:
+            matches[mid] = {"photo": int(pid), "how": "checked"} if pid else {"photo": None}
+    lay = layout(job["board"], matches)
     keep_missing = bool(body.get("missing_notes", True))
-    r = series_mod.create_series({"name": body.get("name") or got["name"]})
+    r = series_mod.create_series({"name": body.get("name") or job["board"]["name"]})
     sid = r["id"]
-    shapes = [s for s in lay["shapes"] if keep_missing or not s.get("text", "").startswith("Not found: ") or s.get("kind") != "note"]
-    keys = {s["key"] for s in shapes if s["kind"] == "note"}
-    shapes = [s for s in shapes if s["kind"] != "arrow" or all(e.get("note") is None or e["note"] in keys for e in (s["a"], s["b"]))]
+    shapes = [x for x in lay["shapes"] if keep_missing or x.get("kind") != "note" or not x.get("text", "").startswith("Not found: ")]
+    keys = {x["key"] for x in shapes if x["kind"] == "note"}
+    shapes = [x for x in shapes if x["kind"] != "arrow" or all(e.get("note") is None or e["note"] in keys for e in (x["a"], x["b"]))]
     with db.write_lock:
         c = db.conn()
         c.execute("DELETE FROM series_frames WHERE series_id=?", (sid,))  # the empty "01" a new series starts with

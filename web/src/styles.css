@@ -532,6 +532,13 @@ a { color: var(--accent); }
 /* "Link this board again" */
 .dialog.linkdlg { width: min(500px, calc(100vw - 32px)); padding: 20px; gap: 14px; }
 .dialog.mirodlg { width: min(540px, calc(100vw - 32px)); max-height: 90vh; overflow: auto; }
+.mirobar { height: 6px; border-radius: 3px; background: var(--line2); overflow: hidden; }
+.mirobar > span { display: block; height: 100%; background: var(--accent); transition: width .4s; }
+.miropairs { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; max-height: 300px; overflow: auto; }
+.miropair { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 4px; border: 1px solid var(--line2); border-radius: 6px; background: none; color: inherit; cursor: pointer; opacity: .55; }
+.miropair.on { opacity: 1; border-color: var(--accent); }
+.miropair img { width: 100%; height: 52px; object-fit: cover; border-radius: 3px; }
+.miropair span { grid-column: 1 / -1; text-align: center; }
 .lk-choice { display: flex; align-items: center; gap: 16px; padding: 14px 16px; border: 1px solid var(--line2); border-radius: 10px; background: transparent; color: inherit; text-align: left; line-height: 1.45; }
 .lk-choice:hover { border-color: var(--accent-line); background: #26262b; }
 .lk-choice b { font-size: 14px; font-weight: 600; }
