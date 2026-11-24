@@ -531,6 +531,7 @@ a { color: var(--accent); }
 
 /* "Link this board again" */
 .dialog.linkdlg { width: min(500px, calc(100vw - 32px)); padding: 20px; gap: 14px; }
+.dialog.mirodlg { width: min(540px, calc(100vw - 32px)); max-height: 90vh; overflow: auto; }
 .lk-choice { display: flex; align-items: center; gap: 16px; padding: 14px 16px; border: 1px solid var(--line2); border-radius: 10px; background: transparent; color: inherit; text-align: left; line-height: 1.45; }
 .lk-choice:hover { border-color: var(--accent-line); background: #26262b; }
 .lk-choice b { font-size: 14px; font-weight: 600; }

@@ -6,6 +6,7 @@ import { api, SeriesFolder, SeriesInfo, Target } from './api'
 import { useStore } from './store'
 import { useAsk } from './components/Ask'
 import { keyOf } from './seriesnav'
+import { MiroImport } from './components/MiroImport'
 
 // lane and frame colours (the board's frame colours, in the order new series get them)
 export const SERIES_COLORS: [string, string][] = [['#5b9be6', 'Blue'], ['#e5c547', 'Yellow'], ['#f0a35a', 'Orange'], ['#5cc08a', 'Green'], ['#e07bb0', 'Pink'], ['#a07be0', 'Purple'], ['#e5636a', 'Red'], ['#8a8a92', 'Grey']]
@@ -23,7 +24,8 @@ export const useSeriesRev = () => useSyncExternalStore(cb => { subs.add(cb); ret
 
 export function useSeriesOps() {
   const s = useStore()
-  const [node, ask] = useAsk()
+  const [askNode, ask] = useAsk()
+  const [miro, setMiro] = useState(false)
   const done = () => { s.reloadSeries(); s.reloadTags(); bumpSeries() }
   const fail = (e: any) => { s.toast(e?.message || String(e)) }
   const open = (t: Target) => { s.setBoardSeries(keyOf(t)); if (s.view !== 'board') s.setView('board') }
@@ -91,7 +93,11 @@ export function useSeriesOps() {
   const colorSeries = async (x: SeriesInfo, color: string) => {
     try { await api.seriesColor(x.id, color); done() } catch (e) { fail(e) }
   }
-  return { node, ask, open, newSeries, newFolder, moveFolder, renameSeries, renameFolder, deleteSeries, deleteFolder, moveSeries, colorSeries, done, fail }
+  const importMiro = () => setMiro(true)
+  const node = <>{askNode}{miro && <MiroImport onClose={() => setMiro(false)} onDone={id => {
+    setMiro(false); done(); open({ kind: 'series', id }); s.toast('Made the series from the Miro board')
+  }} />}</>
+  return { node, ask, open, importMiro, newSeries, newFolder, moveFolder, renameSeries, renameFolder, deleteSeries, deleteFolder, moveSeries, colorSeries, done, fail }
 }
 export type SeriesOps = ReturnType<typeof useSeriesOps>
 

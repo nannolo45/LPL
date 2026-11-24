@@ -170,6 +170,7 @@ export function SeriesView() {
             <div className="row">
               <button className={'btn primary' + (phone ? ' big' : '')} onClick={() => ops.newSeries(null, s.sel)}>New series</button>
               <button className={'btn' + (phone ? ' big' : '')} onClick={() => ops.newFolder()}>New folder</button>
+              <button className={'btn' + (phone ? ' big' : '')} onClick={ops.importMiro}>Import from Miro…</button>
             </div>
           </div>
         </div>

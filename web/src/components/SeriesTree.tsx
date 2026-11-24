@@ -203,6 +203,7 @@ export function SeriesTree({ current, phone = false, onOpened }: { current: Targ
       <div className={'st-new' + (over?.kind === 'top' && ((dragged && dragged.folder_id != null) || dragF != null) ? ' over' : '')}>
         <button type="button" className={'btn dashed' + (phone ? ' big' : '')} onClick={() => ops.newSeries(null, phone ? [] : s.sel)}>+ New series{!phone && s.sel.length ? ` from ${s.sel.length} selected` : ''}</button>
         <button type="button" className={'btn dashed' + (phone ? ' big' : '')} onClick={() => ops.newFolder().then(id => { if (id != null) onOpened?.() })}>+ New folder</button>
+        {!phone && <button type="button" className="btn dashed" onClick={ops.importMiro}>Import from Miro…</button>}
       </div>
       <div className="st-hint">{phone
         ? 'A folder holds several series, and folders. “⋯” next to a series or a folder moves it into a folder or out again.'
