@@ -440,17 +440,17 @@ a { color: var(--accent); }
 .sv-seg button { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 0; border-radius: 6px; font-size: 12px; background: transparent; color: #a6a6ad; }
 .sv-seg button:hover { color: var(--text); }
 .sv-seg button.on { background: #38383f; color: #fff; font-weight: 500; }
-.sv-find { flex: 0 1 240px; min-width: 175px; display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 4px 0 9px; border: 1px solid var(--line2); border-radius: 8px; background: var(--panel2); color: var(--muted); }
+.sv-find { display: flex; align-items: center; gap: 4px; height: 40px; width: 100%; box-sizing: border-box; padding: 0 4px 0 9px; border: 1px solid var(--line2); border-radius: 8px; background: var(--panel2); color: var(--muted); }
 .sv-find:focus-within { border-color: var(--accent-line); }
-.sv-find.none { border-color: #7a3a3a; }
-.sv-find input { flex: 1 1 auto; min-width: 56px; border: 0; outline: none; background: transparent; color: var(--text); font-size: 12px; padding: 0 2px; }
+.sv-find input { flex: 1 1 auto; min-width: 56px; border: 0; outline: none; background: transparent; color: var(--text); font-size: 16px; padding: 0 2px; }
+.sv-find-top { border: 1px solid transparent; }
+.sv-find-top:focus-within { border-color: var(--accent-line); }
+.sv-find.none, .sv-find-top.none { border-color: #7a3a3a; }
 .sv-find-n { flex: 0 0 auto; font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.sv-find.none .sv-find-n { color: #e5636a; }
-.sv-find button { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--soft); font-size: 13px; line-height: 22px; }
-.sv-find button:hover { background: #38383f; color: #fff; }
-.sv-find.phone { flex: 0 0 auto; width: 100%; height: 40px; box-sizing: border-box; }
-.sv-find.phone input { font-size: 16px; }
-.sv-find.phone button { width: 34px; height: 34px; font-size: 16px; }
+.none .sv-find-n { color: #e5636a; }
+.sv-find-b { flex: 0 0 auto; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--soft); font-size: 13px; line-height: 22px; }
+.sv-find-b:hover { background: #38383f; color: #fff; }
+.sv-find .sv-find-b { width: 34px; height: 34px; font-size: 16px; }
 .sv-findbtn { display: inline-flex; align-items: center; justify-content: center; }
 .bitem.found:not(.sel) { box-shadow: 0 0 0 2px #212124, 0 0 0 4px rgba(232,163,61,.45); }
 .sth.found:not(.sel) .box::after { content: ''; position: absolute; inset: 0; border: 2px dashed rgba(232,163,61,.7); border-radius: 5px; pointer-events: none; }

@@ -172,7 +172,7 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
   }, [all, lanes, shownOf, data?.tree, isFolder])
   const allPhotos = useMemo(() => lanes.flatMap(l => l.photos), [lanes])
   const found = useFind({
-    list: findList, all: allPhotos, req: find, active: true, onCount: onFind,
+    list: findList, all: allPhotos, req: find, active: true, onCount: onFind, startAt: s.sel[0],
     reveal: p => {
       s.setSel([p.id]); anchor.current = p.id
       // inside a folded folder: unfold it and the folders around it

@@ -286,7 +286,7 @@ export function BoardView({ target, active = true, onInfo, find, onFind }: {
     return [...order, ...rest]
   }, [shown, order, pos])
   const found = useFind({
-    list: findList, all: items, req: find, active, onCount: onFind,
+    list: findList, all: items, req: find, active, onCount: onFind, startAt: s.sel[0],
     reveal: it => { s.setSel([it.id]); setSelShapes([]); setSelFrames([]); const r = itemRect(it); showRect({ x: r.x - 150, y: r.y - 100, w: 450, h: 305 }, Math.max(zoomRef.current, .6)) },
   })
   useEffect(() => { onInfo?.({ hidden: hiddenCount, maybe: isFolder ? 0 : items.length - hiddenCount - order.length }) }, [hiddenCount, items.length, order.length])

@@ -11,52 +11,8 @@ import { StripSource } from './StripSource'
 import { tray } from '../tray'
 import { FolderIcon, LinkIcon, SeriesTree } from './SeriesTree'
 import { AddPhotosDialog } from './AddPhotos'
-import { FindCount, FindReq } from '../find'
-import { actionFor, keysOf, typingIn } from '../shortcuts'
-
-const SearchIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="M15.5 15.5L21 21" /></svg>
-
-/** The find box of the Series view: type part of a file name; Enter / ↓ next, Shift+Enter / ↑ previous, Esc clears. */
-function FindBox({ req, setReq, count, phone, onClose }: {
-  req: FindReq; setReq: (r: FindReq) => void; count: FindCount | null; phone: boolean; onClose?: () => void
-}) {
-  const s = useStore()
-  const inp = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (phone) { inp.current?.focus(); return }
-    const h = (e: KeyboardEvent) => {
-      if (s.viewer != null || s.fullscreen || typingIn(e.target)) return
-      if (actionFor(e, ['board']) === 'findPhoto') { e.preventDefault(); inp.current?.focus(); inp.current?.select() }
-    }
-    window.addEventListener('keydown', h)
-    return () => window.removeEventListener('keydown', h)
-  }, [phone, s.viewer, s.fullscreen])
-  const step = (dir: 1 | -1) => setReq({ ...req, n: req.n + 1, dir })
-  const has = !!req.q.trim()
-  const none = has && count && !count.total
-  const tally = !has || !count ? '' : count.total ? `${count.at}/${count.total}` : count.hidden ? `0 · ${count.hidden} hidden` : '0'
-  const keys = keysOf('findPhoto')
-  return (
-    <div className={'sv-find' + (none ? ' none' : '') + (phone ? ' phone' : '')} role="search">
-      <SearchIcon />
-      <input ref={inp} value={req.q} placeholder={phone ? 'Find a photo by name' : 'Find photo…'} aria-label="Find a photo by file name"
-        title={`Find a photo by file name${keys.length ? ` (${keys.join(', ')})` : ''}. Enter: next, Shift+Enter: previous, Esc: clear`}
-        enterKeyHint="search" autoComplete="off" spellCheck={false}
-        onChange={e => setReq({ q: e.target.value, n: req.n, dir: 1 })}
-        onKeyDown={e => {
-          if (e.key === 'Enter' || e.key === 'ArrowDown') { e.preventDefault(); if (has) step(e.shiftKey ? -1 : 1) }
-          else if (e.key === 'ArrowUp') { e.preventDefault(); if (has) step(-1) }
-          else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (req.q) setReq({ q: '', n: req.n, dir: 1 }); else { inp.current?.blur(); onClose?.() } }
-        }} />
-      {tally && <span className="sv-find-n" role="status" title={count?.hidden ? `${count.hidden} matching photo${count.hidden === 1 ? ' is' : 's are'} hidden from the library` : undefined}>{tally}</span>}
-      {has && !!count?.total && count.total > 1 && <>
-        <button type="button" aria-label="Previous match" title="Previous (Shift+Enter)" onClick={() => step(-1)}>↑</button>
-        <button type="button" aria-label="Next match" title="Next (Enter)" onClick={() => step(1)}>↓</button>
-      </>}
-      {(has || onClose) && <button type="button" aria-label={has ? 'Clear' : 'Close'} title={has ? 'Clear (Esc)' : 'Close'} onClick={() => { if (has) { setReq({ q: '', n: req.n, dir: 1 }); inp.current?.focus() } else onClose?.() }}>×</button>}
-    </div>
-  )
-}
+import { getFindState, setFindState, useFindState } from '../find'
+import { FindBox, SearchIcon } from './FindBox'
 
 type Mode = 'board' | 'strip'
 const BoardIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="8" height="6" rx="1" /><rect x="13" y="4" width="8" height="10" rx="1" /><rect x="3" y="12" width="8" height="8" rx="1" /><rect x="13" y="16" width="8" height="4" rx="1" /></svg>
@@ -155,8 +111,9 @@ export function SeriesView() {
   const [srcRev, setSrcRev] = useState(0)
   const ext = useRef<ExtDrag | null>(null)
   // find a photo by name: the text stays when switching between board and strip; another series starts empty
-  const [find, setFind] = useState<FindReq>({ q: '', n: 0, dir: 1 })
-  const [findCount, setFindCount] = useState<FindCount | null>(null)
+  const { req: find } = useFindState()
+  const setFind = (f: (r: typeof find) => typeof find) => setFindState({ req: f(getFindState().req) })
+  const setFindCount = (c: Parameters<typeof setFindState>[0]['count']) => setFindState({ count: c })
   const [findOpen, setFindOpen] = useState(false)   // phone: the find row is open
   useEffect(() => { const m = readMode(key); setModeRaw(m); setBoardSeen(m === 'board'); setAdding(false); setDlg(null); setInfo({ hidden: 0, maybe: 0 }); setFind(f => ({ q: '', n: f.n, dir: 1 })); setFindCount(null); setFindOpen(false) }, [key])
   useBackLayer(phone && findOpen, () => { setFindOpen(false); setFind(f => ({ ...f, q: '' })) })
@@ -166,6 +123,8 @@ export function SeriesView() {
   const series = target?.kind === 'series' ? s.series.find(x => x.id === target.id) || null : null
   const parent = series?.folder_id != null ? s.seriesFolders.find(f => f.id === series.folder_id) || null : null
   const name = folder?.name || series?.name || ''
+  useEffect(() => { setFindState({ where: name }) }, [name])
+  useEffect(() => () => setFindState({ where: '', count: null }), [])
   const linked = folder ? folder.linked : !!series?.linked
   // nested folders: the folders above what is open (the way back), and the top-level folder whose board a subfolder is on
   const crumbs = useMemo(() => {
@@ -289,7 +248,8 @@ export function SeriesView() {
   )
   const add = <button className="btn primary" onClick={() => setAdding(true)} aria-label="Add photos" title="Add photos from folders, or by rating, label, tag and date">{phone ? '+ Add' : '+ Add photos'}</button>
   const more = <MenuButton label="More: show in library, rename, delete" items={menu} className="sv-more" />
-  const findBox = (!phone || findOpen) && <FindBox req={find} setReq={setFind} count={findCount} phone={phone} onClose={phone ? () => { setFindOpen(false); setFind(f => ({ ...f, q: '' })) } : undefined} />
+  // the find box: on desktop it is the top bar's search box while the Series view is open (App.tsx); on the phone a row here
+  const findBox = phone && findOpen && <FindBox variant="phone" onClose={() => { setFindOpen(false); setFind(f => ({ ...f, q: '' })) }} />
   const findBtn = phone && !findOpen && <button type="button" className="btn sv-findbtn" aria-label="Find a photo by name" onClick={() => setFindOpen(true)}><SearchIcon /></button>
   return (
     <div className="board-wrap">
@@ -313,7 +273,7 @@ export function SeriesView() {
             <span className="muted" style={{ whiteSpace: 'nowrap' }}>{counts}</span>
             {seg}{link}{hiddenChip}
             <div className="grow" />
-            {findBox}{add}{more}
+            {add}{more}
           </div>
         )}
         <div className="sv-body">

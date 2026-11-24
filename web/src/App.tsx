@@ -17,6 +17,7 @@ import { actionFor, typingIn, useShortcutsVersion } from './shortcuts'
 import { takeDeepLink } from './devices'
 import { DevicePicker } from './components/DevicePicker'
 import { DevicesIndicator, openDevices } from './components/DevicesIndicator'
+import { FindBox } from './components/FindBox'
 
 function TopBar() {
   const s = useStore()
@@ -38,11 +39,12 @@ function TopBar() {
       </div>
       <div className="topbar">
         <ViewSwitch />
-        <label className="search">
+        {/* in the Series view the search box finds photos on the board / in the strip; the library's search text is kept for when you go back */}
+        {s.view === 'board' ? <FindBox variant="top" /> : <label className="search">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
           <input aria-label="Search" placeholder="Search filename, folder, tag, lens, camera…" value={s.filters.q || ''} onChange={e => s.patchFilters({ q: e.target.value })} />
           {s.filters.q && <button className="btn ghost tiny" aria-label="Clear search" onClick={() => s.patchFilters({ q: '' })}>×</button>}
-        </label>
+        </label>}
       </div>
     </>
   )
