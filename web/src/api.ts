@@ -185,11 +185,11 @@ export interface AutotagStatus { state: 'idle' | 'running' | 'error'; done: numb
 export interface AutotagCounts { bnw: number; toned: number; colour: number; unsure: number; none: number; camera: number; checked: number; corrected: number; photos: number }
 export interface AutotagReview { counts: { unsure: number; bnw: number; toned: number; removals: number; adds: number }; total: number; items: Photo[]; status: AutotagStatus; settings: AutotagSettings }
 
-export interface MiroScope { folder?: string; date_from?: string; date_to?: string }
+export interface MiroScope { folder?: string; folders?: string[]; date_from?: string; date_to?: string }
 export interface MiroRunning { state: 'running'; key: string; stage: 'board' | 'names' | 'library' | 'pictures'; done: number; total: number }
 export interface MiroPreview { state: 'done'; key: string; name: string; name_taken: boolean; pictures: number; matched: number; how: Record<string, number>; duplicates: number
   unmatched: { title: string; miro_id: string }[]; frames: number; notes: number; arrows: number; skipped: Record<string, number>; sample: number[]
-  check: { miro_id: string; photo: number; dist: number | null; placed: boolean }[] }
+  check: { miro_id: string; photo: number; alts: number[]; dist: number | null; placed: boolean; kind: 'check' | 'guess' | 'sure' }[] }
 
 export class AuthError extends Error {}
 
