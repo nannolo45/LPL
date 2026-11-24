@@ -87,6 +87,11 @@ def test_untitled_pictures_by_picture(client, monkeypatch):
     """Pictures dropped onto a Miro board have no title and no size in the API: found by picture, spaced by distance."""
     from lpl import media
     rows = db.conn().execute("SELECT id, relpath FROM photos ORDER BY id").fetchall()
+    # other tests add copies of the same pictures: keep photos that look unlike every other one
+    hs = {r["id"]: miro.phash(media.preview_paths(r["id"])[0].read_bytes()) for r in rows if media.preview_paths(r["id"])[0].exists()}
+    alone = lambda i: all(miro.closest(hs[i], [j], miro.np_hashes([hs[j]]), __import__("numpy").array([hs[j][1]]))[0][0] > 90 for j in hs if j != i)
+    rows = [r for r in rows if r["id"] in hs and alone(r["id"])][:3]
+    assert len(rows) >= 2
     assert all(media.preview_paths(r["id"])[0].exists() for r in rows)
     pics = {"P%d" % r["id"]: media.preview_paths(r["id"])[0].read_bytes() for r in rows}
     items = [{"id": "G", "type": "frame", "data": {"title": "Grecia"}, "style": {}, "position": {"x": 0, "y": 0}, "geometry": {"width": 3000, "height": 1000}}]

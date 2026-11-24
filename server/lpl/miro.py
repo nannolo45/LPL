@@ -386,6 +386,12 @@ def pool_hashes(ids: List[int], progress: Callable[[int, int], None] = lambda d,
 SURE, LIKELY, MARGIN_SURE, MARGIN_LIKELY = 50, 76, 16, 10   # bits of 256 (unrelated photos: about 110-130)
 
 
+def np_hashes(hs: List[Tuple[bytes, float]]):
+    """Single hashes as the N x crops x 32 array closest() takes (the same hash for every crop)."""
+    import numpy as np
+    return np.frombuffer(b"".join(h[0] * len(CROPS) for h in hs), dtype=np.uint8).reshape(-1, len(CROPS), 32)
+
+
 _POP = __import__("numpy").array([bin(i).count("1") for i in range(256)], dtype=__import__("numpy").uint8)
 
 
