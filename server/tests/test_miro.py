@@ -128,3 +128,68 @@ def test_scope_by_folders(client):
     assert set(miro.scope_ids({"folders": ["2024/2024-05-01 Walk"]})) == walk
     assert set(miro.scope_ids({"folders": ["2024"]})) >= walk  # subfolders count
     assert set(miro.scope_ids({"folder": "lake"})) == {r["id"] for r in rows if "lake" in r["folder"].lower()}
+
+
+def test_find_missing_later(client, monkeypatch):
+    """A 'Not found' note keeps Miro's picture: look for the photo later and put it where the note is."""
+    from lpl import media
+    row = db.conn().execute("SELECT id FROM photos WHERE filename='IMG_0002.jpg' ORDER BY id LIMIT 1").fetchone()
+    thumb = media.preview_paths(row["id"])[0].read_bytes()
+    items = [dict(BOARD["items"][0]), {"id": "Q", "type": "image", "data": {"imageUrl": "u"}, "parent": {"id": "F1"},
+             "position": {"x": 900, "y": 700, "origin": "center", "relativeTo": "parent_top_left"}, "geometry": {"width": 1000, "height": 750}},
+             dict(BOARD["items"][2]), dict(BOARD["items"][6])]
+    conns = [{"id": "C", "startItem": {"id": "S1"}, "endItem": {"id": "Q"}}]
+
+    def fake3(url, token, raw=False):
+        if "/items" in url:
+            return {"data": items}
+        if "/connectors" in url:
+            return {"data": conns}
+        return {"name": "Later"}
+    monkeypatch.setattr(miro, "fetch", fake3)
+    monkeypatch.setattr(miro, "original_name", lambda it, tok: "")
+    monkeypatch.setattr(miro, "image_bytes", lambda it, tok: thumb if it["id"] == "Q" else None)
+    monkeypatch.setattr(miro, "LIKELY", -1)  # nothing is taken by picture: Q stays missing
+    monkeypatch.setattr(miro, "SURE", -1)
+    p = client.post("/api/miro/preview", json={"url": "uXjVabcdef=", "token": "tok", "wait": True}).json()
+    sid = client.post("/api/miro/import", json={"key": p["key"], "name": "Later from Miro", "use": {"Q": None}}).json()["id"]
+    b = client.get("/api/series/%d/board" % sid).json()
+    note = next(x for x in b["shapes"] if x["kind"] == "note" and x.get("miro") == "Q")
+    assert note["text"] == "Not found in the library"
+    info = client.get("/api/miro/missing/%s" % note["key"]).json()
+    assert info["has_picture"] and client.get("/api/miro/missing/%s/picture" % note["key"]).content == thumb
+    assert client.post("/api/miro/missing/%s/search" % note["key"], json={}).status_code == 400
+    found = client.post("/api/miro/missing/%s/search" % note["key"], json={"folders": ["2024"]}).json()["photos"]
+    assert found[0]["id"] == row["id"] and found[0]["dist"] <= 10
+    by_name = client.post("/api/miro/missing/%s/search" % note["key"], json={"names": "IMG_0002"}).json()["photos"]
+    assert row["id"] in [x["id"] for x in by_name]
+    r = client.post("/api/miro/missing/%s/place" % note["key"], json={"kind": "series", "id": sid, "photo": row["id"]})
+    assert r.status_code == 200, r.text
+    b = client.get("/api/series/%d/board" % sid).json()
+    it = next(i for i in b["items"] if i["id"] == row["id"])
+    assert abs(it["x"] + 75 - (note["x"] + 75)) <= 1 and it["num"]
+    assert not any(x.get("key") == note["key"] for x in b["shapes"])
+    arrow = next(x for x in b["shapes"] if x["kind"] == "arrow")
+    assert arrow["b"]["photo"] == row["id"]
+    assert client.get("/api/miro/missing/%s" % note["key"]).status_code == 404
+
+
+def test_find_missing_on_a_folder_board(client):
+    """The note can also be on a series folder's shared board: the photo joins the series whose frame it lands in."""
+    import time as _t
+    fid = client.post("/api/series-folders", json={"name": "Miro folder"}).json()["id"]
+    sid = client.post("/api/series", json={"name": "Miro in folder", "folder_id": fid}).json()["id"]
+    b = client.get("/api/series-folders/%d/board" % fid).json()
+    fr = next(f for f in b["frames"] if f.get("series_id") == sid)
+    note = {"key": "mfold1", "kind": "note", "x": fr["x"] + 20, "y": fr["y"] + 40, "w": 150, "h": 100, "text": "Not found", "color": "#d8d8dc", "miro": "Z"}
+    assert client.put("/api/series-folders/%d/shapes" % fid, json={"shapes": [note]}).status_code == 200
+    with db.write_lock:
+        miro._missing_table(db.conn())
+        db.conn().execute("INSERT INTO miro_missing(note_key, picture, alts, title, created) VALUES('mfold1', NULL, '[]', '', ?)", (_t.time(),))
+        db.conn().commit()
+    pid = db.conn().execute("SELECT id FROM photos ORDER BY id LIMIT 1").fetchone()["id"]
+    r = client.post("/api/miro/missing/mfold1/place", json={"kind": "folder", "id": fid, "photo": pid})
+    assert r.status_code == 200 and "warning" not in r.json(), r.text
+    items = client.get("/api/series/%d/board" % sid).json()["items"]
+    assert pid in [i["id"] for i in items]
+    assert not client.get("/api/series-folders/%d/board" % fid).json()["shapes"]
