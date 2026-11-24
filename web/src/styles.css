@@ -818,7 +818,8 @@ td.devcheckcell, th.devcheckcell { width: 34px; padding-right: 0; }
 .sharedgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 380px); gap: 12px; align-items: start; }
 .sharedcard .devfold:disabled { cursor: default; opacity: 1; }
 .sharedtable td, .sharedtable th { padding: 7px 8px; font-size: 12px; }
-.sharedtable .seg button { padding: 3px 8px; font-size: 11px; }
+.sharedtable .seg { flex-wrap: nowrap; }
+.sharedtable .seg button { padding: 3px 8px; font-size: 11px; white-space: nowrap; }
 .sharedconf { padding: 10px 12px; border: 1px solid var(--accent-line); border-radius: 8px; background: var(--accent-bg); }
 .sharedwarn { color: var(--accent-text); }
 .sharedrow { padding: 8px 0; border-top: 1px solid var(--line); }
