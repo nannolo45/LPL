@@ -12,6 +12,7 @@ import { EditOnPhone } from './PhoneEdit'
 import { VersionBadge } from './Versions'
 import { selectionIds } from '../devices'
 import { FindCount, FindReq, useFind } from '../find'
+import { MiroFind } from './MiroFind'
 
 type Item = Photo & { x: number; y: number }
 type Tool = 'select' | 'note' | 'arrow' | 'frame'
@@ -123,6 +124,7 @@ export function BoardView({ target, active = true, onInfo, find, onFind }: {
   const [shapes, setShapesRaw] = useState<BoardShape[]>([])
   const [selShapes, setSelShapes] = useState<string[]>([])
   const [editing, setEditing] = useState<string | null>(null)
+  const [findNote, setFindNote] = useState<string | null>(null)   // a Miro "Not found" note being looked for
   const [tool, setTool] = useState<Tool>('select')
   // nested folders: a subfolder is a group frame on its top-level folder's board (what is in it, for its name bar);
   // asGroup: the next frame drawn is a new subfolder; focus: the group frame to show when a subfolder is opened alone
@@ -334,6 +336,15 @@ export function BoardView({ target, active = true, onInfo, find, onFind }: {
       api.tshapesSave(target, out).catch(e => s.toast(e.message))
     }, 600)
   }, [shapes])
+
+  /** Save notes and arrows now (before the server changes them itself: a Miro note being found). */
+  const flushShapes = async () => {
+    if (!shapesDirty.current || sid == null) return
+    window.clearTimeout(shapesTimer.current)
+    shapesDirty.current = false
+    const out = shapes.map(x => (x.kind === 'arrow' ? { ...x, a: { ...x.a, ...round(center(x.a)) }, b: { ...x.b, ...round(center(x.b)) } } : x))
+    try { await api.tshapesSave(target, out) } catch (e: any) { s.toast(e.message) }
+  }
 
   const toBoard = (e: { clientX: number; clientY: number }): Pt => {
     const r = inner.current!.getBoundingClientRect()
@@ -966,6 +977,8 @@ export function BoardView({ target, active = true, onInfo, find, onFind }: {
                           ? <textarea autoFocus value={nt.text} placeholder="Write a note" onChange={e => setNoteText(nt.key, e.target.value)}
                               onBlur={() => stopEditing(nt.key)} onKeyDown={e => { if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur() }} />
                           : <div className="bnote-t">{nt.text}</div>}
+                        {nt.miro && editing !== nt.key && <button className="bnote-find" onPointerDown={e => e.stopPropagation()} onDoubleClick={e => e.stopPropagation()}
+                          onClick={e => { e.stopPropagation(); flushShapes().then(() => setFindNote(nt.key)) }} title="Look for this photo and put it here">Find it…</button>}
                         <span className="nrs" onPointerDown={e => { e.stopPropagation(); e.preventDefault(); drag.current = { kind: 'note-resize', key: nt.key, sx: e.clientX, sy: e.clientY, ow: nt.w, oh: nt.h }; capture(e) }} />
                       </div>
                     ))}
@@ -1077,6 +1090,7 @@ export function BoardView({ target, active = true, onInfo, find, onFind }: {
               }}
               onEditAll={() => s.editInDarktable(order.map(i => i.id))} canEditAll={order.length > 0} />}
       {askNode}
+      {findNote && <MiroFind noteKey={findNote} target={target} onClose={() => setFindNote(null)} onPlaced={() => { setFindNote(null); window.clearTimeout(shapesTimer.current); shapesDirty.current = false; bumpSeries(); s.reloadTags() }} />}
     </>
   )
 }

@@ -610,7 +610,8 @@ def layout(board: dict, matches: Dict[str, dict]) -> dict:
             else:
                 title = text_of((it.get("data") or {}).get("title")) or "(no title)"
                 key = "m" + secrets.token_hex(5)
-                shapes.append({"key": key, "kind": "note", "x": cx - 75, "y": cy - 50, "w": 150, "h": 100, "text": "Not found: " + title, "color": NOTE_GREY})
+                shapes.append({"key": key, "kind": "note", "x": cx - 75, "y": cy - 50, "w": 150, "h": 100, "color": NOTE_GREY, "miro": iid,
+                               "text": "Not found: " + title if title != "(no title)" else "Not found in the library"})
                 ends[iid] = {"note": key, "x": cx, "y": cy}
                 unplaced.append({"title": title, "miro_id": iid})
         elif t in ("sticky_note", "text", "shape", "card"):
@@ -785,7 +786,7 @@ def miro_import(body: Dict[str, Any] = Body(...)):
     keep_missing = bool(body.get("missing_notes", True))
     r = series_mod.create_series({"name": body.get("name") or job["board"]["name"]})
     sid = r["id"]
-    shapes = [x for x in lay["shapes"] if keep_missing or x.get("kind") != "note" or not x.get("text", "").startswith("Not found: ")]
+    shapes = [x for x in lay["shapes"] if keep_missing or x.get("kind") != "note" or not x.get("miro")]
     keys = {x["key"] for x in shapes if x["kind"] == "note"}
     shapes = [x for x in shapes if x["kind"] != "arrow" or all(e.get("note") is None or e["note"] in keys for e in (x["a"], x["b"]))]
     with db.write_lock:
@@ -801,6 +802,7 @@ def miro_import(body: Dict[str, Any] = Body(...)):
                       (sid, json.dumps(shapes, ensure_ascii=False)))
         series_mod.sync_series(c, sid)
         c.commit()
+    keep_missing_data(job, matches, [x for x in shapes if x.get("kind") == "note" and x.get("miro")])
     ids = [it["id"] for it in lay["items"]]
     if ids and config.write_series_tags:
         s = api._series(sid)
@@ -808,3 +810,163 @@ def miro_import(body: Dict[str, Any] = Body(...)):
     with _cache_lock:
         _cache.pop(str(body.get("key")), None)
     return {"id": sid, "photos": len(ids), "frames": len(lay["frames"]), "shapes": len(shapes)}
+
+
+# ------------------------------------------------------------------ after the import: finding a missing photo
+# A "Not found" note on the board keeps Miro's picture (table miro_missing, by note key), so the photo can be
+# looked for later: by picture in the folders/dates given, or by name, and put where the note is.
+def _missing_table(c) -> None:
+    c.execute("CREATE TABLE IF NOT EXISTS miro_missing (note_key TEXT PRIMARY KEY, picture BLOB, alts TEXT, title TEXT, created REAL)")
+
+
+def keep_missing_data(job: dict, matches: Dict[str, dict], notes: List[dict]) -> None:
+    if not notes:
+        return
+    pics = job.get("pics") or {}
+    items = {str(it.get("id")): it for it in job["board"]["items"]}
+    token = db.get_setting(TOKEN_KEY)
+    rows = []
+    for n in notes:
+        mid = str(n["miro"])
+        data = pics.get(mid)
+        if data is None and token and mid in items:
+            try:
+                data = image_bytes(items[mid], token)
+            except Exception:
+                data = None
+        m = matches.get(mid) or {}
+        title = text_of((items.get(mid, {}).get("data") or {}).get("title"))
+        rows.append((n["key"], data, json.dumps(m.get("alts") or []), title, time.time()))
+    with db.write_lock:
+        c = db.conn()
+        _missing_table(c)
+        c.executemany("INSERT OR REPLACE INTO miro_missing(note_key, picture, alts, title, created) VALUES(?,?,?,?,?)", rows)
+        c.commit()
+
+
+def _missing(key: str):
+    c = db.conn()
+    with db.write_lock:
+        _missing_table(c)
+        c.commit()
+    r = c.execute("SELECT * FROM miro_missing WHERE note_key=?", (key,)).fetchone()
+    if not r:
+        raise HTTPException(404, "Nothing kept for this note (it was made before LPL kept Miro's pictures, or already found)")
+    return r
+
+
+@router.get("/api/miro/missing/{key}")
+def missing_info(key: str):
+    r = _missing(key)
+    return {"key": key, "title": r["title"] or "", "has_picture": bool(r["picture"]), "alts": json.loads(r["alts"] or "[]")}
+
+
+@router.get("/api/miro/missing/{key}/picture")
+def missing_picture(key: str):
+    from fastapi.responses import Response
+    r = _missing(key)
+    if not r["picture"]:
+        raise HTTPException(404, "no picture")
+    return Response(bytes(r["picture"]), media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+
+@router.post("/api/miro/missing/{key}/search")
+def missing_search(key: str, body: Dict[str, Any] = Body(...)):
+    """Candidates for a missing picture: photos in the folders / dates given (or by the names given), the closest
+    by picture first. {folders?, date_from?, date_to?, names?} -> {photos: [{id, dist}]}"""
+    from . import query
+    r = _missing(key)
+    names = query.name_tokens(body.get("names"))
+    scope = {k: body.get(k) for k in ("folders", "date_from", "date_to") if body.get(k)}
+    if names:
+        f: Dict[str, Any] = {"names": names, "show_hidden": True, "subfolders": True, **scope}
+        where, args, join = query.build_where(f)
+        pool = [x["id"] for x in db.conn().execute("SELECT p.id FROM photos p%s WHERE %s LIMIT 5000" % (join, where), args).fetchall()]
+    elif scope:
+        pool = scope_ids(scope)
+    else:
+        raise HTTPException(400, "Choose folders or dates, or type a name")
+    h = phash(bytes(r["picture"])) if r["picture"] else None
+    if h is None:  # nothing to compare with: in the library's order
+        return {"photos": [{"id": i, "dist": None} for i in pool[:60]], "total": len(pool)}
+    ids, H, AR = pool_hashes(pool)
+    import numpy as np
+    if not ids:
+        return {"photos": [], "total": 0}
+    q = np.frombuffer(h[0], dtype=np.uint8)
+    d = _POP[np.bitwise_xor(H, q)].sum(axis=2, dtype=np.int32).min(axis=1)
+    best = np.argsort(d)[:60]
+    return {"photos": [{"id": ids[int(i)], "dist": int(d[i])} for i in best], "total": len(pool)}
+
+
+@router.post("/api/miro/missing/{key}/place")
+def missing_place(key: str, body: Dict[str, Any] = Body(...)):
+    """Put a photo where the note is: {kind: 'series'|'folder', id, photo}. The note goes, its arrows go to the photo."""
+    from . import api, series as series_mod
+    _missing(key)
+    pid = int(body.get("photo"))
+    kind, bid = body.get("kind"), int(body.get("id"))
+    if not db.conn().execute("SELECT 1 FROM photos WHERE id=?", (pid,)).fetchone():
+        raise HTTPException(404, "no such photo")
+    moves: list = []
+    attach_to = None
+    with db.write_lock:
+        c = db.conn()
+        if kind == "series":
+            s = api._series(bid)
+            b = series_mod.Board(c, "s", bid)
+        elif kind == "folder":
+            f = series_mod.folder_row(bid)
+            root = series_mod.root_of(c, bid)
+            if not series_mod.folder_row(root)["linked"]:
+                raise HTTPException(409, "This folder's board is not linked to its series: link it, or add the photo from the strip")
+            b = series_mod.Board(c, "f", root)
+        else:
+            raise HTTPException(400, "kind must be series or folder")
+        shapes = b.load_shapes()
+        note = next((x for x in shapes if isinstance(x, dict) and x.get("kind") == "note" and x.get("key") == key), None)
+        if note is None:
+            raise HTTPException(404, "The note is not on this board any more")
+        tw, th = b._dims(pid)
+        cx, cy = note["x"] + (note.get("w") or 0) / 2, note["y"] + (note.get("h") or 0) / 2
+        x, y = round(cx - tw / 2), round(cy - th / 2)
+        if kind == "series":
+            if pid in b.items:
+                b.set_pos(pid, x, y)
+            else:
+                c.execute("INSERT INTO series_items(series_id,photo_id,x,y,ord) VALUES(?,?,?,?,NULL)", (bid, pid, x, y))
+                attach_to = s
+        else:
+            b.set_pos(pid, x, y)
+        out = []
+        for sh in shapes:
+            if sh is note:
+                continue
+            if isinstance(sh, dict) and sh.get("kind") == "arrow":
+                for e in ("a", "b"):
+                    end = sh.get(e)
+                    if isinstance(end, dict) and end.get("note") == key:
+                        sh[e] = {"photo": pid, "x": round(cx), "y": round(cy)}
+            out.append(sh)
+        b.save_shapes(out)
+        if kind == "series":
+            if series_mod.is_linked(s):
+                series_mod.sync_series(c, bid)
+            else:
+                series_mod._order_at_end(c, bid, [pid])
+        else:
+            series_mod.ensure_frames(c, root, b)
+            moves = series_mod.sync_folder(c, root, b)
+        c.execute("DELETE FROM miro_missing WHERE note_key=?", (key,))
+        c.commit()
+    if attach_to is not None:
+        if attach_to["folder_id"]:
+            series_mod.after_add(bid, [pid])
+        if config.write_series_tags:
+            api.set_meta({"ids": [pid], "attach": [series_mod.tag_of(attach_to)]})
+    series_mod.retag(moves)
+    if kind == "folder" and not any(m[0] == pid for m in moves) and not db.conn().execute(
+            "SELECT 1 FROM series_items si JOIN series x ON x.id=si.series_id WHERE si.photo_id=? AND x.folder_id IN (%s)"
+            % ",".join(str(i) for i in series_mod.folder_ids(db.conn(), root)), (pid,)).fetchone():
+        return {"ok": True, "warning": "The photo is on the board but outside every series' frame, so it is in no series yet"}
+    return {"ok": True}

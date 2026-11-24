@@ -116,7 +116,7 @@ export interface Filters {
 
 // board notes and arrows; an arrow end sits on a photo or a note, or at a free point
 export interface BoardEnd { x: number; y: number; photo?: number; note?: string }
-export interface BoardNote { key: string; kind: 'note'; x: number; y: number; w: number; h: number; text: string; color: string }
+export interface BoardNote { key: string; kind: 'note'; x: number; y: number; w: number; h: number; text: string; color: string; /** left by Import from Miro for a picture not found */ miro?: string }
 export interface BoardArrow { key: string; kind: 'arrow'; a: BoardEnd; b: BoardEnd; text?: string }
 export type BoardShape = BoardNote | BoardArrow
 
@@ -231,6 +231,10 @@ export const api = {
   position: (sort: SortLevel[], filters: Filters, seed: number, id: number) => call<{ index: number }>('POST', '/api/photos/position', { sort, filters, seed, id }),
   get: (ids: number[]) => call<{ items: Photo[] }>('POST', '/api/photos/get', { ids }),
   photo: (id: number) => call<Photo>('GET', `/api/photos/${id}`),
+  miroMissing: (key: string) => call<{ key: string; title: string; has_picture: boolean; alts: number[] }>('GET', '/api/miro/missing/' + encodeURIComponent(key)),
+  miroMissingSearch: (key: string, body: { folders?: string[]; date_from?: string; date_to?: string; names?: string }) =>
+    call<{ photos: { id: number; dist: number | null }[]; total: number }>('POST', `/api/miro/missing/${encodeURIComponent(key)}/search`, body),
+  miroMissingPlace: (key: string, t: Target, photo: number) => call<{ ok: boolean; warning?: string }>('POST', `/api/miro/missing/${encodeURIComponent(key)}/place`, { kind: t.kind, id: t.id, photo }),
   miroState: () => call<{ has_token: boolean }>('GET', '/api/miro'),
   miroForget: () => call<{ ok: boolean }>('DELETE', '/api/miro/token'),
   miroPreview: (url: string, token?: string, scope?: MiroScope) => call<MiroPreview | MiroRunning>('POST', '/api/miro/preview', { url, token, scope }),
