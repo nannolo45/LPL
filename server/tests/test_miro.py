@@ -50,7 +50,7 @@ def test_stems_and_colours():
 
 def test_preview_and_import(client, monkeypatch):
     monkeypatch.setattr(miro, "fetch", fake)
-    r = client.post("/api/miro/preview", json={"url": "https://miro.com/app/board/uXjVabcdef=/", "token": "tok"})
+    r = client.post("/api/miro/preview", json={"url": "https://miro.com/app/board/uXjVabcdef=/", "token": "tok", "wait": True})
     assert r.status_code == 200, r.text
     p = r.json()
     assert p["name"] == "Miro walk" and p["pictures"] == 4 and p["matched"] == 3
@@ -81,3 +81,42 @@ def test_preview_and_import(client, monkeypatch):
     assert not client.get("/api/miro").json()["has_token"]
     with db.write_lock:
         pass
+
+
+def test_untitled_pictures_by_picture(client, monkeypatch):
+    """Pictures dropped onto a Miro board have no title and no size in the API: found by picture, spaced by distance."""
+    from lpl import media
+    rows = db.conn().execute("SELECT id, relpath FROM photos ORDER BY id").fetchall()
+    # other tests add copies of the same pictures: keep photos that look unlike every other one
+    hs = {r["id"]: miro.phash(media.preview_paths(r["id"])[0].read_bytes()) for r in rows if media.preview_paths(r["id"])[0].exists()}
+    alone = lambda i: all(miro.closest(hs[i], [j], miro.np_hashes([hs[j]]), __import__("numpy").array([hs[j][1]]))[0][0] > 90 for j in hs if j != i)
+    rows = [r for r in rows if r["id"] in hs and alone(r["id"])][:3]
+    assert len(rows) >= 2
+    assert all(media.preview_paths(r["id"])[0].exists() for r in rows)
+    pics = {"P%d" % r["id"]: media.preview_paths(r["id"])[0].read_bytes() for r in rows}
+    items = [{"id": "G", "type": "frame", "data": {"title": "Grecia"}, "style": {}, "position": {"x": 0, "y": 0}, "geometry": {"width": 3000, "height": 1000}}]
+    for k, mid in enumerate(pics):
+        items.append({"id": mid, "type": "image", "data": {"imageUrl": "https://api.miro.com/x"}, "parent": {"id": "G"},
+                      "position": {"x": 300 + k * 450, "y": 300, "origin": "center", "relativeTo": "parent_top_left"}})
+    items.append({"id": "X", "type": "image", "data": {"imageUrl": "u"}, "position": {"x": 0, "y": 2000}})
+
+    def fake2(url, token, raw=False):
+        if "/items" in url:
+            return {"data": items}
+        if "/connectors" in url:
+            return {"data": []}
+        return {"name": "Grecia"}
+    monkeypatch.setattr(miro, "fetch", fake2)
+    monkeypatch.setattr(miro, "original_name", lambda it, tok: "")
+    monkeypatch.setattr(miro, "image_bytes", lambda it, tok: pics.get(it["id"]) or b"not an image")
+    r = client.post("/api/miro/preview", json={"url": "uXjVabcdef=", "token": "tok", "wait": True})
+    assert r.status_code == 200, r.text
+    p = r.json()
+    assert p["state"] == "done" and p["matched"] == len(pics) and p["how"] == {"picture": len(pics)}, p
+    assert [u["miro_id"] for u in p["unmatched"]] == ["X"]
+    sid = client.post("/api/miro/import", json={"key": p["key"], "name": "Grecia from Miro", "use": {"X": None}}).json()["id"]
+    b = client.get("/api/series/%d/board" % sid).json()
+    xs = sorted(it["x"] for it in b["items"])
+    assert all(150 <= b2 - a2 <= 180 for a2, b2 in zip(xs, xs[1:]))  # 450 apart on Miro: one LPL cell apart
+    assert {it["id"] for it in b["items"]} == {r["id"] for r in rows}
+    assert client.get("/api/miro/pic/%s/P%d" % (p["key"], rows[0]["id"])).status_code == 410  # the job is gone after the import

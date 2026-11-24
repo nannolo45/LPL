@@ -185,8 +185,11 @@ export interface AutotagStatus { state: 'idle' | 'running' | 'error'; done: numb
 export interface AutotagCounts { bnw: number; toned: number; colour: number; unsure: number; none: number; camera: number; checked: number; corrected: number; photos: number }
 export interface AutotagReview { counts: { unsure: number; bnw: number; toned: number; removals: number; adds: number }; total: number; items: Photo[]; status: AutotagStatus; settings: AutotagSettings }
 
-export interface MiroPreview { key: string; name: string; name_taken: boolean; pictures: number; matched: number; how: Record<string, number>; duplicates: number
-  unmatched: { title: string; miro_id: string }[]; frames: number; notes: number; arrows: number; skipped: Record<string, number>; sample: number[] }
+export interface MiroScope { folder?: string; date_from?: string; date_to?: string }
+export interface MiroRunning { state: 'running'; key: string; stage: 'board' | 'names' | 'library' | 'pictures'; done: number; total: number }
+export interface MiroPreview { state: 'done'; key: string; name: string; name_taken: boolean; pictures: number; matched: number; how: Record<string, number>; duplicates: number
+  unmatched: { title: string; miro_id: string }[]; frames: number; notes: number; arrows: number; skipped: Record<string, number>; sample: number[]
+  check: { miro_id: string; photo: number; dist: number | null; placed: boolean }[] }
 
 export class AuthError extends Error {}
 
@@ -228,8 +231,10 @@ export const api = {
   photo: (id: number) => call<Photo>('GET', `/api/photos/${id}`),
   miroState: () => call<{ has_token: boolean }>('GET', '/api/miro'),
   miroForget: () => call<{ ok: boolean }>('DELETE', '/api/miro/token'),
-  miroPreview: (url: string, token?: string) => call<MiroPreview>('POST', '/api/miro/preview', { url, token }),
-  miroImport: (key: string, name: string, missing_notes: boolean) => call<{ id: number; photos: number }>('POST', '/api/miro/import', { key, name, missing_notes }),
+  miroPreview: (url: string, token?: string, scope?: MiroScope) => call<MiroPreview | MiroRunning>('POST', '/api/miro/preview', { url, token, scope }),
+  miroProgress: (key: string) => call<MiroPreview | MiroRunning>('GET', '/api/miro/preview/' + key),
+  miroImport: (key: string, name: string, missing_notes: boolean, use: Record<string, number | null>) =>
+    call<{ id: number; photos: number }>('POST', '/api/miro/import', { key, name, missing_notes, use }),
   autotag: () => call<{ settings: AutotagSettings; status: AutotagStatus; counts: AutotagCounts }>('GET', '/api/autotag'),
   autotagSave: (body: Partial<{ auto: boolean; bnw: Partial<AutotagRule> }>) => call<{ settings: AutotagSettings; counts: AutotagCounts }>('PUT', '/api/autotag', body),
   autotagRun: (body: { apply?: boolean; force?: boolean }) => call<{ status: AutotagStatus }>('POST', '/api/autotag/run', body),
