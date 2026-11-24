@@ -1717,3 +1717,8 @@ from . import series as series_mod  # noqa: E402
 from . import autotag  # noqa: E402
 
 app.include_router(autotag.router)
+
+# Import from Miro (Series view): a Miro board becomes a series laid out the same way (miro.py)
+from . import miro  # noqa: E402
+
+app.include_router(miro.router)
