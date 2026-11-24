@@ -867,7 +867,7 @@ def _match(sid: int, filters: Dict[str, Any], sort: List[Dict[str, str]]):
     f = dict(filters or {})
     for k in ("series", "ids", "not_in_series"):
         f.pop(k, None)
-    if not any(f.get(k) for k in ("folders", "folder", "ratings", "labels", "tags", "tag", "lenses", "cameras", "formats", "date_from", "date_to", "q", "edited", "exports", "month")):
+    if not any(f.get(k) for k in ("folders", "folder", "ratings", "labels", "tags", "tag", "lenses", "cameras", "formats", "date_from", "date_to", "q", "edited", "exports", "month", "names")):
         raise HTTPException(400, "pick at least one folder or criterion")
     c = db.conn()
     where, args, join = query.build_where(f)
@@ -889,7 +889,18 @@ def series_match(sid: int, body: Dict[str, Any] = Body(...)):
     for r in rows:
         folders[r["folder"]] = folders.get(r["folder"], 0) + 1
     return {"total": total, "new": len(rows), "limit": ADD_LIMIT, "folders": len(folders),
-            "sample": [{"id": r["id"], "v": r["preview_ver"]} for r in rows[:14]]}
+            "sample": [{"id": r["id"], "v": r["preview_ver"]} for r in rows[:14]], "names_missing": names_missing(body.get("filters") or {})}
+
+
+def names_missing(filters: Dict[str, Any]) -> List[str]:
+    """Names typed in Add photos that no photo matching the other criteria has (to say which were not found)."""
+    names = query.name_tokens(filters.get("names"))
+    if not names:
+        return []
+    f = {k: v for k, v in filters.items() if k not in ("series", "ids", "not_in_series", "series_folder")}
+    where, args, join = query.build_where(f)
+    files = [r["filename"].lower() for r in db.conn().execute("SELECT p.filename FROM photos p%s WHERE %s" % (join, where), args).fetchall()]
+    return [n for n in names if not any(n.lower() in x for x in files)][:200]
 
 
 @app.post("/api/series/{sid}/add-matching")

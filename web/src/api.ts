@@ -80,6 +80,8 @@ export interface SortLevel { f: string; d: 'asc' | 'desc' }
 
 export interface Filters {
   q?: string
+  /** file names, typed or pasted (Add photos): any of them; an export's name finds the RAW */
+  names?: string
   rating?: string
   ratings?: number[]
   lenses?: string[]
@@ -120,7 +122,7 @@ export type BoardShape = BoardNote | BoardArrow
 
 export interface AddTarget { frame?: number; series?: number; new?: boolean; per_folder?: boolean; label?: string }
 export interface LastAdd { filters: Filters; target: AddTarget }
-export interface MatchResult { total: number; new: number; limit: number; folders: number; sample: { id: number; v: number }[] }
+export interface MatchResult { total: number; new: number; limit: number; folders: number; sample: { id: number; v: number }[]; names_missing?: string[] }
 
 export interface Folder { path: string; count: number; edited: number; first: string | null; last: string | null; covers: { id: number; v: number; pending?: boolean }[]; direct: number; pos: number | null; hidden?: boolean }
 export interface FoldersResult { folders: Folder[]; excluded: string[]; previews_pending: number }

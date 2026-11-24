@@ -7,8 +7,8 @@ import { FolderPicker } from './FolderPicker'
 import { RetryImg } from './RetryImg'
 
 // Criteria the panel edits itself; anything else carried over from the library is shown as one removable line.
-const OWN = ['folders', 'subfolders', 'ratings', 'labels', 'label_mode', 'tags', 'tag_mode', 'date_from', 'date_to', 'edited'] as const
-const EMPTY: Filters = { folders: [], subfolders: true, ratings: [], labels: [], label_mode: 'or', tags: [], tag_mode: 'or', date_from: null, date_to: null, edited: '' }
+const OWN = ['names', 'folders', 'subfolders', 'ratings', 'labels', 'label_mode', 'tags', 'tag_mode', 'date_from', 'date_to', 'edited'] as const
+const EMPTY: Filters = { names: '', folders: [], subfolders: true, ratings: [], labels: [], label_mode: 'or', tags: [], tag_mode: 'or', date_from: null, date_to: null, edited: '' }
 
 function clean(f: Filters): Filters {
   const out: Record<string, unknown> = {}
@@ -18,6 +18,7 @@ function clean(f: Filters): Filters {
   }
   return out as Filters
 }
+const hasOther = (f: Filters) => Object.keys(clean(f)).some(k => !['names', 'subfolders', 'label_mode', 'tag_mode'].includes(k))
 const hasCriteria = (f: Filters) => Object.keys(clean(f)).some(k => !['subfolders', 'label_mode', 'tag_mode'].includes(k))
 
 function extras(f: Filters): string[] {
@@ -152,6 +153,15 @@ function AddPhotosInner({ where, name, frames, lanes, lastAdd, onClose, onAdded 
 
           <div className="col" style={{ gap: 12, minWidth: 0 }}>
             <div className="col" style={{ gap: 6 }}>
+              <div className="row"><span className="caps grow">File names</span>
+                {crit.names && <button className="btn ghost tiny" onClick={() => set({ names: '' })}>clear</button>}</div>
+              <textarea className="input addp-names" rows={crit.names && crit.names.includes('\n') ? 4 : 1} spellCheck={false}
+                placeholder="DSCF3215, DSCF3216… or paste a list" aria-label="File names" value={crit.names || ''}
+                onChange={e => set({ names: e.target.value })} />
+              {m?.names_missing?.length ? <span className="tiny" style={{ color: '#ff8b8e' }}>Not found{hasOther(crit) ? ' with the other criteria' : ''}: {m.names_missing.slice(0, 12).join(', ')}{m.names_missing.length > 12 ? ` and ${m.names_missing.length - 12} more` : ''}</span>
+                : <span className="tiny muted">Any of them, without the extension: DSCF3215.jpg finds DSCF3215.RAF. Folders and the rest below narrow it further.</span>}
+            </div>
+            <div className="col" style={{ gap: 6 }}>
               <span className="caps">Rating <span className="tiny muted" style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>· any of</span></span>
               <div className="row wrap" style={{ gap: 4 }}>
                 {RATINGS.map(([v, l]) => <button key={v} className={'chip' + (ratings.includes(v) ? ' on' : '')} onClick={() => set({ ratings: toggle(ratings, v) })}>{l}</button>)}
@@ -216,7 +226,7 @@ function AddPhotosInner({ where, name, frames, lanes, lastAdd, onClose, onAdded 
           </div>
           <span className="small soft grow" aria-live="polite">
             {mErr ? <span style={{ color: '#ff8b8e' }}>{mErr}</span>
-              : !hasCriteria(clean(crit)) ? 'Pick folders or criteria'
+              : !hasCriteria(clean(crit)) ? 'Type file names, or pick folders or criteria'
               : !m ? 'Counting…'
               : <>{m.total} match{m.total !== m.new ? ` · ${m.total - m.new} already ${isFolder ? 'in ' + name : 'on the board'}` : ''}{m.new > m.limit ? ` · first ${m.limit} are added` : ''}</>}
           </span>
