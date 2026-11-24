@@ -836,3 +836,22 @@ td.devcheckcell, th.devcheckcell { width: 34px; padding-right: 0; }
 .shareddot.newest, .shareddot.kept { color: var(--ok); }
 .shareddot.waiting { color: var(--soft); }
 .shareddot.conflict { color: var(--accent); font-weight: 700; }
+
+/* Import from Miro: the folder picker on top of the dialog, and the full-screen review */
+.dialog.mirofolders { z-index: 41; width: min(560px, calc(100vw - 32px)); max-height: 88vh; }
+.mreview { position: fixed; inset: 0; z-index: 50; background: #111113; display: flex; flex-direction: column; }
+.mreview-top { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.mreview-main { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px; }
+.mreview-main figure { margin: 0; min-height: 0; display: flex; flex-direction: column; gap: 6px; border-radius: 8px; border: 2px solid var(--accent); padding: 4px; }
+.mreview-main figure:first-child { border-color: var(--line2); }
+.mreview-main figure.out { border-color: #e5636a; }
+.mreview-main img { flex: 1; min-height: 0; width: 100%; object-fit: contain; }
+.mreview-main figcaption { font-size: 12px; color: var(--muted); text-align: center; }
+.mreview-bottom { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 8px 14px 12px; border-top: 1px solid var(--line); }
+.mreview-alts { display: flex; gap: 6px; }
+.malt { position: relative; padding: 0; border: 2px solid transparent; border-radius: 6px; background: none; cursor: pointer; }
+.malt img { height: 64px; display: block; border-radius: 4px; }
+.malt span { position: absolute; left: 3px; top: 2px; font-size: 11px; background: rgba(0,0,0,.6); color: #fff; border-radius: 3px; padding: 0 4px; }
+.malt.on { border-color: var(--accent); }
+.malt.chosen::after { content: '✓'; position: absolute; right: 4px; bottom: 2px; color: var(--accent); font-weight: 700; text-shadow: 0 0 3px #000; }
+@media (max-width: 700px) { .mreview-main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }

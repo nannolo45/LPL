@@ -120,3 +120,11 @@ def test_untitled_pictures_by_picture(client, monkeypatch):
     assert all(150 <= b2 - a2 <= 180 for a2, b2 in zip(xs, xs[1:]))  # 450 apart on Miro: one LPL cell apart
     assert {it["id"] for it in b["items"]} == {r["id"] for r in rows}
     assert client.get("/api/miro/pic/%s/P%d" % (p["key"], rows[0]["id"])).status_code == 410  # the job is gone after the import
+
+
+def test_scope_by_folders(client):
+    rows = db.conn().execute("SELECT id, folder FROM photos WHERE COALESCE(missing,0)=0").fetchall()
+    walk = {r["id"] for r in rows if r["folder"].startswith("2024/2024-05-01")}
+    assert set(miro.scope_ids({"folders": ["2024/2024-05-01 Walk"]})) == walk
+    assert set(miro.scope_ids({"folders": ["2024"]})) >= walk  # subfolders count
+    assert set(miro.scope_ids({"folder": "lake"})) == {r["id"] for r in rows if "lake" in r["folder"].lower()}

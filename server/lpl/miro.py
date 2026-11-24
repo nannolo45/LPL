@@ -403,25 +403,28 @@ def closest(h: Tuple[bytes, float], ids: List[int], H, AR) -> List[Tuple[int, in
     q = np.frombuffer(h[0], dtype=np.uint8)
     d = _POP[np.bitwise_xor(H, q)].sum(axis=2, dtype=np.int32).min(axis=1).astype(float)
     d += np.where(np.abs(np.log(AR / h[1])) > 0.25, 16, 0)  # portrait against landscape
-    best = np.argsort(d)[:3]
+    best = np.argsort(d)[:5]
     return [(int(d[i]), ids[int(i)]) for i in best]
 
 
 def scope_ids(scope: Dict[str, Any]) -> List[int]:
-    """The library photos to compare pictures with: all, or those in folders whose path contains a text and/or
-    taken between two dates."""
-    where, args = ["COALESCE(missing,0)=0"], []
-    t = str((scope or {}).get("folder") or "").strip()
+    """The library photos to compare pictures with: all, or those in the folders picked (with their subfolders),
+    in folders whose path contains a text, and/or taken between two dates. Hidden photos count too."""
+    from . import query
+    scope = scope or {}
+    f: Dict[str, Any] = {"show_hidden": True, "subfolders": True}
+    folders = [str(x) for x in scope.get("folders") or [] if x]
+    if folders:
+        f["folders"] = folders
+    for k in ("date_from", "date_to"):
+        if scope.get(k):
+            f[k] = str(scope[k])
+    where, args, join = query.build_where(f)
+    t = str(scope.get("folder") or "").strip()
     if t:
-        where.append("folder LIKE ? COLLATE NOCASE")
-        args.append("%" + t.replace("%", "") + "%")
-    if (scope or {}).get("date_from"):
-        where.append("taken >= ?")
-        args.append(str(scope["date_from"]))
-    if (scope or {}).get("date_to"):
-        where.append("taken < ?")
-        args.append(str(scope["date_to"]) + "T99")
-    return [r["id"] for r in db.conn().execute("SELECT id FROM photos WHERE %s" % " AND ".join(where), args).fetchall()]
+        where += " AND p.folder LIKE ? COLLATE NOCASE"
+        args = list(args) + ["%" + t.replace("%", "") + "%"]
+    return [r["id"] for r in db.conn().execute("SELECT p.id FROM photos p%s WHERE %s AND COALESCE(p.missing,0)=0" % (join, where), args).fetchall()]
 
 
 def match(pictures: List[dict], token: str, scope: Optional[Dict[str, Any]] = None,
@@ -470,7 +473,7 @@ def match(pictures: List[dict], token: str, scope: Optional[Dict[str, Any]] = No
     if not still:
         return out, pics
     # the rest by picture: Miro's previews against LPL's thumbnails
-    if scope and any(scope.get(k) for k in ("folder", "date_from", "date_to")):
+    if scope and any(scope.get(k) for k in ("folder", "folders", "date_from", "date_to")):
         pool = scope_ids(scope)
     elif folders:
         pool = [r["id"] for r in db.conn().execute("SELECT id FROM photos WHERE COALESCE(missing,0)=0 AND folder IN (%s)" % ",".join("?" * len(folders)), list(folders)).fetchall()]
@@ -493,7 +496,7 @@ def match(pictures: List[dict], token: str, scope: Optional[Dict[str, Any]] = No
             sub = [i for i, x in enumerate(ids) if x in set(cid)]
             best = closest(h, [ids[i] for i in sub], H[sub], AR[sub]) if sub else []
             if best:
-                out[it["id"]] = {"photo": best[0][1], "how": "name+picture", "dist": best[0][0]}
+                out[it["id"]] = {"photo": best[0][1], "how": "name+picture", "dist": best[0][0], "alts": [b[1] for b in best]}
             else:
                 out[it["id"]] = {"photo": cands[0]["id"], "how": "likely", "dist": None}
             continue
@@ -504,11 +507,11 @@ def match(pictures: List[dict], token: str, scope: Optional[Dict[str, Any]] = No
         d0 = best[0][0]
         gap = (best[1][0] - d0) if len(best) > 1 else 99
         if d0 <= SURE and gap >= MARGIN_SURE:
-            out[it["id"]] = {"photo": best[0][1], "how": "picture", "dist": d0}
+            out[it["id"]] = {"photo": best[0][1], "how": "picture", "dist": d0, "alts": [b[1] for b in best]}
         elif d0 <= LIKELY and gap >= MARGIN_LIKELY:
-            out[it["id"]] = {"photo": best[0][1], "how": "likely", "dist": d0}
+            out[it["id"]] = {"photo": best[0][1], "how": "likely", "dist": d0, "alts": [b[1] for b in best]}
         else:
-            out[it["id"]] = {"photo": None, "guess": best[0][1], "dist": d0}
+            out[it["id"]] = {"photo": None, "guess": best[0][1], "dist": d0, "alts": [b[1] for b in best]}
     # the same photo found for two pictures: keep the closer one sure, the other only "likely"
     taken: Dict[int, str] = {}
     for mid, m in out.items():
@@ -685,17 +688,23 @@ def _report(job: dict) -> dict:
     for m in matches.values():
         if m.get("photo"):
             how[m["how"]] = how.get(m["how"], 0) + 1
-    check = [{"miro_id": mid, "photo": m["photo"], "dist": m.get("dist"), "placed": True}
-             for mid, m in matches.items() if m.get("photo") and m.get("how") == "likely"]
-    check += [{"miro_id": mid, "photo": m["guess"], "dist": m.get("dist"), "placed": False}
-              for mid, m in matches.items() if not m.get("photo") and m.get("guess")]
-    check.sort(key=lambda x: (x["placed"], -(x["dist"] or 0)))
+    # every picture matched by how it looks, for the review: "check" (placed, less sure), "guess" (not placed),
+    # "sure" (placed); with the next closest photos to pick from instead
+    check = []
+    for mid, m in matches.items():
+        if m.get("photo") and m.get("how") in ("likely", "picture", "name+picture"):
+            check.append({"miro_id": mid, "photo": m["photo"], "alts": m.get("alts") or [m["photo"]], "dist": m.get("dist"), "placed": True,
+                          "kind": "check" if m["how"] == "likely" else "sure"})
+        elif not m.get("photo") and m.get("guess"):
+            check.append({"miro_id": mid, "photo": m["guess"], "alts": m.get("alts") or [m["guess"]], "dist": m.get("dist"), "placed": False, "kind": "guess"})
+    order = {"check": 0, "guess": 1, "sure": 2}
+    check.sort(key=lambda x: (order[x["kind"]], -(x["dist"] or 0)))
     taken = db.conn().execute("SELECT 1 FROM series WHERE name=?", (board["name"],)).fetchone()
     return {"state": "done", "key": job["key"], "name": board["name"], "name_taken": bool(taken), "pictures": len(pics), "matched": len(lay["items"]),
             "how": how, "duplicates": lay["duplicates"], "unmatched": lay["unplaced"], "frames": len(lay["frames"]),
             "notes": sum(1 for x in lay["shapes"] if x["kind"] == "note") - len(lay["unplaced"]),
             "arrows": sum(1 for x in lay["shapes"] if x["kind"] == "arrow"), "skipped": lay["skipped"],
-            "sample": [i["id"] for i in lay["items"][:12]], "check": check[:400]}
+            "sample": [i["id"] for i in lay["items"][:12]], "check": check[:3000]}
 
 
 def _run(job: dict, bid: str, token: str, scope: Dict[str, Any]) -> None:
