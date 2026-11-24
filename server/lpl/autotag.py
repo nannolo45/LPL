@@ -38,7 +38,7 @@ router = APIRouter()
 
 RULE = "bnw"
 # bumped when the way a photo is judged changes, so verdicts stored by an older LPL are looked at again
-ENGINE = 4
+ENGINE = 5
 # words in a darktable style name or a LUT file name that mean black & white (lower case)
 BNW_WORDS = ("black and white", "black & white", "black&white", "b&w", "b & w", "bw ", " bw", "monochrome", "monochrom", "mono ", " mono",
              "acros", "neopan", "ilford", "delta 100", "delta 400", "delta 3200", "hp5", "fp4", "pan f", "panf", "tri-x", "trix",
@@ -229,40 +229,88 @@ def read_history(desc) -> Dict[str, Any]:
         prio = xmp._int(xmp._item_value(li, "multi_priority"), 0)
         state[(op, prio)] = {"op": op, "prio": prio, "enabled": xmp._item_value(li, "enabled") not in ("0", "false", "False"),
                              "version": xmp._int(xmp._item_value(li, "modversion"), 0), "params": xmp._item_value(li, "params") or "",
-                             "name": xmp._item_value(li, "multi_name") or ""}
+                             "name": xmp._item_value(li, "multi_name") or "",
+                             "blend": xmp._item_value(li, "blendop_params") or ""}
     if not state:
         return {"bnw": None, "why": "", "sig": "", "unknown": False}
-    sig = hashlib.sha1(json.dumps(sorted([m["op"], m["prio"], m["enabled"], m["params"]] for m in state.values())).encode()).hexdigest()[:16]
+    sig = hashlib.sha1(json.dumps(sorted([m["op"], m["prio"], m["enabled"], m["params"], m["blend"]] for m in state.values())).encode()).hexdigest()[:16]
     bnw, why, unknown = False, "", False
+    partial: List[str] = []
     for m in state.values():
         if not m["enabled"]:
             continue
-        if m["op"] == "monochrome":
-            bnw, why = True, "monochrome"
-            break
-        if m["op"] == "channelmixerrgb":
-            g = _gray_in_use(decode_params(m["params"]), m["version"])
-            if g:
-                bnw, why = True, "color calibration (gray tab)"
-                break
-            if g is None:
-                unknown = True
-        if m["op"] == "colorbalancergb" and _chroma_off(decode_params(m["params"])):
-            bnw, why = True, "color balance rgb (chroma -100%)"
-            break
-        if m["op"] == "channelmixer" and _mixer_gray(decode_params(m["params"])):
-            bnw, why = True, "channel mixer (gray)"
-            break
-        if m["op"] == "lut3d":
-            lut = _lut_name(decode_params(m["params"]))
-            if _bnw_name(lut):
-                bnw, why = True, "LUT 3D (%s)" % lut.replace("\\", "/").split("/")[-1]
-                break
+        says, what = _says_bnw(m)
+        if says is None:
+            unknown = True
+            continue
+        if not says:
+            continue
+        whole, how = _whole_image(m["blend"])
+        name = "%s%s" % (what, _inst(m))
+        if not whole:
+            # masked, blended or at reduced opacity: it does not turn the whole picture B&W (dodge & burn, a B&W
+            # layer for contrast...). Named in the explanation, but it does not decide.
+            partial.append("%s, %s" % (name, how))
+            continue
+        bnw, why = True, name
+        break
     # module instance names and darktable|style|... tags are NOT used: darktable keeps a preset's name on the
     # module, and a style's tag on the photo, after the edit has gone back to colour
     if bnw:
         unknown = False
-    return {"bnw": bnw, "why": why, "sig": sig, "unknown": unknown}
+    return {"bnw": bnw, "why": why, "sig": sig, "unknown": unknown, "partial": partial}
+
+
+def _says_bnw(m: dict):
+    """(True/False/None, what): does this module instance, by its own settings, make the picture B&W?
+    None: its settings could not be read."""
+    op, p = m["op"], decode_params(m["params"])
+    if op == "monochrome":
+        return True, "monochrome"
+    if op == "channelmixerrgb":
+        return _gray_in_use(p, m["version"]), "color calibration (gray tab)"
+    if op == "colorbalancergb":
+        return _chroma_off(p), "color balance rgb (chroma -100%)"
+    if op == "channelmixer":
+        return _mixer_gray(p), "channel mixer (gray)"
+    if op == "lut3d":
+        lut = _lut_name(p)
+        return _bnw_name(lut), "LUT 3D (%s)" % lut.replace("\\", "/").split("/")[-1]
+    return False, ""
+
+
+def _inst(m: dict) -> str:
+    return ", instance %d" % (m["prio"] + 1) if m["prio"] else ""
+
+
+# darktable's blend modes that simply replace the picture (normal, normal bounded, and the old normal)
+_NORMAL_BLEND = (0x00, 0x01, 0x18, 0x19)
+
+
+def _whole_image(blend: str):
+    """(True, "") when the instance acts on the whole picture at full strength: blending off, or on uniformly in a
+    normal mode at (nearly) 100% opacity. Otherwise (False, what limits it). darktable:blendop_params starts with
+    mask_mode, blend_cst, blend_mode, blend_parameter, opacity (all versions in use)."""
+    b = decode_params(blend)
+    if not b or len(b) < 20:
+        return True, ""
+    mask_mode, _cst, mode, _par, opacity = struct.unpack_from("<IiIff", b, 0)
+    if mask_mode == 0:
+        return True, ""
+    why = []
+    if mask_mode & 0x2:
+        why.append("drawn mask")
+    if mask_mode & 0x4:
+        why.append("parametric mask")
+    if mask_mode & 0x8:
+        why.append("raster mask")
+    if (mode & 0xFF) not in _NORMAL_BLEND:
+        why.append("blend mode")
+    if opacity < 95.0:
+        why.append("opacity %d%%" % round(opacity))
+    if mode & 0x80000000 and (mask_mode & 0xE):
+        why.append("reversed mask")
+    return (not why), " + ".join(why)
 
 
 def history_of(relpath: str) -> Dict[str, Any]:
@@ -394,7 +442,9 @@ def classify(row, b: dict, h: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
             if h["unknown"]:  # could not read color calibration: let the user say
                 out.update(verdict="unsure", source="history", detail="darktable edit: color calibration could not be read")
             else:
-                out.update(verdict="colour", source="history", detail="darktable edit: no B&W module found")
+                part = h.get("partial") or []
+                out.update(verdict="colour", source="history", detail=("darktable edit: colour; B&W only in part of it: " + "; ".join(part))
+                           if part else "darktable edit: no B&W module found")
         return out
     if b["use_camera"] and row["preview_state"] == 1:
         m = measure_preview(row["id"])

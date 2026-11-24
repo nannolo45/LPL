@@ -278,3 +278,22 @@ def test_small_coloured_subject_is_colour():
             im.putpixel((x, y), (90, 160, 40))
     j = autotag.judge(autotag.measure(im), dict(autotag.DEFAULTS["bnw"]))
     assert j["verdict"] == "colour"
+
+
+def test_masked_or_blended_bnw_instance_does_not_count():
+    """A second color calibration instance in B&W used through a mask, a blend mode or lower opacity (dodge & burn,
+    contrast) leaves the picture in colour."""
+    def blend(mask_mode, mode=0x18, opacity=100.0):
+        return (struct.pack("<IiIff", mask_mode, 2, mode, 0.0, opacity) + b"\0" * 400).hex()
+
+    def with_blend(item, b):
+        return item.replace("darktable:params", 'darktable:blendop_params="%s" darktable:params' % b)
+    wb = li(0, "channelmixerrgb", params=mixer(), version=4)
+    gray = li(1, "channelmixerrgb", params=mixer((0.3, 0.6, 0.1)), version=4, prio=1)
+    assert hist([wb, gray])["bnw"] is True
+    assert "instance 2" in hist([wb, gray])["why"]
+    assert hist([wb, with_blend(gray, blend(1))])["bnw"] is True          # uniformly on, normal, 100%
+    for b, word in ((blend(1 | 4), "parametric"), (blend(1 | 2), "drawn"), (blend(1, mode=0x0C), "blend mode"),
+                    (blend(1, opacity=40.0), "opacity 40%")):
+        r = hist([wb, with_blend(gray, b)])
+        assert r["bnw"] is False and word in r["partial"][0], (word, r)
