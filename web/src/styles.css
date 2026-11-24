@@ -812,3 +812,18 @@ td.devcheckcell, th.devcheckcell { width: 34px; padding-right: 0; }
 .dfv-pick { width: 44px; padding: 0; justify-content: center; }
 .dfv-pick.on { color: #1a1a1a; background: var(--accent, #E8A33D); border-radius: 22px; }
 .dfv-sheet { flex: 0 0 auto; display: flex; flex-direction: column; gap: 12px; padding: 16px 16px calc(18px + env(safe-area-inset-bottom)); border-radius: 16px 16px 0 0; background: #1f1f23; max-height: 55vh; overflow-y: auto; }
+
+/* R11: styles, presets and module layouts shared through LPL (components/Shared.tsx) */
+.sharedsection { margin-top: 8px; }
+.sharedgrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 380px); gap: 12px; align-items: start; }
+.sharedcard .devfold:disabled { cursor: default; opacity: 1; }
+.sharedtable td, .sharedtable th { padding: 7px 8px; font-size: 12px; }
+.sharedtable .seg button { padding: 3px 8px; font-size: 11px; }
+.sharedconf { padding: 10px 12px; border: 1px solid var(--accent-line); border-radius: 8px; background: var(--accent-bg); }
+.sharedwarn { color: var(--accent-text); }
+.sharedrow { padding: 8px 0; border-top: 1px solid var(--line); }
+.shareddots { display: inline-flex; gap: 6px; font-size: 12px; }
+.shareddot { display: inline-block; width: 12px; text-align: center; color: var(--muted); }
+.shareddot.newest, .shareddot.kept { color: var(--ok); }
+.shareddot.waiting { color: var(--soft); }
+.shareddot.conflict { color: var(--accent); font-weight: 700; }
