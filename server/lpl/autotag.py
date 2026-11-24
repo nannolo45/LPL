@@ -38,9 +38,9 @@ router = APIRouter()
 
 RULE = "bnw"
 # bumped when the way a photo is judged changes, so verdicts stored by an older LPL are looked at again
-ENGINE = 3
+ENGINE = 4
 # words in a darktable style name or a LUT file name that mean black & white (lower case)
-BNW_WORDS = ("black and white", "black & white", "black&white", "b&w", "b & w", "bw ", " bw", "monochrom", "mono ", " mono",
+BNW_WORDS = ("black and white", "black & white", "black&white", "b&w", "b & w", "bw ", " bw", "monochrome", "monochrom", "mono ", " mono",
              "acros", "neopan", "ilford", "delta 100", "delta 400", "delta 3200", "hp5", "fp4", "pan f", "panf", "tri-x", "trix",
              "t-max", "tmax", "noir", "grayscale", "greyscale", "schwarzweiss", "schwarz-weiss", "bianco e nero")
 VERDICTS = ("bnw", "colour", "unsure", "none")
@@ -182,9 +182,16 @@ def _mixer_gray(params: Optional[bytes]) -> bool:
     return any(abs(struct.unpack_from("<f", params, off)[0]) > 1e-6 for off in (24, 52, 80))
 
 
+_BNW_RE = None
+
+
 def _bnw_name(text: str) -> bool:
-    t = " %s " % (text or "").lower().replace("_", " ").replace("-", " ").replace("/", " ").replace("\\", " ").replace(".", " ")
-    return any(w.replace("-", " ") in t for w in BNW_WORDS)
+    """A LUT file name that says black & white (whole words only: "matrix" is not "trix")."""
+    global _BNW_RE
+    if _BNW_RE is None:
+        import re
+        _BNW_RE = re.compile(r"(?<![a-z0-9])(%s)(?![a-z0-9])" % "|".join(re.escape(w.strip()).replace(r"\ ", r"[\s_\-.]*") for w in BNW_WORDS))
+    return bool(_BNW_RE.search((text or "").lower()))
 
 
 def _lut_name(params: Optional[bytes]) -> str:
@@ -251,14 +258,8 @@ def read_history(desc) -> Dict[str, Any]:
             if _bnw_name(lut):
                 bnw, why = True, "LUT 3D (%s)" % lut.replace("\\", "/").split("/")[-1]
                 break
-        if m["name"] and _bnw_name(m["name"]):
-            bnw, why = True, "%s instance \"%s\"" % (m["op"], m["name"])
-            break
-    if not bnw:  # a darktable style applied to the photo leaves a tag darktable|style|<group>|<name>
-        for t in xmp._list_items(desc, "lr", "hierarchicalSubject") + xmp._list_items(desc, "dc", "subject"):
-            if t.startswith("darktable|style|") and _bnw_name(t[16:]):
-                bnw, why = True, "style " + t[16:].replace("|", " › ")
-                break
+    # module instance names and darktable|style|... tags are NOT used: darktable keeps a preset's name on the
+    # module, and a style's tag on the photo, after the edit has gone back to colour
     if bnw:
         unknown = False
     return {"bnw": bnw, "why": why, "sig": sig, "unknown": unknown}
@@ -309,13 +310,32 @@ def measure(img) -> Optional[Dict[str, float]]:
             if n >= len(c) * .02:
                 tint = max(tint, float(np.hypot(mcb[k], mcr[k])))
     resid = float(np.percentile(np.hypot(cb - mcb[bins], cr - mcr[bins]), 95))
-    return {"neutral": round(neutral, 2), "resid": round(resid, 2), "tint": round(tint, 2)}
+    # a small coloured subject (a green insect on a white sheet) hides above the 95th percentile, and can fill a
+    # brightness band of its own so the toning model swallows it. Toning is only trusted from bands holding at
+    # least 5% of the picture; other bands take the nearest such band's toning. Then count the pixels with
+    # clearly visible colour of their own.
+    counts = np.bincount(bins, minlength=12)
+    big = [k for k in range(12) if counts[k] >= len(c) * .05]
+    if big:
+        tcb, tcr = np.zeros(12), np.zeros(12)
+        for k in range(12):
+            n = min(big, key=lambda g: abs(g - k))
+            tcb[k], tcr[k] = mcb[n], mcr[n]
+        spots = float((np.hypot(cb - tcb[bins], cr - tcr[bins]) > 14.0).mean())
+    else:
+        spots = 0.0
+    return {"neutral": round(neutral, 2), "resid": round(resid, 2), "tint": round(tint, 2), "spots": round(spots, 4)}
 
 
 def judge(m: Dict[str, float], b: dict) -> Dict[str, Any]:
     """bnw (toned or not), colour, or unsure, from measure()'s numbers and the strictness and band settings."""
     limit = 3.0 + b["strictness"] * 0.07          # 3 .. 10 Cb/Cr units
     high = limit * (1 + b["band"] / 100.0)          # up to twice the limit: unsure
+    spots = m.get("spots", 0.0)
+    if spots > 0.015:  # 1.5% of the picture clearly coloured: colour, however grey the rest is
+        return {"verdict": "colour", "toned": 0, "score": max(m["neutral"], m["resid"])}
+    if spots > 0.005:
+        return {"verdict": "unsure", "toned": 0, "score": max(m["neutral"], m["resid"])}
     if m["neutral"] <= limit:
         return {"verdict": "bnw", "toned": 0, "score": m["neutral"]}
     if m["resid"] <= limit and m["tint"] <= 45:
@@ -367,7 +387,7 @@ def classify(row, b: dict, h: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
             m = measure_preview(row["id"])
             if m is not None:
                 j = judge(m, b)
-                if j["verdict"] == "bnw":
+                if j["verdict"] == "bnw" and not j["toned"]:
                     out.update(j, source="camera", detail="Shot B&W in camera (camera preview); the darktable edit has no B&W module LPL knows")
                     return out
         if b["use_history"]:

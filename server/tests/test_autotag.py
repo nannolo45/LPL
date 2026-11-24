@@ -245,13 +245,9 @@ def test_history_old_channel_mixer_lut_and_style():
     assert r["bnw"] is True and "Acros" in r["why"]
     lut = (b"Fuji/Fuji XTrans III - Velvia.png".ljust(512, b"\0") + b"\0" * 200).hex()
     assert hist([li(0, "lut3d", params=lut, version=3)])["bnw"] is False
-    from lpl import autotag, xmp
-    styled = HIST.replace('<darktable:history>', '<lr:hierarchicalSubject xmlns:lr="http://ns.adobe.com/lightroom/1.0/"><rdf:Bag>'
-                          '<rdf:li>darktable|style|t3mujinpack - Black and White|Ilford Delta 400</rdf:li></rdf:Bag></lr:hierarchicalSubject><darktable:history>')
-    assert styled != HIST
-    data = (styled % (1, li(0, "tonecurve"))).encode()
-    r = autotag.read_history(xmp._description(xmp._parse_bytes(data)))
-    assert r["bnw"] is True and "style" in r["why"]
+    # a preset's name stays on the module after the edit goes back to colour: the name does not count
+    plain_cc = li(0, "channelmixerrgb", params=mixer(), version=4).replace('darktable:params', 'darktable:multi_name="monochrome | Fuji Acros 100" darktable:params')
+    assert hist([plain_cc])["bnw"] is False
 
 
 def test_shot_bnw_in_camera_and_edited(lib):
@@ -270,3 +266,15 @@ def test_shot_bnw_in_camera_and_edited(lib):
     client.post("/api/autotag/run", json={"wait": True, "apply": True})
     assert client.get("/api/photos/%d" % ids["grey"]).json()["autotag"]["verdict"] == "colour"
     client.put("/api/autotag", json={"bnw": {"camera_over_edit": True}})
+
+
+def test_small_coloured_subject_is_colour():
+    """A green insect on a white sheet: most of the picture is grey, but the colour is plainly there."""
+    from PIL import Image
+    from lpl import autotag
+    im = Image.new("RGB", (400, 300), (225, 222, 218))
+    for x in range(160, 240):
+        for y in range(130, 160):
+            im.putpixel((x, y), (90, 160, 40))
+    j = autotag.judge(autotag.measure(im), dict(autotag.DEFAULTS["bnw"]))
+    assert j["verdict"] == "colour"

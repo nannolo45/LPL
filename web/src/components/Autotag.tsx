@@ -101,7 +101,7 @@ export function AutotagSettingsPanel() {
             <Source num={1} title="darktable rendered preview" on={b.use_rendered} set={v => put({ use_rendered: v })}
               help="The JPEG the bridge sends back after you edit. Shows exactly what you see in darktable." />
             <Source num={2} title="darktable edit history" on={b.use_history} set={v => put({ use_history: v })}
-              help="The active modules in the XMP: monochrome, color calibration's gray tab, channel mixer gray, color balance rgb at chroma -100%, a B&W LUT or style (Acros, Ilford, Tri-X…). Only the latest state of each module counts. B&W made other ways needs 1." />
+              help="The active modules in the XMP: monochrome, color calibration's gray tab, channel mixer gray, color balance rgb at chroma -100%, a LUT 3D whose file name says B&W (Acros, Ilford, Tri-X…). Only the latest state of each module counts. B&W made other ways needs 1." />
             <Source num={3} title="Camera preview (unedited photos)" on={b.use_camera} set={v => put({ use_camera: v })}
               help="The JPEG inside the raw (or the image itself): shows what you shot in B&W in camera. Replaced by 1 and 2 once you edit the photo." />
             <label className="row small" style={{ gap: 8 }}><input type="checkbox" checked={b.disagree_review} onChange={e => put({ disagree_review: e.target.checked })} />
