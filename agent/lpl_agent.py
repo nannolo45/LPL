@@ -42,8 +42,10 @@ VERSION = "0.2.0"
 # What this agent can do beyond the first protocol, announced in every heartbeat (docs/devices-stop-estimate.md):
 # batch = reports how far each edit job is; cancel = stops a job or leaves out photos when the heartbeat answer
 # says so; open = honours "open": false in an edit job (copy the photos, do not open darktable);
-# versions = darktable duplicates (IMG_01_02.RAF.xmp) are copied beside the RAW and sent back with version=n (R17).
-CAPS = ["batch", "cancel", "open", "versions"]
+# versions = darktable duplicates (IMG_01_02.RAF.xmp) are copied beside the RAW and sent back with version=n (R17);
+# shared = darktable styles, presets and module layouts are shared through LPL (R11; left out when the agent's
+# darktable/module-names.json is missing).
+CAPS = ["batch", "cancel", "open", "versions", "shared"]
 CHUNK = 256 * 1024  # most bytes taken from a download at once; a Stop is noticed between two of them
 IS_WIN = os.name == "nt"
 NO_WINDOW = 0x08000000 if IS_WIN else 0  # CREATE_NO_WINDOW
@@ -317,6 +319,55 @@ def darktable_running() -> bool:
         return False
 
 
+def darktable_running_strict() -> bool:
+    """darktable_running() for writing data.db: a check that fails counts as "running"."""
+    try:
+        if IS_WIN:
+            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq darktable.exe", "/FO", "CSV", "/NH"],
+                                 capture_output=True, text=True, creationflags=NO_WINDOW, timeout=20)
+            return out.returncode != 0 or "darktable.exe" in out.stdout.lower()
+        out = subprocess.run(["pgrep", "-x", "darktable"], capture_output=True, timeout=20)
+        return out.returncode != 1  # 0 = found, 1 = none, anything else = the check failed
+    except Exception:
+        return True
+
+
+def pid_alive(pid: int) -> bool:
+    """Is there a process with this id? When it cannot be told: yes."""
+    if pid <= 0:
+        return False
+    try:
+        if IS_WIN:
+            out = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/FO", "CSV", "/NH"],
+                                 capture_output=True, text=True, creationflags=NO_WINDOW, timeout=20)
+            return out.returncode != 0 or ('"%d"' % pid) in out.stdout
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True
+
+
+def data_db_locked(path: Path) -> bool:
+    """darktable's own lock file beside data.db (data.db.lock, holding its pid) names a live process. A lock whose pid
+    is gone is stale (darktable crashed): not locked. A lock that cannot be read counts as locked."""
+    lock = Path(str(path) + ".lock")
+    if not lock.exists():
+        return False
+    try:
+        txt = lock.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return True
+    m = re.match(r"\d+", txt)
+    return pid_alive(int(m.group(0))) if m else True
+
+
+def data_db_writable(path: Path) -> bool:
+    """data.db may be written only when darktable is surely closed."""
+    return not darktable_running_strict() and not data_db_locked(path)
+
+
 def bridge_alive() -> bool:
     try:
         return time.time() - (BRIDGE / "alive").stat().st_mtime < 12
@@ -496,6 +547,426 @@ def start_local_library(cfg: dict) -> None:
     log.info("local library at %s", LOCAL["url"])
 
 
+# ------------------------------------------------------------------ shared styles, presets and module layouts (R11)
+# Contract: darktable-android docs/PLAN.md 4.5, copied in docs/shared-r11.md. The agent reads darktable's data.db only
+# from a read-only snapshot (sqlite backup into memory) and writes it only for a shared-update job, and only while
+# darktable is closed (darktable keeps data.db with journal_mode MEMORY, synchronous OFF).
+SHARED_EVERY = 600  # seconds between snapshots while darktable runs (and between checks with the server otherwise)
+LAYOUT_OP = "modulegroups"
+_PRESET_CORE = ["name", "description", "operation", "op_version", "op_params", "enabled", "blendop_params",
+                "blendop_version", "multi_priority", "multi_name", "multi_name_hand_edited", "model", "maker", "lens",
+                "iso_min", "iso_max", "exposure_min", "exposure_max", "aperture_min", "aperture_max",
+                "focal_length_min", "focal_length_max", "autoapply", "filter", "def", "format"]
+_LAYOUT_CORE = ["name", "operation", "op_version", "op_params"]
+_STYLE_CORE = ["name", "description", "iop_list"]
+_ITEM_CORE = ["num", "module", "operation", "op_params", "enabled", "blendop_params", "blendop_version",
+              "multi_priority", "multi_name", "multi_name_hand_edited"]
+
+
+def module_operations() -> set:
+    """darktable's processing modules (operation names), from module-names.json shipped in the agent's darktable folder
+    (a copy of darktable-android schema/module-names.json). Empty when the file is missing: then nothing is shared."""
+    for d in (Path(__file__).resolve().parent / "darktable", Path(sys.executable).resolve().parent / "darktable",
+              _bundle_dir() / "darktable"):
+        f = d / "module-names.json"
+        if f.is_file():
+            try:
+                return {k for k in json.loads(f.read_text(encoding="utf-8")) if not k.startswith("_")}
+            except (OSError, ValueError):
+                pass
+    return set()
+
+
+def excluded_names() -> tuple:
+    """(style_prefix, layout_names) from R11-excluded-names.json in the agent's darktable folder (PLAN.md 4.5, not
+    shared): styles starting with the prefix and layouts with one of the names are skipped. Defaults when missing."""
+    for d in (Path(__file__).resolve().parent / "darktable", Path(sys.executable).resolve().parent / "darktable",
+              _bundle_dir() / "darktable"):
+        f = d / "R11-excluded-names.json"
+        if f.is_file():
+            try:
+                j = json.loads(f.read_text(encoding="utf-8"))
+                return str(j.get("style_prefix") or "_l10n_"), {str(n) for n in j.get("layout_names") or []}
+            except (OSError, ValueError):
+                pass
+    return "_l10n_", set()
+
+
+def shared_canonical(obj) -> bytes:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def shared_core(body: dict) -> dict:
+    k = body["kind"]
+    if k == "style":
+        items = sorted(body.get("items") or [], key=lambda i: (i.get("num") is None, i.get("num") or 0))
+        return {"kind": k, "style": {c: (body.get("style") or {}).get(c) for c in _STYLE_CORE},
+                "items": [{c: it.get(c) for c in _ITEM_CORE} for it in items]}
+    cols = _LAYOUT_CORE if k == "layout" else _PRESET_CORE
+    return {"kind": k, "row": {c: (body.get("row") or {}).get(c) for c in cols}}
+
+
+def shared_hash(body: dict) -> str:
+    return hashlib.sha256(shared_canonical(shared_core(body))).hexdigest()
+
+
+def _to_json(v):
+    """A data.db value as it travels: INTEGER a number, REAL a %.17g string, BLOB lowercase hex, TEXT as is, NULL null."""
+    if isinstance(v, float):
+        return format(v, ".17g")
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        return bytes(v).hex()
+    return v
+
+
+def _from_json(v, decl: str):
+    """The other way, by the column's declared type in this data.db."""
+    if v is None:
+        return None
+    t = (decl or "").upper()
+    try:
+        if "BLOB" in t:
+            return bytes.fromhex(v) if isinstance(v, str) else v
+        if "INT" in t:
+            return int(v)
+        if "REAL" in t or "FLOA" in t or "DOUB" in t:
+            return float(v)
+    except (TypeError, ValueError):
+        return v
+    return v
+
+
+def shared_key(kind, operation, op_version, name) -> str:
+    return json.dumps([kind, operation or "", int(op_version or 0), name], ensure_ascii=False)
+
+
+def darktable_data_db(cfg: dict) -> Path:
+    return Path(cfg["darktable_datadb"]) if cfg.get("darktable_datadb") else darktable_config_dir(cfg) / "data.db"
+
+
+def read_shared(db, ops: set) -> dict:
+    """Every shared item of an open data.db connection: key -> body. Presets of processing modules and module layouts
+    with writeprotect = 0, and every style that is not one of darktable's own, minus the names of R11-excluded-names.json."""
+    out = {}
+    style_prefix, layout_names = excluded_names()
+    db.row_factory = None
+    pcols = [r[1] for r in db.execute("PRAGMA table_info(presets)")]
+    if pcols:
+        for row in db.execute("SELECT * FROM presets"):
+            d = dict(zip(pcols, row))
+            if d.get("writeprotect") or not d.get("name"):
+                continue
+            op = d.get("operation") or ""
+            kind = "layout" if op == LAYOUT_OP else ("preset" if op in ops else None)
+            if not kind or (kind == "layout" and d["name"] in layout_names):
+                continue
+            body = {"kind": kind, "row": {k: _to_json(v) for k, v in d.items() if k != "writeprotect"}}
+            out[shared_key(kind, op, d.get("op_version"), d["name"])] = body
+    scols = [r[1] for r in db.execute("PRAGMA table_info(styles)")]
+    icols = [r[1] for r in db.execute("PRAGMA table_info(style_items)")]
+    if scols and icols:
+        for row in db.execute("SELECT * FROM styles ORDER BY id"):
+            s = dict(zip(scols, row))
+            name = s.get("name")
+            if not name or name.startswith(style_prefix):
+                continue
+            items = [{k: _to_json(v) for k, v in zip(icols, r) if k != "styleid"}
+                     for r in db.execute("SELECT * FROM style_items WHERE styleid=? ORDER BY num", (s["id"],))]
+            out[shared_key("style", "", 0, name)] = {"kind": "style", "style": {c: _to_json(s.get(c)) for c in _STYLE_CORE},
+                                                     "items": items}
+    return out
+
+
+def snapshot_shared(path: Path, ops: set):
+    """A read-only snapshot of data.db (sqlite backup into memory, mode=ro): key -> body. None when it fails."""
+    import sqlite3
+    if not path.is_file():
+        return None
+    try:
+        src = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+        mem = sqlite3.connect(":memory:")
+        try:
+            src.backup(mem)
+        finally:
+            src.close()
+        try:
+            return read_shared(mem, ops)
+        finally:
+            mem.close()
+    except Exception as e:
+        log.warning("data.db snapshot skipped: %s", e)
+        return None
+
+
+def apply_shared(path: Path, writes: list, deletes: list) -> None:
+    """Write items into data.db in one transaction, by column name. writes: bodies; deletes: (kind, operation, op_version,
+    name). Preset / layout: insert or replace on name + operation + op_version with writeprotect = 0. Style: the style of
+    that name and its items are removed and the new ones inserted. Never called while darktable runs."""
+    import sqlite3
+    db = sqlite3.connect(str(path), timeout=10, isolation_level=None)
+    try:
+        pdecl = {r[1]: r[2] for r in db.execute("PRAGMA table_info(presets)")}
+        sdecl = {r[1]: r[2] for r in db.execute("PRAGMA table_info(styles)")}
+        idecl = {r[1]: r[2] for r in db.execute("PRAGMA table_info(style_items)")}
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            def drop_style(name):
+                for (sid,) in db.execute("SELECT id FROM styles WHERE name=?", (name,)).fetchall():
+                    db.execute("DELETE FROM style_items WHERE styleid=?", (sid,))
+                    db.execute("DELETE FROM styles WHERE id=?", (sid,))
+            for kind, op, ver, name in deletes:
+                if kind == "style":
+                    drop_style(name)
+                else:
+                    db.execute("DELETE FROM presets WHERE name=? AND operation=? AND op_version=? AND COALESCE(writeprotect,0)=0",
+                               (name, op, ver))
+            for b in writes:
+                if b["kind"] == "style":
+                    drop_style(b["style"]["name"])
+                    cols = [c for c in sdecl if c != "id"]
+                    st = b.get("style") or {}
+                    cur = db.execute("INSERT INTO styles(%s) VALUES(%s)" % (",".join('"%s"' % c for c in cols), ",".join("?" * len(cols))),
+                                     [_from_json(st.get(c), sdecl[c]) for c in cols])
+                    sid = cur.lastrowid
+                    cols = [c for c in idecl if c != "styleid"]
+                    for it in sorted(b.get("items") or [], key=lambda i: i.get("num") or 0):
+                        db.execute("INSERT INTO style_items(styleid,%s) VALUES(?,%s)" % (",".join('"%s"' % c for c in cols), ",".join("?" * len(cols))),
+                                   [sid] + [_from_json(it.get(c), idecl[c]) for c in cols])
+                else:
+                    row = b.get("row") or {}
+                    cols = list(pdecl)
+                    vals = [0 if c == "writeprotect" else _from_json(row.get(c), pdecl[c]) for c in cols]
+                    db.execute("DELETE FROM presets WHERE name=? AND operation=? AND op_version=?",
+                               (row.get("name"), row.get("operation"), row.get("op_version")))
+                    db.execute("INSERT OR REPLACE INTO presets(%s) VALUES(%s)" % (",".join('"%s"' % c for c in cols), ",".join("?" * len(cols))), vals)
+            db.execute("COMMIT")
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
+    finally:
+        db.close()
+
+
+class SharedSync:
+    """The agent's part of R11: per-item state file, uploads after each snapshot, the held shared-update job."""
+
+    def __init__(self, agent):
+        self.agent = agent
+        self.ops = module_operations()
+        self.enabled = bool(self.ops)
+        self.data = {"items": {}, "job": None}
+        self.update = None            # heartbeat state.shared_update: waiting_for_darktable / applying / None
+        self.last_pass = 0.0
+        self.was_running = None
+        self.lock = threading.RLock()
+        self.state_file = STATE_FILE.with_name("shared.json")  # per item: id, rev, local_hash, state; and a held job
+        f = self.file()
+        if f.is_file():
+            try:
+                self.data = json.loads(f.read_text(encoding="utf-8"))
+                self.data.setdefault("items", {})
+                self.data.setdefault("job", None)
+            except Exception:
+                pass
+
+    def file(self) -> Path:
+        return self.state_file
+
+    def save(self):
+        with self.lock:
+            f = self.file()
+            f.parent.mkdir(parents=True, exist_ok=True)
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.data, indent=1, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, f)
+
+    def active(self) -> bool:
+        return self.enabled and "shared" in (self.agent.server_caps or [])
+
+    def path(self) -> Path:
+        return darktable_data_db(self.agent.cfg)
+
+    def hold(self, job):
+        """A shared-update job: kept (also over a restart) until darktable is closed, then applied by tick()."""
+        with self.lock:
+            if self.data.get("job") and self.data["job"].get("id") == job.get("id"):
+                return  # handed out again while this agent still holds it
+            self.data["job"] = {"id": job["id"], "payload": job.get("payload") or {}}
+            self.save()
+        self.agent.wake.set()
+
+    def tick(self, force=False):
+        """From the main loop: apply a held job when darktable is closed; snapshot and upload at start, when darktable has
+        closed, and every SHARED_EVERY seconds."""
+        if not self.active():
+            return
+        running = darktable_running()
+        job = self.data.get("job")
+        if job:
+            if not data_db_writable(self.path()):
+                self.update = "waiting_for_darktable"
+            else:
+                self.apply_job(job)
+        else:
+            self.update = None
+        closed = self.was_running is True and not running
+        self.was_running = running
+        if force or closed or time.time() - self.last_pass >= SHARED_EVERY:
+            self.sync_pass()
+
+    # --- uploads
+    def sync_pass(self, snap=None):
+        self.last_pass = time.time()
+        snap = snapshot_shared(self.path(), self.ops) if snap is None else snap
+        if snap is None:
+            return
+        srv = self.agent.srv
+        aid = urllib.parse.quote(self.agent.cfg["id"])
+        listed = srv.json("GET", "/api/shared?agent=%s&since=0" % aid)
+        by_key = {shared_key(i["kind"], i["operation"], i["op_version"], i["name"]): i for i in listed.get("items") or []}
+        by_id = {i["id"]: i for i in listed.get("items") or []}
+        open_conf = {k["item_id"] for k in listed.get("conflicts") or []}
+        items = self.data["items"]
+        present = {k: shared_hash(b) for k, b in snap.items()}
+        with self.lock:
+            for key, st in list(items.items()):
+                if st.get("state") == "conflict" and st.get("id") not in open_conf:
+                    self.resolved(key, st, by_id.get(st.get("id")), present.get(key))
+            for key, body in snap.items():
+                h = present[key]
+                st = items.get(key)
+                cur = by_key.get(key)
+                if st is None:
+                    if cur and not cur["deleted"] and cur["hash"] == h:  # first sync: the same item is already there
+                        items[key] = {"id": cur["id"], "rev": cur["rev"], "local_hash": h, "state": "ok"}
+                        continue
+                    self.put(key, body, h, 0)
+                    continue
+                if st.get("state") == "conflict":
+                    continue  # not uploaded again until it is resolved
+                if h != st.get("local_hash"):
+                    self.put(key, body, h, st.get("rev") or 0)
+                elif cur and not cur["deleted"] and cur["hash"] == h and cur["rev"] > (st.get("rev") or 0):
+                    st["rev"] = cur["rev"]  # e.g. "keep mine" chosen in LPL: the current revision is this copy
+            for key, st in list(items.items()):
+                if key in snap or st.get("local_hash") is None or st.get("state") == "conflict" or not st.get("id"):
+                    continue
+                cur = by_id.get(st["id"])
+                if cur and cur["deleted"]:  # deleted here and elsewhere
+                    st.update(rev=cur["rev"], local_hash=None, state="ok")
+                    continue
+                self.delete(key, st)
+            self.save()
+        self.send_state()
+
+    def resolved(self, key, st, cur, h):
+        """Its conflict is gone: "mine" (the current revision is this copy) or "theirs" (it waits for the next update)."""
+        if cur and ((cur["deleted"] and h is None) or (not cur["deleted"] and cur["hash"] == h)):
+            st.update(rev=cur["rev"], local_hash=h, state="ok")
+        else:
+            st.update(local_hash=h, state="ok")  # not a local change until the update overwrites it
+
+    def put(self, key, body, h, base_rev):
+        kind, op, ver, name = json.loads(key)
+        q = {"kind": kind, "operation": op, "op_version": ver, "name": name, "hash": h, "changed_at": time.time(),
+             "base_rev": base_rev, "body": body}
+        items = self.data["items"]
+        try:
+            r = self.agent.srv.json("PUT", "/api/shared?agent=%s" % urllib.parse.quote(self.agent.cfg["id"]), q)
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                try:
+                    it = json.loads(e.read().decode() or "{}").get("item") or {}
+                except ValueError:
+                    it = {}
+                st = items.setdefault(key, {"id": it.get("id"), "rev": base_rev, "local_hash": None, "state": "ok"})
+                st.update(id=it.get("id", st.get("id")), state="conflict")
+                return
+            log.warning("shared upload of %s failed: %s", name, e)
+            return
+        st = items.setdefault(key, {})
+        if r.get("decided") == "theirs":  # newest wins and the other copy is newer: it waits for the next update
+            st.update(id=r["id"], rev=st.get("rev") or 0, local_hash=h, state="ok")
+        else:
+            st.update(id=r["id"], rev=r["rev"], local_hash=h, state="ok")
+
+    def delete(self, key, st):
+        try:
+            r = self.agent.srv.json("DELETE", "/api/shared/%d?agent=%s&base_rev=%d&changed_at=%.3f" % (st["id"], urllib.parse.quote(self.agent.cfg["id"]), st.get("rev") or 0, time.time()))
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                st["state"] = "conflict"
+            elif e.code == 404:
+                self.data["items"].pop(key, None)
+            else:
+                log.warning("shared deletion failed: %s", e)
+            return
+        if r.get("decided") == "theirs":
+            st.update(local_hash=None, state="ok")
+        else:
+            st.update(rev=r["rev"], local_hash=None, state="ok")
+
+    def send_state(self):
+        with self.lock:
+            out = {str(st["id"]): {"rev": st.get("rev") or 0, "state": st["state"] if st.get("state") in ("ok", "kept", "unusable") else "ok"}
+                   for st in self.data["items"].values() if st.get("id")}
+        try:
+            self.agent.srv.json("PUT", "/api/shared/state?agent=%s" % urllib.parse.quote(self.agent.cfg["id"]),
+                                {"items": out, "policy": "ask"})
+        except Exception as e:
+            log.warning("shared state not sent: %s", e)
+
+    # --- taking in
+    def apply_job(self, job):
+        p = job.get("payload") or {}
+        srv = self.agent.srv
+        self.update = "applying"
+        status = "done"
+        try:
+            got = {}
+            for iid in list(p.get("ids") or []) + list(p.get("delete") or []) + list(p.get("keep") or []):
+                if iid not in got:
+                    got[iid] = srv.json("GET", "/api/shared/%d" % int(iid))
+            writes, deletes = [], []
+            for iid in p.get("ids") or []:  # an item that is a deletion by now is removed, as for "delete"
+                g = got[iid]
+                if g["deleted"]:
+                    deletes.append((g["kind"], g["operation"], g["op_version"], g["name"]))
+                else:
+                    writes.append(g["body"])
+            for iid in p.get("delete") or []:
+                g = got[iid]
+                deletes.append((g["kind"], g["operation"], g["op_version"], g["name"]))
+            if not data_db_writable(self.path()):  # started again meanwhile (or not surely closed): wait
+                self.update = "waiting_for_darktable"
+                return
+            log.info("shared update: %d written, %d deleted, %d kept", len(writes), len(deletes), len(p.get("keep") or []))
+            apply_shared(self.path(), writes, deletes)
+            after = snapshot_shared(self.path(), self.ops) or {}
+            with self.lock:
+                items = self.data["items"]
+                for iid, g in got.items():
+                    key = shared_key(g["kind"], g["operation"], g["op_version"], g["name"])
+                    st = items.setdefault(key, {"id": g["id"], "rev": 0, "local_hash": None, "state": "ok"})
+                    st["id"] = g["id"]
+                    if iid in (p.get("keep") or []):
+                        st.update(rev=g["rev"], state="kept")  # kept here after a deletion elsewhere; not offered again
+                    else:
+                        st.update(rev=g["rev"], state="ok", local_hash=shared_hash(after[key]) if key in after else None)
+                self.data["job"] = None
+                self.save()
+        except Exception as e:
+            log.exception("shared update failed")
+            self.agent.message = "Updating styles and presets failed: %s" % e
+            status = "failed"
+            with self.lock:
+                self.data["job"] = None
+                self.save()
+        self.update = None
+        self.send_state()
+        self.agent.report_done(job["id"], status)
+
+
 # ------------------------------------------------------------------ working set
 class Agent:
     def __init__(self, cfg: dict):
@@ -511,6 +982,8 @@ class Agent:
         self.skip_photos = set()   # both as in the last heartbeat answer
         self.quit = threading.Event()  # set: run() returns after the round it is in (tests)
         self.wake = threading.Event()  # set: the main loop sends its next heartbeat now instead of after its pause
+        self.server_caps = []          # what the server said it can do (heartbeat answer); [] = a server from before
+        self.shared = SharedSync(self)  # R11: styles, presets, module layouts
         for d in (WORK, BRIDGE / "outbox"):
             d.mkdir(parents=True, exist_ok=True)
         if STATE_FILE.is_file():
@@ -536,7 +1009,8 @@ class Agent:
         running = darktable_running()
         return {"working_set": ws, "darktable_running": running, "bridge_alive": bridge_alive(),
                 "bridge_status": bridge_status(running), "version": VERSION, "message": self.message,
-                "local_url": LOCAL["url"], "local_error": LOCAL["error"]}
+                "local_url": LOCAL["url"], "local_error": LOCAL["error"],
+                **({"shared_update": self.shared.update} if self.shared.active() else {})}
 
     def recover(self):
         """At start: whatever was being copied when the agent last stopped never arrived. Its partial file goes,
@@ -563,7 +1037,7 @@ class Agent:
     def heartbeat_body(self):
         self.reread_name()
         return {"id": self.cfg["id"], "name": self.cfg["name"], "machine": machine_id(), "os": platform.system().lower(),
-                "state": self.state(), "caps": CAPS, "transfers": self.transfers()}
+                "state": self.state(), "caps": [c for c in CAPS if c != "shared" or self.shared.enabled], "transfers": self.transfers()}
 
     def reread_name(self):
         """The setup run again while this agent runs (reinstalling does that) may have given this PC another
@@ -633,6 +1107,8 @@ class Agent:
                     self.batches[j["id"]] = {"state": "queued", "arrived": [], "present": [], "failed": [], "skipped": [],
                                              "photo": None, "bytes": 0, "unsaid": False}
             self.jobs.put(j)
+        sc = answer.get("server_caps")
+        self.server_caps = [x for x in sc if isinstance(x, str)] if isinstance(sc, list) else []
         self.take_rename(answer.get("rename"))
         c = answer.get("cancel")
         if isinstance(c, dict):  # the whole list every time: what is not in it any more is not to be stopped
@@ -670,6 +1146,9 @@ class Agent:
         if (job.get("payload") or {}).get("all"):
             ids = list(self.items.keys())
         log.info("job %s %s %s", job["id"], kind, ids)
+        if kind == "shared-update":  # held until darktable is closed; tick() applies it and reports it done
+            self.shared.hold(job)
+            return
         status = "done"
         try:
             if kind == "edit":
@@ -1100,6 +1579,13 @@ class Agent:
                 self.watch()
             except Exception:
                 log.exception("watch failed")
+            try:
+                first_shared = getattr(self, "_shared_started", False) is False and self.shared.active()
+                self.shared.tick(force=first_shared)
+                if first_shared:
+                    self._shared_started = True
+            except Exception as e:
+                log.warning("shared styles and presets: %s", e)
             if once:
                 time.sleep(0.5)
                 while not self.jobs.empty():

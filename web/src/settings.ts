@@ -35,13 +35,15 @@ export interface Settings {
   devicesAutoMerge: boolean
   /** R18: where received exports are stored: relative to the library, or a full path; empty = the "exports" folder in the library */
   exportsFolder: string
+  /** R11: the same style, preset or layout changed on a PC and elsewhere: ask (Devices page) or the newest wins */
+  sharedPolicy: 'ask' | 'newest'
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   boardPan: 'both', boardWheel: 'scroll', boardTouch: 'pan', boardPhotoDouble: 'darktable',
   boardNumbers: true, boardSnap: false, boardNoteColor: '#f5d76e', boardFrameColor: '', boardZoom: 100, boardZoomPhone: 50,
   boardStrip: true, boardStripSort: 'reading', boardStripDesc: false,
-  devicesAutoOpen: true, devicesEtaInBar: true, devicesAutoMerge: true, exportsFolder: '',
+  devicesAutoOpen: true, devicesEtaInBar: true, devicesAutoMerge: true, exportsFolder: '', sharedPolicy: 'ask',
 }
 
 let current: Settings = (() => {

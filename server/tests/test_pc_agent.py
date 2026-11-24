@@ -189,7 +189,7 @@ def test_batch_progress_stop_in_the_middle_of_a_file_and_resume(big, running_age
     a, launched, slow = running_agent
     ids = big
     wait_for(lambda: device(c))
-    assert device(c)["caps"] == ["batch", "cancel", "open", "versions"]
+    assert device(c)["caps"] == ["batch", "cancel", "open", "versions", "shared"]
     j = c.post("/api/jobs", json={"kind": "edit", "payload": {"ids": ids}, "agent_id": "pc-batch-test"}).json()["id"]
 
     # the second file is under way: one arrived, the numbers on the server are the agent's

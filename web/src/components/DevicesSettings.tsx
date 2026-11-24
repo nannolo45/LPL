@@ -42,6 +42,24 @@ function ExportsFolder() {
   )
 }
 
+/** R11: what happens when the same style, preset or layout was changed on a PC and on another device. */
+function SharedPolicy() {
+  const st: Settings = useSettings()
+  const label = 'Same item changed on two devices'
+  return (
+    <div className="setrow">
+      <div className="col" style={{ gap: 2, minWidth: 0, flex: '1 1 240px' }}>
+        <span className="small">{label}</span>
+        <span className="tiny muted">For darktable styles, presets and module layouts shared through LPL, on PCs. Ask me: the Devices page offers keep / take / keep both. Newest wins: the one changed last is kept. The phone app has its own setting.</span>
+      </div>
+      <div className="seg" role="group" aria-label={label}>
+        {([['ask', 'Ask me'], ['newest', 'Newest wins']] as ['ask' | 'newest', string][]).map(([v, l]) =>
+          <button key={v} className={st.sharedPolicy === v ? 'on' : ''} aria-pressed={st.sharedPolicy === v} onClick={() => setSetting('sharedPolicy', v)}>{l}</button>)}
+      </div>
+    </div>
+  )
+}
+
 function DeviceDetails({ a, now }: { a: Agent; now: number }) {
   const s = useStore()
   const [open, setOpen] = useState(false)
@@ -123,6 +141,7 @@ export function DevicesSettings() {
         <Switch k="devicesAutoMerge" label="Merge a reinstalled agent into its old entry"
           help="On: when the agent is installed again on a computer LPL knows, the old entry is folded into the new one without asking. Off: both are listed and you merge them here." />
         <ExportsFolder />
+        <SharedPolicy />
         <span className="caps" style={{ marginTop: 10 }}>Devices</span>
         {s.agents.length ? s.agents.map(a => <DeviceDetails key={a.id} a={a} now={now} />)
           : <span className="small muted" style={{ padding: '6px 0' }}>No device has connected yet.</span>}
