@@ -5,6 +5,8 @@ export type SharedKind = 'style' | 'preset' | 'layout'
 export interface SharedItem {
   id: number; kind: SharedKind; operation: string; op_version: number; name: string; rev: number; seq: number; hash: string
   changed_at: number | null; device_id: string | null; device_name: string | null; deleted: boolean; size: number
+  /** the module's display name (presets; from module-names.json on the server), "" when not known */
+  module?: string
 }
 export interface SharedWaiting extends SharedItem { what: 'new' | 'changed' | 'deleted' }
 export interface SharedConflict extends SharedItem { candidate: { changed_at: number | null; deleted: boolean; hash: string | null; base_rev: number | null } }
@@ -24,12 +26,12 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 export function waitingLine(d: Pick<SharedDevice, 'phone' | 'waiting' | 'conflicts'>): string {
   const n = d.waiting.length + d.conflicts.length
   if (d.phone) return n ? `${n} waiting · updated from the app` : 'up to date · updated from the app'
-  return n ? `${n} styles, presets, layouts waiting` : 'styles, presets, layouts up to date'
+  return n === 1 ? '1 style, preset or layout waiting' : n ? `${n} styles, presets, layouts waiting` : 'styles, presets, layouts up to date'
 }
 
-/** "style", "preset · exposure", "module layout". */
-export function kindText(i: Pick<SharedItem, 'kind' | 'operation'>): string {
-  return i.kind === 'style' ? 'style' : i.kind === 'layout' ? 'module layout' : `preset · ${i.operation}`
+/** "style", "preset · color calibration" (the operation when the name is not known), "module layout". */
+export function kindText(i: Pick<SharedItem, 'kind' | 'operation' | 'module'>): string {
+  return i.kind === 'style' ? 'style' : i.kind === 'layout' ? 'module layout' : `preset · ${i.module || i.operation}`
 }
 
 /** What happened to a waiting item, from this device's point of view. */

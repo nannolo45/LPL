@@ -33,7 +33,7 @@ python web/tests/shared-check.py <python with server/requirements.txt> docs/shot
 ```
 
 ## Results
-- Server: **235 passed** (209 before; +20 `test_shared.py`, +6 `test_pc_agent_shared.py`).
+- Server: **238 passed** (209 before; +22 `test_shared.py`, +7 `test_pc_agent_shared.py`).
   The only edit to an existing test: `test_pc_agent.py` now expects caps `["batch", "cancel", "open", "versions", "shared"]`.
 - Hash vectors (`server/tests/fixtures/r11-hash-vectors.json`): server and agent both reproduce all three; the agent also
   reproduces them through a real `data.db` row (REAL, BLOB, NULL, non-ASCII) in `test_snapshot_picks_shared_items_and_matches_the_hash_vectors`.
@@ -47,7 +47,13 @@ python web/tests/shared-check.py <python with server/requirements.txt> docs/shot
   package with `darktable/module-names.json`), on commit 78b1122. The last
   run on `main` before this branch (45401676584) failed at "Get exiftool for Windows" (download), not related to this work.
 
-## Choices the contract leaves open (please confirm)
+## Review round 1 (supervisor)
+- Proposals 1-3 accepted; `docs/shared-r11.md` updated: `changed_at` = seconds since 1970; `hash_mismatch` 400; optional `&changed_at=` on DELETE (server uses it for newest wins, the agent sends it). Test `test_delete_carries_changed_at_for_newest_wins`.
+- Safety: the agent writes `data.db` only when `data_db_writable()`: a strict process check (a failed check = running) and no `data.db.lock` naming a live pid (a stale lock of a dead pid is ignored; an unreadable lock = locked). Test `test_never_writes_data_db_unless_surely_closed`.
+- No `unusable` on PCs; count only for the phone (answered).
+- Web: module display names ("preset · color calibration", from the server's module-names.json; `GET /api/shared/devices` adds `module`), and "1 style, preset or layout waiting". Screenshots refreshed.
+
+## Choices the contract leaves open (as first proposed)
 1. **`changed_at`**: the server takes seconds since 1970 (number) or an ISO 8601 text and stores and returns seconds.
    Proposal for PLAN 4.5: "changed_at = seconds since 1970, a number".
 2. **Hash check**: the server recomputes the hash of the body and answers `400 {"error": "hash_mismatch", "hash": …}` when the PUT's `hash` differs. Not in the contract; proposal to add it.

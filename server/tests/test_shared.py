@@ -282,3 +282,20 @@ def test_migrate_twice_changes_nothing(c):
         db.migrate(db.conn())
         db.migrate(db.conn())
     assert db.conn().execute("SELECT COUNT(*) FROM shared_items").fetchone()[0] == 1
+
+
+def test_delete_carries_changed_at_for_newest_wins(c):
+    a = put(c, PC, preset(), changed_at=1000).json()
+    put(c, PC2, preset())
+    put(c, PC, preset(params="11"), base_rev=1, changed_at=3000)
+    c.put("/api/prefs/settings", json={"value": {"sharedPolicy": "newest"}})
+    old = c.delete("/api/shared/%d?agent=%s&base_rev=1&changed_at=2000" % (a["id"], PC2["id"])).json()
+    assert old["decided"] == "theirs" and c.get("/api/shared/%d" % a["id"]).json()["deleted"] is False
+    new = c.delete("/api/shared/%d?agent=%s&base_rev=1&changed_at=4000" % (a["id"], PC2["id"])).json()
+    assert new["decided"] == "mine" and c.get("/api/shared/%d" % a["id"]).json()["changed_at"] == 4000.0
+
+
+def test_devices_page_names_the_module(c):
+    put(c, PC, preset())
+    it = c.get("/api/shared/devices").json()["items"][0]
+    assert it["operation"] == "channelmixerrgb" and it["module"] == "color calibration"

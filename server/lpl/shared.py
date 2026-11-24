@@ -159,6 +159,14 @@ def meta(r) -> dict:
             "device_name": r["device_name"], "deleted": bool(r["deleted"]), "size": r["size"]}
 
 
+def ui_meta(r) -> dict:
+    """meta for the web UI: also the module's display name ("color calibration" for channelmixerrgb; module-names.json)."""
+    from . import edits
+    m = meta(r)
+    m["module"] = edits.module_name(r["operation"]) if r["kind"] == "preset" else ""
+    return m
+
+
 def _next_seq(c) -> int:
     return (c.execute("SELECT COALESCE(MAX(seq),0) FROM shared_items").fetchone()[0] or 0) + 1
 
@@ -268,7 +276,7 @@ def waiting_for(c, aid: str) -> List[dict]:
             what = "deleted"
         else:
             what = "new" if st is None else "changed"
-        out.append(dict(meta(r), what=what))
+        out.append(dict(ui_meta(r), what=what))
     return out
 
 
@@ -277,7 +285,7 @@ def conflicts_of(c, aid: str) -> List[dict]:
     for k in c.execute("SELECT k.*, i.id AS iid FROM shared_candidates k JOIN shared_items i ON i.id=k.item_id WHERE k.agent_id=? "
                        "ORDER BY k.created", (aid,)).fetchall():
         r = _item(c, k["iid"])
-        out.append(dict(meta(r), candidate={"changed_at": k["changed_at"], "deleted": bool(k["deleted"]), "hash": k["hash"],
+        out.append(dict(ui_meta(r), candidate={"changed_at": k["changed_at"], "deleted": bool(k["deleted"]), "hash": k["hash"],
                                             "base_rev": k["base_rev"]}))
     return out
 
@@ -332,7 +340,7 @@ def shared_devices():
                 dots[aid] = "newest"
             else:
                 dots[aid] = "absent"
-        items.append(dict(meta(r), devices=dots))
+        items.append(dict(ui_meta(r), devices=dots))
     return {"policy": _policy_pc(), "devices": devices, "items": items}
 
 
@@ -417,7 +425,7 @@ def shared_put(agent: str = "", body: Dict[str, Any] = Body(...)):
 
 
 @router.delete("/api/shared/{iid:int}")
-def shared_delete(iid: int, agent: str = "", base_rev: int = -1):
+def shared_delete(iid: int, agent: str = "", base_rev: int = -1, changed_at: str = ""):
     aid = _agent_id(agent)
     with db.write_lock:
         c = db.conn()
@@ -429,7 +437,7 @@ def shared_delete(iid: int, agent: str = "", base_rev: int = -1):
             _set_state(c, aid, iid, r["rev"])
             c.commit()
             return {"id": iid, "rev": r["rev"], "seq": r["seq"], "decided": None}
-        now = time.time()
+        now = _time(changed_at) if changed_at else time.time()  # optional (PLAN 4.5): when the device deleted it
         if base_rev == r["rev"]:
             _new_revision(c, r, body=None, hsh=r["hash"], deleted=True, changed_at=now, aid=aid, dev=_device_name(c, aid))
             c.execute("DELETE FROM shared_candidates WHERE agent_id=? AND item_id=?", (aid, iid))

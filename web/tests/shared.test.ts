@@ -7,10 +7,12 @@ const w = (id: number, what: 'new' | 'changed' | 'deleted') => ({ id, what })
 test('device line: PCs count what waits, the phone updates from the app', () => {
   assert.equal(waitingLine({ phone: false, waiting: [w(1, 'new') as any, w(2, 'changed')], conflicts: [{} as any] }), '3 styles, presets, layouts waiting')
   assert.equal(waitingLine({ phone: false, waiting: [], conflicts: [] }), 'styles, presets, layouts up to date')
+  assert.equal(waitingLine({ phone: false, waiting: [w(1, 'new') as any], conflicts: [] }), '1 style, preset or layout waiting')
   assert.equal(waitingLine({ phone: true, waiting: [w(1, 'new') as any], conflicts: [] }), '1 waiting · updated from the app')
 })
 test('kind and what', () => {
   assert.equal(kindText({ kind: 'preset', operation: 'exposure' }), 'preset · exposure')
+  assert.equal(kindText({ kind: 'preset', operation: 'channelmixerrgb', module: 'color calibration' }), 'preset · color calibration')
   assert.equal(kindText({ kind: 'layout', operation: 'modulegroups' }), 'module layout')
   assert.equal(whatText({ what: 'deleted', device_name: 'Laptop', device_id: 'x' }), 'deleted on Laptop')
   assert.equal(whatText({ what: 'changed', device_name: 'Laptop', device_id: 'x' }), 'changed')

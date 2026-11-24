@@ -79,6 +79,7 @@ class Dt:
 
 def make_agent(agent_mod, base_url, tmp_path, monkeypatch, aid="pc-shared-agent", name="Desktop"):
     monkeypatch.setattr(agent_mod, "darktable_running", lambda: Dt.running)
+    monkeypatch.setattr(agent_mod, "darktable_running_strict", lambda: Dt.running)
     d = tmp_path / aid
     d.mkdir(exist_ok=True)
     monkeypatch.setattr(agent_mod, "STATE_FILE", d / "state.json")
@@ -257,3 +258,37 @@ def test_deletion_delete_here_and_keep(agent_mod, base_url, fresh, tmp_path, mon
     two = server_items(fresh)["two"]
     assert two["deleted"] is False and two["rev"] == 3
     assert {x["name"]: x["what"] for x in devices(fresh, "pc-shared-a")["waiting"]} == {"two": "changed"}
+
+
+def test_never_writes_data_db_unless_surely_closed(agent_mod, base_url, fresh, tmp_path, monkeypatch):
+    """A failed process check counts as running; darktable's data.db.lock with a live pid blocks; a stale one does not."""
+    import os
+    import subprocess
+    Dt.running = False
+    strict = agent_mod.darktable_running_strict  # the real one (make_agent replaces it)
+    a, pa = make_agent(agent_mod, base_url, tmp_path, monkeypatch, "pc-shared-a", "Desktop")
+    b, pb = make_agent(agent_mod, base_url, tmp_path, monkeypatch, "pc-shared-b", "Laptop")
+    monkeypatch.setattr(agent_mod, "darktable_running_strict", strict)
+    add_preset(pa, "bright")
+    a.shared.tick(force=True)
+    fresh.post("/api/shared/update", json={"agent": "pc-shared-b", "ids": [server_items(fresh)["bright"]["id"]]})
+
+    def broken(*args, **kw):
+        raise OSError("no process list")
+    assert agent_mod.darktable_running() is False  # the plain check (patched by the tests) ...
+    monkeypatch.setattr(agent_mod.subprocess, "run", broken)
+    assert agent_mod.darktable_running_strict() is True  # ... but a failed strict check counts as running
+    beat(b)
+    b.shared.tick()
+    assert b.shared.update == "waiting_for_darktable" and rows(pb, "SELECT COUNT(*) FROM presets")[0][0] == 0
+    monkeypatch.setattr(agent_mod.subprocess, "run", subprocess.run)
+    monkeypatch.setattr(agent_mod, "darktable_running_strict", lambda: False)
+    lock = Path(str(pb) + ".lock")
+    lock.write_text(str(os.getpid()))  # a live pid: darktable holds data.db
+    b.shared.tick()
+    assert b.shared.update == "waiting_for_darktable" and rows(pb, "SELECT COUNT(*) FROM presets")[0][0] == 0
+    dead = subprocess.Popen(["true"]); dead.wait()
+    lock.write_text(str(dead.pid))  # stale lock of a darktable that is gone: not running
+    assert agent_mod.data_db_locked(pb) is False
+    b.shared.tick()
+    assert b.shared.update is None and rows(pb, "SELECT name FROM presets") == [("bright",)]

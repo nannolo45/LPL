@@ -319,6 +319,55 @@ def darktable_running() -> bool:
         return False
 
 
+def darktable_running_strict() -> bool:
+    """darktable_running() for writing data.db: a check that fails counts as "running"."""
+    try:
+        if IS_WIN:
+            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq darktable.exe", "/FO", "CSV", "/NH"],
+                                 capture_output=True, text=True, creationflags=NO_WINDOW, timeout=20)
+            return out.returncode != 0 or "darktable.exe" in out.stdout.lower()
+        out = subprocess.run(["pgrep", "-x", "darktable"], capture_output=True, timeout=20)
+        return out.returncode != 1  # 0 = found, 1 = none, anything else = the check failed
+    except Exception:
+        return True
+
+
+def pid_alive(pid: int) -> bool:
+    """Is there a process with this id? When it cannot be told: yes."""
+    if pid <= 0:
+        return False
+    try:
+        if IS_WIN:
+            out = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/FO", "CSV", "/NH"],
+                                 capture_output=True, text=True, creationflags=NO_WINDOW, timeout=20)
+            return out.returncode != 0 or ('"%d"' % pid) in out.stdout
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return True
+
+
+def data_db_locked(path: Path) -> bool:
+    """darktable's own lock file beside data.db (data.db.lock, holding its pid) names a live process. A lock whose pid
+    is gone is stale (darktable crashed): not locked. A lock that cannot be read counts as locked."""
+    lock = Path(str(path) + ".lock")
+    if not lock.exists():
+        return False
+    try:
+        txt = lock.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return True
+    m = re.match(r"\d+", txt)
+    return pid_alive(int(m.group(0))) if m else True
+
+
+def data_db_writable(path: Path) -> bool:
+    """data.db may be written only when darktable is surely closed."""
+    return not darktable_running_strict() and not data_db_locked(path)
+
+
 def bridge_alive() -> bool:
     try:
         return time.time() - (BRIDGE / "alive").stat().st_mtime < 12
@@ -738,7 +787,7 @@ class SharedSync:
         running = darktable_running()
         job = self.data.get("job")
         if job:
-            if running:
+            if not data_db_writable(self.path()):
                 self.update = "waiting_for_darktable"
             else:
                 self.apply_job(job)
@@ -827,7 +876,7 @@ class SharedSync:
 
     def delete(self, key, st):
         try:
-            r = self.agent.srv.json("DELETE", "/api/shared/%d?agent=%s&base_rev=%d" % (st["id"], urllib.parse.quote(self.agent.cfg["id"]), st.get("rev") or 0))
+            r = self.agent.srv.json("DELETE", "/api/shared/%d?agent=%s&base_rev=%d&changed_at=%.3f" % (st["id"], urllib.parse.quote(self.agent.cfg["id"]), st.get("rev") or 0, time.time()))
         except urllib.error.HTTPError as e:
             if e.code == 409:
                 st["state"] = "conflict"
@@ -872,7 +921,7 @@ class SharedSync:
             for iid in p.get("delete") or []:
                 g = got[iid]
                 deletes.append((g["kind"], g["operation"], g["op_version"], g["name"]))
-            if darktable_running():  # started again meanwhile: wait
+            if not data_db_writable(self.path()):  # started again meanwhile (or not surely closed): wait
                 self.update = "waiting_for_darktable"
                 return
             log.info("shared update: %d written, %d deleted, %d kept", len(writes), len(deletes), len(p.get("keep") or []))
