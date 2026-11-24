@@ -83,7 +83,7 @@ jobs:
           $out = "lpl-agent-windows"
           New-Item -ItemType Directory -Force -Path "$out\dist", "$out\darktable" | Out-Null
           Copy-Item agent\dist\lpl-agent.exe, agent\dist\lpl-agentw.exe "$out\dist\"
-          Copy-Item agent\darktable\lpl_bridge.lua "$out\darktable\"
+          Copy-Item agent\darktable\lpl_bridge.lua, agent\darktable\module-names.json "$out\darktable\"
           Copy-Item exiftool "$out\exiftool" -Recurse
           Copy-Item agent\install-windows.ps1, agent\README.md "$out\"
           Compress-Archive -Path "$out\*" -DestinationPath lpl-agent-windows.zip -Force
