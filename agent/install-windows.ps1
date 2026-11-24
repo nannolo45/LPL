@@ -37,6 +37,7 @@ New-Item -ItemType Directory -Force -Path $dest | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $dest "darktable") | Out-Null
 Copy-Item (Join-Path $here "darktable\lpl_bridge.lua") (Join-Path $dest "darktable\lpl_bridge.lua") -Force
 Copy-Item (Join-Path $here "darktable\module-names.json") (Join-Path $dest "darktable\module-names.json") -Force  # which presets are shared (R11)
+Copy-Item (Join-Path $here "darktable\R11-excluded-names.json") (Join-Path $dest "darktable\R11-excluded-names.json") -Force  # names not shared (R11)
 if ($usePython) {
     Copy-Item (Join-Path $here "lpl_agent.py") (Join-Path $dest "lpl_agent.py") -Force
 }

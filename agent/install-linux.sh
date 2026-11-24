@@ -7,6 +7,7 @@ mkdir -p "$dest/darktable"
 cp "$here/lpl_agent.py" "$dest/"
 cp "$here/darktable/lpl_bridge.lua" "$dest/darktable/"
 cp "$here/darktable/module-names.json" "$dest/darktable/"  # which presets are shared (R11)
+cp "$here/darktable/R11-excluded-names.json" "$dest/darktable/"  # names not shared (R11)
 command -v python3 >/dev/null || { echo "python3 is required"; exit 1; }
 
 python3 "$dest/lpl_agent.py" --setup

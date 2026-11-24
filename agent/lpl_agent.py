@@ -577,6 +577,21 @@ def module_operations() -> set:
     return set()
 
 
+def excluded_names() -> tuple:
+    """(style_prefix, layout_names) from R11-excluded-names.json in the agent's darktable folder (PLAN.md 4.5, not
+    shared): styles starting with the prefix and layouts with one of the names are skipped. Defaults when missing."""
+    for d in (Path(__file__).resolve().parent / "darktable", Path(sys.executable).resolve().parent / "darktable",
+              _bundle_dir() / "darktable"):
+        f = d / "R11-excluded-names.json"
+        if f.is_file():
+            try:
+                j = json.loads(f.read_text(encoding="utf-8"))
+                return str(j.get("style_prefix") or "_l10n_"), {str(n) for n in j.get("layout_names") or []}
+            except (OSError, ValueError):
+                pass
+    return "_l10n_", set()
+
+
 def shared_canonical(obj) -> bytes:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
@@ -631,8 +646,9 @@ def darktable_data_db(cfg: dict) -> Path:
 
 def read_shared(db, ops: set) -> dict:
     """Every shared item of an open data.db connection: key -> body. Presets of processing modules and module layouts
-    with writeprotect = 0, and every style that is not one of darktable's own (_l10n_...)."""
+    with writeprotect = 0, and every style that is not one of darktable's own, minus the names of R11-excluded-names.json."""
     out = {}
+    style_prefix, layout_names = excluded_names()
     db.row_factory = None
     pcols = [r[1] for r in db.execute("PRAGMA table_info(presets)")]
     if pcols:
@@ -642,7 +658,7 @@ def read_shared(db, ops: set) -> dict:
                 continue
             op = d.get("operation") or ""
             kind = "layout" if op == LAYOUT_OP else ("preset" if op in ops else None)
-            if not kind:
+            if not kind or (kind == "layout" and d["name"] in layout_names):
                 continue
             body = {"kind": kind, "row": {k: _to_json(v) for k, v in d.items() if k != "writeprotect"}}
             out[shared_key(kind, op, d.get("op_version"), d["name"])] = body
@@ -652,7 +668,7 @@ def read_shared(db, ops: set) -> dict:
         for row in db.execute("SELECT * FROM styles ORDER BY id"):
             s = dict(zip(scols, row))
             name = s.get("name")
-            if not name or name.startswith("_l10n_"):
+            if not name or name.startswith(style_prefix):
                 continue
             items = [{k: _to_json(v) for k, v in zip(icols, r) if k != "styleid"}
                      for r in db.execute("SELECT * FROM style_items WHERE styleid=? ORDER BY num", (s["id"],))]

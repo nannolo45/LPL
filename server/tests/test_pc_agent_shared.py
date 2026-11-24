@@ -143,6 +143,22 @@ def test_snapshot_picks_shared_items_and_matches_the_hash_vectors(agent_mod, tmp
     assert agent_mod.snapshot_shared(tmp_path / "missing.db", set()) is None
 
 
+def test_excluded_names_are_not_shared_and_the_file_ships(agent_mod, tmp_path):
+    names = json.loads((Path(agent_mod.__file__).resolve().parent / "darktable" / "R11-excluded-names.json").read_text(encoding="utf-8"))
+    assert "_source" in names and names["style_prefix"] and "Last modified layout" in names["layout_names"]
+    path = make_db(tmp_path / "data.db")
+    add_preset(path, "Last modified layout", op="modulegroups", ver=1)
+    add_preset(path, "zuletzt geändertes Layout", op="modulegroups", ver=1)
+    add_preset(path, "zuletzt geändertes Layout", op="modulegroups", ver=1)
+    add_preset(path, "my layout", op="modulegroups", ver=1)
+    add_style(path, names["style_prefix"] + "darktable|x", [])
+    add_style(path, "my style", [])
+    snap = agent_mod.snapshot_shared(path, agent_mod.module_operations())
+    assert sorted(json.loads(k)[3] for k in snap) == ["my layout", "my style"]
+    for f in ("agent/install-linux.sh", "agent/install-windows.ps1", ".github/workflows/agent-windows.yml"):
+        assert "R11-excluded-names.json" in (Path(__file__).resolve().parents[2] / f).read_text(encoding="utf-8")
+
+
 def test_uploads_changes_and_deletions(agent_mod, base_url, fresh, tmp_path, monkeypatch):
     Dt.running = False
     a, path = make_agent(agent_mod, base_url, tmp_path, monkeypatch)
