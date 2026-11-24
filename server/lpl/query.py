@@ -1,4 +1,5 @@
 """Filtering and multi-level sorting, done in SQL so 20k+ photos stay fast."""
+import re
 from typing import Any, Dict, List, Tuple
 
 LABEL_MIN = "(SELECT MIN(label) FROM photo_labels pl WHERE pl.photo_id=p.id)"
@@ -61,6 +62,21 @@ SELECT_COLS = (
 )
 
 
+def name_tokens(v) -> List[str]:
+    """The names in a typed or pasted list (spaces, commas, semicolons or new lines between them), without their
+    extension, so the export's name finds the RAW; at most 2000."""
+    if isinstance(v, str):
+        v = re.split(r"[\s,;]+", v)
+    out: List[str] = []
+    for x in v or []:
+        x = str(x).strip().strip("\"'").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        if "." in x and 1 <= len(x.rsplit(".", 1)[1]) <= 5 and x.rsplit(".", 1)[0]:
+            x = x.rsplit(".", 1)[0]
+        if x and x not in out:
+            out.append(x)
+    return out[:2000]
+
+
 def build_where(f: Dict[str, Any]) -> Tuple[str, List[Any], str]:
     where = ["p.missing=0"]
     args: List[Any] = []
@@ -72,6 +88,10 @@ def build_where(f: Dict[str, Any]) -> Tuple[str, List[Any], str]:
             "(p.relpath LIKE ? ESCAPE '\\' OR p.camera LIKE ? ESCAPE '\\' OR p.lens LIKE ? ESCAPE '\\' OR p.title LIKE ? ESCAPE '\\' "
             "OR EXISTS (SELECT 1 FROM photo_tags pt JOIN tags t ON t.id=pt.tag_id WHERE pt.photo_id=p.id AND (t.path LIKE ? ESCAPE '\\' OR t.synonyms LIKE ? ESCAPE '\\')))")
         args += [like] * 6
+    names = name_tokens(f.get("names"))
+    if names:  # file names, typed or pasted (any of them; "DSCF3215.jpg" finds DSCF3215.RAF)
+        where.append("(" + " OR ".join(["p.filename LIKE ? ESCAPE '\\'"] * len(names)) + ")")
+        args += ["%" + n.replace("%", "\\%").replace("_", "\\_") + "%" for n in names]
     r = f.get("rating") or "all"
     if r == "unr":
         where.append("p.rating=0")
