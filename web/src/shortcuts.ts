@@ -40,6 +40,7 @@ export const ACTIONS: Action[] = [
   { id: 'pan', label: 'Move around (hold and drag)', scope: 'board', keys: ['Space'] },
   { id: 'fitAll', label: 'Fit everything on screen', scope: 'board', keys: ['Shift+1'] },
   { id: 'fitSel', label: 'Zoom to the selection', scope: 'board', keys: ['Shift+2'] },
+  { id: 'findPhoto', label: 'Find a photo by name (board and strip)', scope: 'board', keys: ['Ctrl+F'] },
   { id: 'nextFrame', label: 'Go to the next frame', scope: 'board', keys: [']'] },
   { id: 'prevFrame', label: 'Go to the previous frame', scope: 'board', keys: ['['] },
   { id: 'newFrame', label: 'Frame tool (drag to draw a frame)', scope: 'board', keys: ['Shift+F'] },

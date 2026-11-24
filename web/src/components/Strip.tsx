@@ -13,6 +13,7 @@ import { EditOnPhone } from './PhoneEdit'
 import { FolderIcon } from './SeriesTree'
 import { VersionBadge } from './Versions'
 import { byDay, tray, useTray } from '../tray'
+import { FindCount, FindReq, useFind } from '../find'
 
 const hexA = (hex: string, a: number) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})` }
 const LinkIcon = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 14a4.5 4.5 0 006.4 0l3-3a4.5 4.5 0 00-6.4-6.4l-1.2 1.2" /><path d="M14 10a4.5 4.5 0 00-6.4 0l-3 3a4.5 4.5 0 006.4 6.4l1.2-1.2" /></svg>
@@ -52,13 +53,15 @@ function NameEdit({ value, label, onDone }: { value: string; label: string; onDo
 type LaneProps = {
   lane: Lane; shown: Photo[]; selKey: string; folder: boolean; linked: boolean; canReorder: boolean; phone: boolean; menu: MenuItem[] | null; depth?: number
   editing: boolean; canRename: boolean; act: LaneActs; trayN: number
+  foundKey?: string   // photos matching the find box
 }
 /** What a lane's header can do (one object for all lanes, so a lane is drawn again only when its own things change). */
 type LaneActs = { edit: (key: string | null) => void; rename: (key: string, name: string | null) => void; trayAdd: (key: string) => void }
 /** One lane: its header and its photos in a row that scrolls sideways. Drawn again only when its own photos,
  *  numbers or selection change; everything that happens while dragging is done on the page directly (StripView). */
-const LaneRow = memo(function LaneRow({ lane, shown, selKey, folder, linked, canReorder, phone, menu, depth = 0, editing, canRename, act, trayN }: LaneProps) {
+const LaneRow = memo(function LaneRow({ lane, shown, selKey, folder, linked, canReorder, phone, menu, depth = 0, editing, canRename, act, trayN, foundKey }: LaneProps) {
   const sel = useMemo(() => new Set(selKey ? selKey.split(',').map(Number) : []), [selKey])
+  const found = useMemo(() => new Set(foundKey ? foundKey.split(',').map(Number) : []), [foundKey])
   const c = lane.color
   const n = shown.length
   return (
@@ -80,7 +83,7 @@ const LaneRow = memo(function LaneRow({ lane, shown, selKey, folder, linked, can
       </div>
       <div className="srow" data-row={lane.key}>
         {shown.map(p => (
-          <button key={p.id} type="button" className={'sth' + (sel.has(p.id) ? ' sel' : '') + (p.hidden ? ' hid' : '')} data-id={p.id} aria-label={`${num2(p.num) || (p.hidden ? 'hidden' : 'not in the order')} ${p.filename}`} aria-pressed={sel.has(p.id)}>
+          <button key={p.id} type="button" className={'sth' + (sel.has(p.id) ? ' sel' : '') + (found.has(p.id) ? ' found' : '') + (p.hidden ? ' hid' : '')} data-id={p.id} aria-label={`${num2(p.num) || (p.hidden ? 'hidden' : 'not in the order')} ${p.filename}`} aria-pressed={sel.has(p.id)}>
             <span className="box"><img src={thumbUrl(p)} alt="" draggable={false} loading="lazy" />
               <VersionBadge p={p} />
               {p.hidden ? <span className="num maybe">hidden</span> : <span className={'num' + (p.num ? '' : ' maybe')}>{num2(p.num) || '?'}</span>}</span>
@@ -109,13 +112,15 @@ type DragState = {
  *  thumbnails in order. Drag a photo to another place or lane, several at once with Ctrl/Shift, a lane by its
  *  handle; on a touch screen press and hold first. While dragging nothing is drawn again by React: the lifted
  *  photo, the drop mark and the note next to the pointer are moved on the page directly. */
-export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext, onAdded }: {
+export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext, onAdded, find, onFind }: {
   target: Target; name: string; folder: SeriesFolder | null; ops: SeriesOps
   onInfo?: (i: StripInfo) => void; onNewSeries?: (ids?: number[]) => void
   /** filled by the strip: lets the photo panel drag photos in */
   ext?: React.MutableRefObject<ExtDrag | null>
   /** photos came in from outside (the panel shows them as placed) */
   onAdded?: (ids: number[]) => void
+  /** find a photo by name (the box is in the Series view's header) */
+  find?: FindReq; onFind?: (c: FindCount) => void
 }) {
   const s = useStore()
   const rev = useSeriesRev()
@@ -157,6 +162,32 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
   const byId = useMemo(() => new Map(all.map(p => [p.id, p])), [all])
   const laneOf = useMemo(() => { const m = new Map<number, string>(); for (const l of lanes) for (const p of l.photos) m.set(p.id, l.key); return m }, [lanes])
   const selHere = s.sel.filter(id => byId.has(id))
+  // find by name, in the order the lanes are shown (a folder with subfolders: the tree's order)
+  const findList = useMemo(() => {
+    const tree = data?.tree
+    if (!isFolder || !tree?.length) return all
+    const at = new Map<number, number>(); tree.forEach((e, i) => { if (e.series != null) at.set(e.series, i) })
+    const rank = (l: Lane) => (l.series && at.has(l.series.id) ? at.get(l.series.id)! : 1e9)
+    return [...lanes].sort((a, b) => rank(a) - rank(b)).flatMap(l => shownOf.get(l.key) || [])
+  }, [all, lanes, shownOf, data?.tree, isFolder])
+  const allPhotos = useMemo(() => lanes.flatMap(l => l.photos), [lanes])
+  const found = useFind({
+    list: findList, all: allPhotos, req: find, active: true, onCount: onFind,
+    reveal: p => {
+      s.setSel([p.id]); anchor.current = p.id
+      // inside a folded folder: unfold it and the folders around it
+      const l = lanes.find(x => x.key === laneOf.get(p.id))
+      const up: number[] = []
+      for (let f = l?.folder_id ?? null, n = 0; f != null && n < 50; f = (data?.groups || []).find(g => g.id === f)?.parent_id ?? null, n++) up.push(f)
+      if (up.some(f => folded.includes(f))) setFolded(o => { const v = o.filter(x => !up.includes(x)); try { localStorage.setItem('lpl.strip.folded', JSON.stringify(v)) } catch { /* ignore */ } return v })
+      const go = (tries: number) => {
+        const el = root.current?.querySelector<HTMLElement>(`.sth[data-id="${p.id}"]`)
+        if (el) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' })
+        else if (tries > 0) window.setTimeout(() => go(tries - 1), 60)
+      }
+      requestAnimationFrame(() => go(10))
+    },
+  })
   const state = useRef({ lanes, shownOf, all, byId, laneOf, sel: s.sel, selHere })
   state.current = { lanes, shownOf, all, byId, laneOf, sel: s.sel, selHere }
 
@@ -681,7 +712,7 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
       {(() => {
         const row = (l: Lane, depth = 0) => {
           const shown = shownOf.get(l.key) || []
-          return <LaneRow key={l.key} lane={l} shown={shown} selKey={shown.filter(p => sel.has(p.id)).map(p => p.id).join(',')} folder={isFolder} linked={linked} depth={depth}
+          return <LaneRow key={l.key} lane={l} shown={shown} selKey={shown.filter(p => sel.has(p.id)).map(p => p.id).join(',')} foundKey={found.size ? shown.filter(p => found.has(p.id)).map(p => p.id).join(',') : ''} folder={isFolder} linked={linked} depth={depth}
             canReorder={isFolder ? lanes.length > 1 || groups.length > 0 : linked && l.frame && !l.maybe && lanes.filter(x => x.frame && !x.maybe).length > 1} phone={phone} menu={laneMenu(l)}
             editing={editKey === l.key} canRename={canRename(l)} act={stableActs} trayN={trayOn ? trayPick().length : 0} />
         }

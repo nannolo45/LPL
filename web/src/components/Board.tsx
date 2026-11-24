@@ -11,6 +11,7 @@ import { LABELS } from '../fields'
 import { EditOnPhone } from './PhoneEdit'
 import { VersionBadge } from './Versions'
 import { selectionIds } from '../devices'
+import { FindCount, FindReq, useFind } from '../find'
 
 type Item = Photo & { x: number; y: number }
 type Tool = 'select' | 'note' | 'arrow' | 'frame'
@@ -103,7 +104,11 @@ export interface BoardInfo { hidden: number; maybe: number }
 
 /** The board of one series, or the shared board of a folder of series (each frame is then one of its series).
  *  `active` false: kept but not shown (the Series view is in Strip mode): keys are not listened to. */
-export function BoardView({ target, active = true, onInfo }: { target: Target; active?: boolean; onInfo?: (i: BoardInfo) => void }) {
+export function BoardView({ target, active = true, onInfo, find, onFind }: {
+  target: Target; active?: boolean; onInfo?: (i: BoardInfo) => void
+  /** find a photo by name (the box is in the Series view's header) */
+  find?: FindReq; onFind?: (c: FindCount) => void
+}) {
   const s = useStore()
   const sid: number | null = target.id
   const isFolder = target.kind === 'folder'
@@ -275,6 +280,15 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
     return items.filter(it => !it.hidden && it.num != null).sort((a, b) => (lane.get(a.series_id ?? -1) ?? 0) - (lane.get(b.series_id ?? -1) ?? 0) || a.num! - b.num!)
   }, [items, lanes])
   const pos = useMemo(() => new Map(order.map(it => [it.id, it.num!])), [order])
+  // find by name: in reading order first, then the photos outside the order, row by row
+  const findList = useMemo(() => {
+    const rest = shown.filter(it => !pos.has(it.id)).sort((a, b) => Math.round(a.y / 100) - Math.round(b.y / 100) || a.x - b.x)
+    return [...order, ...rest]
+  }, [shown, order, pos])
+  const found = useFind({
+    list: findList, all: items, req: find, active, onCount: onFind,
+    reveal: it => { s.setSel([it.id]); setSelShapes([]); setSelFrames([]); const r = itemRect(it); showRect({ x: r.x - 150, y: r.y - 100, w: 450, h: 305 }, Math.max(zoomRef.current, .6)) },
+  })
   useEffect(() => { onInfo?.({ hidden: hiddenCount, maybe: isFolder ? 0 : items.length - hiddenCount - order.length }) }, [hiddenCount, items.length, order.length])
 
   const save = useCallback((its: Item[], frs: Frame[], withFrames: boolean) => {
@@ -937,7 +951,7 @@ export function BoardView({ target, active = true, onInfo }: { target: Target; a
                       const { w, h } = size(it)
                       const n = pos.get(it.id)
                       return (
-                        <button key={it.id} className={'bitem' + (selSet.has(it.id) ? ' sel' : '') + (it.hidden ? ' hid' : '') + (moving?.photos.has(it.id) ? ' moving' : '')} style={{ left: it.x, top: it.y, width: w, height: h, zIndex: selSet.has(it.id) ? 5 : 1, cursor: grab }}
+                        <button key={it.id} className={'bitem' + (selSet.has(it.id) ? ' sel' : '') + (found.has(it.id) ? ' found' : '') + (it.hidden ? ' hid' : '') + (moving?.photos.has(it.id) ? ' moving' : '')} style={{ left: it.x, top: it.y, width: w, height: h, zIndex: selSet.has(it.id) ? 5 : 1, cursor: grab }}
                           onPointerDown={e => onObjDown(e, { photo: it.id })} onDoubleClick={e => { e.stopPropagation(); if (tool === 'select') photoDouble(it.id) }} aria-label={it.filename + (n ? `, position ${n}` : ', maybe')}>
                           <img src={thumbUrl(it)} alt="" draggable={false} />
                           <VersionBadge p={it} />
