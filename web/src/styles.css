@@ -859,3 +859,5 @@ td.devcheckcell, th.devcheckcell { width: 34px; padding-right: 0; }
 .bnote-find { position: absolute; left: 10px; bottom: 10px; border: 0; border-radius: 5px; padding: 4px 10px; background: #1d1d1f; color: #fff; font-size: 12px; cursor: pointer; }
 .bnote-find:hover { background: var(--accent); color: #1d1d1f; }
 .mfind-alts { max-width: 100%; overflow-x: auto; padding-bottom: 4px; }
+.mfind-look .backdrop { z-index: 60; }
+.mfind-look .dialog { z-index: 61; }

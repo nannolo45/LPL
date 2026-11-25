@@ -878,7 +878,13 @@ def missing_search(key: str, body: Dict[str, Any] = Body(...)):
     r = _missing(key)
     names = query.name_tokens(body.get("names"))
     scope = {k: body.get(k) for k in ("folders", "date_from", "date_to") if body.get(k)}
-    if names:
+    filt = body.get("filters")
+    if isinstance(filt, dict) and filt:  # the Add photos panel's criteria (folders, names, dates, rating, tags…)
+        f = {k: v for k, v in filt.items() if k not in ("series", "ids", "not_in_series", "series_folder")}
+        f["show_hidden"] = True
+        where, args, join = query.build_where(f)
+        pool = [x["id"] for x in db.conn().execute("SELECT p.id FROM photos p%s WHERE %s AND COALESCE(p.missing,0)=0" % (join, where), args).fetchall()]
+    elif names:
         f: Dict[str, Any] = {"names": names, "show_hidden": True, "subfolders": True, **scope}
         where, args, join = query.build_where(f)
         pool = [x["id"] for x in db.conn().execute("SELECT p.id FROM photos p%s WHERE %s LIMIT 5000" % (join, where), args).fetchall()]
