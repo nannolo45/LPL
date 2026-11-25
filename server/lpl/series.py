@@ -18,6 +18,7 @@ Strip edits go through `strip/move`; on a linked board they re-flow the frame in
 uses (CELL_W x CELL_H cells; a frame grows, what lies below is pushed down) and the order is then read back
 from the board, so the two can not disagree."""
 import json
+import logging
 import math
 import time
 from typing import Any, Dict, List, Optional
@@ -263,9 +264,43 @@ def _round(v: float) -> int:
     return math.floor(v + 0.5)
 
 
-def frames_sorted(frames: list) -> list:
-    """Frames in reading order: top to bottom in bands of 100, then left to right (as the web board always did)."""
+def _flat_sorted(frames: list) -> list:
     return sorted(frames, key=lambda f: (_round(f["y"] / 100), f["x"]))
+
+
+def contains(g: dict, f: dict) -> bool:
+    """Frame g holds frame f: f lies within g (a pixel of slack) and g is the bigger one."""
+    return (g is not f and g["x"] - 1 <= f["x"] and g["y"] - 1 <= f["y"] and f["x"] + f["w"] <= g["x"] + g["w"] + 1
+            and f["y"] + f["h"] <= g["y"] + g["h"] + 1 and (g["w"] * g["h"], -(g.get("id") or 0)) > (f["w"] * f["h"], -(f.get("id") or 0)))
+
+
+def frame_parents(frames: list) -> Dict[int, Optional[dict]]:
+    """id(frame) -> the smallest frame holding it (None at the top)."""
+    out: Dict[int, Optional[dict]] = {}
+    for f in frames:
+        best = None
+        for g in frames:
+            if contains(g, f) and (best is None or g["w"] * g["h"] < best["w"] * best["h"]):
+                best = g
+        out[id(f)] = best
+    return out
+
+
+def frames_sorted(frames: list) -> list:
+    """Frames in reading order: top to bottom in bands of 100, then left to right (as the web board always did);
+    a frame inside another comes right after it, its own inner frames in the same order (a tree, read depth first)."""
+    par = frame_parents(frames)
+    kids: Dict[int, list] = {}
+    for f in frames:
+        kids.setdefault(id(par[id(f)]) if par[id(f)] is not None else 0, []).append(f)
+    out: list = []
+
+    def walk(key):
+        for f in _flat_sorted(kids.get(key, [])):
+            out.append(f)
+            walk(id(f))
+    walk(0)
+    return out if len(out) == len(frames) else _flat_sorted(frames)
 
 
 def inside(it: dict, f: dict) -> bool:
@@ -273,14 +308,12 @@ def inside(it: dict, f: dict) -> bool:
     return f["x"] <= cx <= f["x"] + f["w"] and f["y"] <= cy <= f["y"] + f["h"]
 
 
-def owner(it: dict, fr: list, innermost: bool = False) -> Optional[dict]:
-    """The frame a photo lies in (its centre). In several: the first in reading order (a series' own board, as
-    always), or the smallest (a folder's board: a frame drawn inside a series' frame takes its photos)."""
+def owner(it: dict, fr: list, innermost: bool = True) -> Optional[dict]:
+    """The frame a photo lies in (its centre); in several, the smallest: a frame inside another takes its photos
+    (on a folder's board and, since 25 Nov 2026, on a series' own board too: nested frames are chapters)."""
     hit = None
     for f in fr:
         if inside(it, f):
-            if not innermost:
-                return f
             if hit is None or f["w"] * f["h"] < hit["w"] * hit["h"]:
                 hit = f
     return hit
@@ -686,6 +719,28 @@ def link_restore(c, kind: str, tid: int, token: int) -> tuple:
 
 
 # ---------------------------------------------------------------- order from a board (the link)
+def resync_nested_once() -> None:
+    """Once (25 Nov 2026): frames inside frames became chapters of their own on a series' board; read the order
+    again of the linked series whose board has a frame inside another."""
+    if db.get_setting("resync_nested_v1"):
+        return
+    try:
+        with db.write_lock:
+            c = db.conn()
+            for r in c.execute("SELECT * FROM series").fetchall():
+                s = dict(r)
+                if s.get("folder_id") or not is_linked(s):
+                    continue
+                b = Board(c, "s", s["id"])
+                par = frame_parents(b.frames)
+                if any(p is not None for p in par.values()):
+                    sync_series(c, s["id"])
+            c.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('resync_nested_v1', '1')")
+            c.commit()
+    except Exception:  # never in the way of starting
+        logging.getLogger("lpl.series").exception("resync nested")
+
+
 def sync_series(c, sid: int) -> None:
     """A linked single series: its order is its board's reading order. Frames in order, rows inside a frame,
     then the photos outside every frame; photos in a "maybe" frame have no place in the order."""
@@ -1777,7 +1832,11 @@ def series_lanes(c, s) -> list:
             outside.append(it)
         else:
             groups.setdefault(id(f), []).append(it)
-    lanes = [("f%d" % f["id"], f, [it["id"] for it in in_rows(groups.get(id(f), []))]) for f in fr if not f["maybe"]]
+    par = frame_parents(fr)
+    holders = {id(p) for p in par.values() if p is not None}
+    # a frame that only holds other frames is no chapter of its own: its frames are
+    lanes = [("f%d" % f["id"], f, [it["id"] for it in in_rows(groups.get(id(f), []))]) for f in fr
+             if not f["maybe"] and not (id(f) in holders and not groups.get(id(f)))]
     if outside or not lanes:
         lanes.append(("out", None, [it["id"] for it in in_rows(outside)]))
     lanes += [("f%d" % f["id"], f, [it["id"] for it in in_rows(groups.get(id(f), []))]) for f in fr if f["maybe"]]

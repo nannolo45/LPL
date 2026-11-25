@@ -76,6 +76,15 @@ def test_preview_and_import(client, monkeypatch):
     arrow = next(s for s in b["shapes"] if s["kind"] == "arrow")
     assert arrow["b"]["photo"] == a["id"] and arrow["text"] == "this one"
     assert sorted(it["num"] for it in b["items"] if it["num"]) == [1, 2, 3]
+    # a frame inside another is a chapter of its own (strip lane), right after the frame holding it
+    lanes = client.get("/api/series/%d/strip" % sid).json()["lanes"]
+    assert [(l["label"], [p["filename"] for p in l["photos"]]) for l in lanes] == [("Walk", ["IMG_0001.jpg", "IMG_0002.jpg"]), ("Lake", ["IMG_0003.jpg"])]
+    # a frame that only holds frames is no lane
+    from lpl import series
+    outer = {"x": 0, "y": 0, "w": 1000, "h": 1000, "id": 1}
+    a, b2 = {"x": 10, "y": 10, "w": 300, "h": 300, "id": 2}, {"x": 400, "y": 10, "w": 300, "h": 300, "id": 3}
+    top = {"x": 1200, "y": 0, "w": 300, "h": 300, "id": 4}
+    assert [f["id"] for f in series.frames_sorted([top, b2, outer, a])] == [1, 2, 3, 4]
     assert client.post("/api/miro/import", json={"key": p["key"]}).status_code == 410
     client.delete("/api/miro/token")
     assert not client.get("/api/miro").json()["has_token"]
@@ -113,7 +122,11 @@ def test_untitled_pictures_by_picture(client, monkeypatch):
     assert r.status_code == 200, r.text
     p = r.json()
     assert p["state"] == "done" and p["matched"] == len(pics) and p["how"] == {"picture": len(pics)}, p
-    assert [u["miro_id"] for u in p["unmatched"]] == ["X"]
+    assert [u["miro_id"] for u in p["unmatched"]] == ["X"] and p["unreadable"] == 1
+    # reading the board again uses the pictures kept from the first time: same result, even if Miro fails now
+    monkeypatch.setattr(miro, "image_bytes", lambda it, tok: None)
+    p2 = client.post("/api/miro/preview", json={"url": "uXjVabcdef=", "token": "tok", "wait": True}).json()
+    assert p2["matched"] == p["matched"] and p2["how"] == p["how"]
     sid = client.post("/api/miro/import", json={"key": p["key"], "name": "Grecia from Miro", "use": {"X": None}}).json()["id"]
     b = client.get("/api/series/%d/board" % sid).json()
     xs = sorted(it["x"] for it in b["items"])

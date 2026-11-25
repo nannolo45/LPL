@@ -112,6 +112,7 @@ export function MiroImport({ onClose, onDone }: { onClose: () => void; onDone: (
             <span><b>{p.matched}</b> of {p.pictures} pictures found in the library{p.duplicates ? ` (${p.duplicates} more were the same photo twice; it goes on the board once)` : ''}.</span>
             {Object.entries(p.how).map(([k, n]) => <span key={k} className="small muted">· {n} {HOW[k] || k}</span>)}
             <span className="small">{p.frames} frame{p.frames === 1 ? '' : 's'}, {p.notes} note{p.notes === 1 ? '' : 's'}, {p.arrows} arrow{p.arrows === 1 ? '' : 's'}.</span>
+            {!!p.unreadable && <span className="small" style={{ color: '#f0a35a' }}>{p.unreadable} picture{p.unreadable > 1 ? 's' : ''} could not be downloaded from Miro. Back, then Read the board again: the ones already downloaded are kept, only these are tried again.</span>}
             {skipped.length > 0 && <span className="small muted">Left out: {skipped.map(([k, n]) => `${n} ${k.replace(/_/g, ' ')}`).join(', ')}.</span>}
           </div>
           {p.check.length > 0 && (

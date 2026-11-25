@@ -33,6 +33,8 @@ def create_app():
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(name)s %(levelname)s %(message)s")
     check_writable()
     db.init()
+    from . import series
+    series.resync_nested_once()
     api.mount_web()
     if os.environ.get("LPL_NO_SCAN") != "1":
         scanner.start_background()
