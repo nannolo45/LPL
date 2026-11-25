@@ -193,3 +193,50 @@ def test_progress_dropped_when_the_device_stops_reporting(clean):
     assert "step" not in ws[1] and "progress" not in ws[1] and ws[1]["status"] == "downloading"
     st = next(a for a in c.get("/api/status").json()["agents"] if a["id"] == PHONE["id"])
     assert not st["online"] and "step" not in st["state"]["working_set"][0]
+
+
+# ---------------------------------------------------------------- R13/R14 follow-up, checkout sha256
+def test_late_done_from_first_taker_is_accepted_once(clean, monkeypatch):
+    monkeypatch.setattr(config, "job_retry_seconds", 600)
+    c = clean
+    j = job(c, PHONE["id"])
+    assert beat(c, PHONE) == [j]
+    age_jobs(700)
+    assert beat(c, PHONE) == [j]                      # handed out again
+    assert c.post("/api/jobs/%d/done" % j, json={"status": "done"}).status_code == 200
+    assert c.post("/api/jobs/%d/done" % j, json={"status": "done"}).status_code == 200  # a repeat changes nothing
+    age_jobs(5000)
+    assert beat(c, PHONE) == []                       # done: never again
+    assert db.conn().execute("SELECT status FROM jobs WHERE id=?", (j,)).fetchone()["status"] == "done"
+
+
+def test_token_check_alias(password):
+    c = password
+    assert c.get("/api/auth/check", headers={"x-lpl-token": "s3cret-test"}).json() == {"required": True, "ok": True}
+    assert c.get("/api/auth/check").status_code == 401
+    assert c.get("/api/auth/check", headers={"x-lpl-token": "wrong"}).status_code == 401
+
+
+def test_checkout_has_sha256_and_size_cached(client, monkeypatch):
+    import hashlib
+    from lpl import scanner
+    pid = db.conn().execute("SELECT id FROM photos ORDER BY id LIMIT 1").fetchone()["id"]
+    r = client.get("/api/photos/%d/checkout" % pid).json()
+    p = scanner.abs_of(r["relpath"])
+    assert r["sha256"] == hashlib.sha256(p.read_bytes()).hexdigest() and r["size"] == p.stat().st_size
+    calls = []
+    real = hashlib.sha256
+    monkeypatch.setattr(api.hashlib, "sha256", lambda *a, **k: calls.append(1) or real(*a, **k))
+    assert client.get("/api/photos/%d/checkout" % pid).json()["sha256"] == r["sha256"]
+    assert calls == []                                 # cached: not hashed again
+    data = p.read_bytes()
+    st = p.stat()
+    p.write_bytes(data[:-1] + bytes([data[-1] ^ 1]))   # same size, new mtime
+    import os
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+    try:
+        r2 = client.get("/api/photos/%d/checkout" % pid).json()
+        assert r2["sha256"] != r["sha256"] and calls
+    finally:
+        p.write_bytes(data)
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
