@@ -161,6 +161,8 @@ def test_find_missing_later(client, monkeypatch):
     assert client.post("/api/miro/missing/%s/search" % note["key"], json={}).status_code == 400
     found = client.post("/api/miro/missing/%s/search" % note["key"], json={"folders": ["2024"]}).json()["photos"]
     assert found[0]["id"] == row["id"] and found[0]["dist"] <= 10
+    by_filters = client.post("/api/miro/missing/%s/search" % note["key"], json={"filters": {"folders": ["2024"], "subfolders": True}}).json()["photos"]
+    assert by_filters[0]["id"] == row["id"]
     by_name = client.post("/api/miro/missing/%s/search" % note["key"], json={"names": "IMG_0002"}).json()["photos"]
     assert row["id"] in [x["id"] for x in by_name]
     r = client.post("/api/miro/missing/%s/place" % note["key"], json={"kind": "series", "id": sid, "photo": row["id"]})

@@ -50,9 +50,21 @@ export function AddPhotosDialog({ target, name, onClose, onAdded }: { target: Ta
   return <AddPhotosInner where={target} name={name} frames={b.frames} lanes={b.lanes} lastAdd={b.lastAdd} onClose={onClose} onAdded={onAdded} />
 }
 
-function AddPhotosInner({ where, name, frames, lanes, lastAdd, onClose, onAdded }: {
+/** The same panel to say where to look for something (Import from Miro's missing photos): criteria only, no
+ *  place to put them; "Look" hands the criteria back. Opens with the last ones used. */
+export function WhereToLook({ target, start, onClose, onPick }: { target: Target; start?: Filters | null; onClose: () => void; onPick: (f: Filters) => void }) {
+  const [last, setLast] = useState<LastAdd | null | undefined>(start ? { filters: start } as LastAdd : undefined)
+  useEffect(() => {
+    if (start) return
+    api.tboard(target).then(r => setLast(r.last_add || null)).catch(() => setLast(null))
+  }, [target.kind, target.id])
+  if (last === undefined) return <div className="backdrop" />
+  return <AddPhotosInner where={target} name="" frames={[]} lanes={[]} lastAdd={last} onClose={onClose} onAdded={() => {}} pick={onPick} />
+}
+
+function AddPhotosInner({ where, name, frames, lanes, lastAdd, onClose, onAdded, pick }: {
   where: Target; name: string; frames: Frame[]; lanes: LaneInfo[]; lastAdd: LastAdd | null | undefined
-  onClose: () => void; onAdded: (n: number) => void
+  onClose: () => void; onAdded: (n: number) => void; pick?: (f: Filters) => void
 }) {
   const s = useStore()
   const isFolder = where.kind === 'folder'
@@ -136,13 +148,14 @@ function AddPhotosInner({ where, name, frames, lanes, lastAdd, onClose, onAdded 
   return (
     <>
       <div className="backdrop" onClick={onClose} />
-      <div className="dialog addp" role="dialog" aria-label={`Add photos to ${name}`}>
+      <div className="dialog addp" role="dialog" aria-label={pick ? 'Where to look' : `Add photos to ${name}`}>
         <div className="row">
-          <span className="display grow" style={{ fontSize: 19 }}>Add photos to “{name}”</span>
+          <span className="display grow" style={{ fontSize: 19 }}>{pick ? 'Where to look for the missing photo' : <>Add photos to “{name}”</>}</span>
           <button className="btn ghost" onClick={fromLibrary} title="Start from the filters and open folder you have in the Library">Use library filters</button>
           <button className="btn ghost" onClick={() => setCrit(EMPTY)}>Clear</button>
         </div>
-        {lastAdd && <div className="tiny muted">Opened with last time's criteria. Adding again brings in only photos that aren't on the board yet.</div>}
+        {pick ? <div className="tiny muted">Pick the folders, dates or names it could be in; the photos that match are compared with Miro's picture, the closest first.</div>
+          : lastAdd && <div className="tiny muted">Opened with last time's criteria. Adding again brings in only photos that aren't on the board yet.</div>}
 
         <div className="addp-cols">
           <div className="col" style={{ minWidth: 0 }}>
@@ -207,7 +220,7 @@ function AddPhotosInner({ where, name, frames, lanes, lastAdd, onClose, onAdded 
                 <button className="btn ghost tiny" onClick={dropExtras}>drop</button>
               </div>
             )}
-            <label className="col" style={{ gap: 6 }}>
+            {!pick && <><label className="col" style={{ gap: 6 }}>
               <span className="caps">Put them in</span>
               <select className="input" value={target} onChange={e => setTarget(e.target.value)}>
                 {isFolder ? lanes.map(l => <option key={l.id} value={'s' + l.id}>{l.path?.length ? l.path.join(' › ') + ' › ' : ''}{l.name}</option>)
@@ -216,7 +229,7 @@ function AddPhotosInner({ where, name, frames, lanes, lastAdd, onClose, onAdded 
                 <option value="per">A new {isFolder ? 'series' : 'frame'} for each folder{m && m.folders > 1 ? ` (${m.folders})` : ''}</option>
               </select>
             </label>
-            {target === 'new' && <input className="input" placeholder={isFolder ? 'Name of the new series' : 'Name of the new frame (else the next number)'} aria-label={isFolder ? 'Name of the new series' : 'Name of the new frame'} value={newName} onChange={e => setNewName(e.target.value)} />}
+            {target === 'new' && <input className="input" placeholder={isFolder ? 'Name of the new series' : 'Name of the new frame (else the next number)'} aria-label={isFolder ? 'Name of the new series' : 'Name of the new frame'} value={newName} onChange={e => setNewName(e.target.value)} />}</>}
           </div>
         </div>
 
@@ -228,12 +241,14 @@ function AddPhotosInner({ where, name, frames, lanes, lastAdd, onClose, onAdded 
             {mErr ? <span style={{ color: '#ff8b8e' }}>{mErr}</span>
               : !hasCriteria(clean(crit)) ? 'Type file names, or pick folders or criteria'
               : !m ? 'Counting…'
+              : pick ? <>{m.total} photo{m.total === 1 ? '' : 's'} to compare</>
               : <>{m.total} match{m.total !== m.new ? ` · ${m.total - m.new} already ${isFolder ? 'in ' + name : 'on the board'}` : ''}{m.new > m.limit ? ` · first ${m.limit} are added` : ''}</>}
           </span>
           <button className="btn" onClick={onClose}>Cancel</button>
+          {pick ? <button className="btn primary" disabled={!m || !m.total} onClick={() => pick(clean(crit))}>Look among {m ? m.total : '…'}</button> :
           <button className="btn primary" disabled={busy || !m || !m.new} onClick={go}>
             {busy ? 'Adding…' : m && m.new ? `Add ${Math.min(m.new, m.limit)} photo${m.new === 1 ? '' : 's'}` : 'Add photos'}
-          </button>
+          </button>}
         </div>
       </div>
     </>

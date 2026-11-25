@@ -232,7 +232,7 @@ export const api = {
   get: (ids: number[]) => call<{ items: Photo[] }>('POST', '/api/photos/get', { ids }),
   photo: (id: number) => call<Photo>('GET', `/api/photos/${id}`),
   miroMissing: (key: string) => call<{ key: string; title: string; has_picture: boolean; alts: number[] }>('GET', '/api/miro/missing/' + encodeURIComponent(key)),
-  miroMissingSearch: (key: string, body: { folders?: string[]; date_from?: string; date_to?: string; names?: string }) =>
+  miroMissingSearch: (key: string, body: { filters?: Filters; folders?: string[]; date_from?: string; date_to?: string; names?: string }) =>
     call<{ photos: { id: number; dist: number | null }[]; total: number }>('POST', `/api/miro/missing/${encodeURIComponent(key)}/search`, body),
   miroMissingPlace: (key: string, t: Target, photo: number) => call<{ ok: boolean; warning?: string }>('POST', `/api/miro/missing/${encodeURIComponent(key)}/place`, { kind: t.kind, id: t.id, photo }),
   miroState: () => call<{ has_token: boolean }>('GET', '/api/miro'),

@@ -2,20 +2,19 @@
 // A "Not found" note left by Import from Miro: look for its photo full screen (by picture in chosen folders /
 // dates, or by name) and put it where the note is. Server: miro.py, /api/miro/missing/…
 import { useEffect, useState } from 'react'
-import { api, Target } from '../api'
+import { createPortal } from 'react-dom'
+import { api, Filters, Target } from '../api'
 import { useStore } from '../store'
 import { useBackLayer } from '../back'
-import { FolderPicker } from './FolderPicker'
+import { WhereToLook } from './AddPhotos'
+
+let lastLook: Filters | null = null   // the next note opens with the criteria used last
 
 export function MiroFind({ noteKey, target, onClose, onPlaced }: { noteKey: string; target: Target; onClose: () => void; onPlaced: () => void }) {
   const s = useStore()
   const [info, setInfo] = useState<{ title: string; has_picture: boolean } | null>(null)
   const [err, setErr] = useState('')
-  const [folders, setFolders] = useState<string[]>([])
-  const [picking, setPicking] = useState(false)
-  const [from, setFrom] = useState('')
-  const [to, setTo] = useState('')
-  const [names, setNames] = useState('')
+  const [picking, setPicking] = useState(true)
   const [found, setFound] = useState<{ id: number; dist: number | null }[]>([])
   const [total, setTotal] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
@@ -27,10 +26,10 @@ export function MiroFind({ noteKey, target, onClose, onPlaced }: { noteKey: stri
     api.miroMissing(noteKey).then(r => { setInfo(r); setFound(r.alts.map(id => ({ id, dist: null }))) }).catch(e => setErr(e.message))
   }, [noteKey])
 
-  const search = async () => {
-    setBusy(true); setErr('')
+  const search = async (filters: Filters) => {
+    setBusy(true); setErr(''); lastLook = filters
     try {
-      const r = await api.miroMissingSearch(noteKey, { folders: folders.length ? folders : undefined, date_from: from || undefined, date_to: to || undefined, names: names.trim() || undefined })
+      const r = await api.miroMissingSearch(noteKey, { filters })
       setFound(r.photos); setTotal(r.total); setAt(0)
     } catch (e: any) { setErr(e.message) }
     setBusy(false)
@@ -53,11 +52,7 @@ export function MiroFind({ noteKey, target, onClose, onPlaced }: { noteKey: stri
       return () => window.removeEventListener('keydown', esc, true)
     }
     const down = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
-        if (e.key === 'Enter') { e.preventDefault(); search() }
-        if (e.key === 'Escape') (e.target as HTMLElement).blur()
-        return
-      }
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       const k = e.key.toLowerCase()
       let used = true
       if (k === 'escape') onClose()
@@ -76,15 +71,12 @@ export function MiroFind({ noteKey, target, onClose, onPlaced }: { noteKey: stri
   })
 
   const pic = `/api/miro/missing/${noteKey}/picture`
-  return (
+  return createPortal(
     <div className="mreview" role="dialog" aria-label="Find the missing photo">
       <div className="mreview-top" style={{ flexWrap: 'wrap' }}>
         <span className="display" style={{ fontSize: 16 }}>Find the missing photo{info?.title ? `: ${info.title}` : ''}</span>
-        <button className="btn" onClick={() => setPicking(true)}>{folders.length ? `${folders.length} folder${folders.length > 1 ? 's' : ''}…` : 'Choose folders…'}</button>
-        <label className="row small muted" style={{ gap: 4 }}>taken from <input className="input" type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
-        <label className="row small muted" style={{ gap: 4 }}>to <input className="input" type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
-        <input className="input" style={{ width: 200 }} placeholder="or file names" aria-label="File names" value={names} onChange={e => setNames(e.target.value)} />
-        <button className="btn primary" disabled={busy || !(folders.length || from || to || names.trim())} onClick={search}>{busy ? 'Looking…' : 'Look'}</button>
+        <button className="btn primary" onClick={() => setPicking(true)}>{busy ? 'Looking…' : total == null ? 'Where to look…' : 'Look elsewhere…'}</button>
+        {total != null && <span className="small muted">{total} photo{total === 1 ? '' : 's'} compared, the closest first</span>}
         <span className="grow" />
         <button className="btn" onClick={onClose}>Close</button>
       </div>
@@ -93,7 +85,7 @@ export function MiroFind({ noteKey, target, onClose, onPlaced }: { noteKey: stri
         <figure>{info?.has_picture ? <img src={pic} alt="Miro picture" /> : <div className="center muted">{info ? 'Miro’s picture was not kept for this note' : 'Loading…'}</div>}<figcaption>Miro</figcaption></figure>
         <figure>
           {flip && info?.has_picture ? <img src={pic} alt="Miro picture" /> : cur ? <img src={`/api/preview/${cur.id}?s=l`} alt="Library photo" />
-            : <div className="center muted" style={{ padding: 20, textAlign: 'center' }}>Choose the folders or dates it could be in (or type its name), then Look. The closest photos come first.</div>}
+            : <div className="center muted" style={{ padding: 20, textAlign: 'center' }}>{busy ? 'Comparing…' : 'Say where to look (folders, dates or names): the closest photos come first.'}</div>}
           <figcaption>{flip ? 'Miro (Space held)' : cur ? `Candidate ${at + 1} of ${found.length}${total != null && total > found.length ? ` (closest of ${total})` : ''}` : ''}</figcaption>
         </figure>
       </div>
@@ -114,17 +106,10 @@ export function MiroFind({ noteKey, target, onClose, onPlaced }: { noteKey: stri
         </div>
         <span className="tiny muted">← → or 1–9 go through the candidates · Y / Enter put it on the board · hold Space to see Miro’s picture in its place · Esc close</span>
       </div>
-      {picking && <>
-        <div className="backdrop" style={{ zIndex: 60 }} onClick={() => setPicking(false)} />
-        <div className="dialog mirofolders" style={{ zIndex: 61 }} role="dialog" aria-label="Folders to look in">
-          <span className="display" style={{ fontSize: 17, fontWeight: 500 }}>Folders to look in</span>
-          <FolderPicker picked={folders} sub hideSub onPicked={setFolders} onSub={() => {}} />
-          <div className="row" style={{ justifyContent: 'flex-end' }}>
-            <button type="button" className="btn ghost" onClick={() => setFolders([])}>Clear</button>
-            <button type="button" className="btn primary" onClick={() => { setPicking(false) }}>Done{folders.length ? ` (${folders.length})` : ''}</button>
-          </div>
-        </div>
-      </>}
-    </div>
+      {picking && <div className="mfind-look">
+        <WhereToLook target={target} start={lastLook} onClose={() => setPicking(false)} onPick={f => { setPicking(false); search(f) }} />
+      </div>}
+    </div>,
+    document.body,
   )
 }
