@@ -36,7 +36,7 @@ def _token() -> str:
 @app.middleware("http")
 async def auth_mw(request: Request, call_next):
     path = request.url.path
-    if config.password and path.startswith("/api/") and path not in ("/api/login", "/api/auth", "/api/auth/token"):
+    if config.password and path.startswith("/api/") and path not in ("/api/login", "/api/auth", "/api/auth/token", "/api/auth/check"):
         tok = request.cookies.get("lpl_token") or request.headers.get("x-lpl-token")
         if tok not in (_token(), config.password):
             return JSONResponse({"detail": "login required"}, status_code=401)
@@ -50,6 +50,7 @@ def auth_status(request: Request):
     return {"required": True, "ok": request.cookies.get("lpl_token") == _token()}
 
 
+@app.get("/api/auth/check")
 @app.get("/api/auth/token")
 def auth_token(request: Request):
     """Is the x-lpl-token header right? Only the header counts (not the login cookie), so an app can check a
@@ -1144,6 +1145,26 @@ def job_done(jid: int, body: Dict[str, Any] = Body(default={})):
     return {"ok": True}
 
 
+_SHA_CACHE: Dict[tuple, str] = {}
+
+
+def _file_sha256(p) -> tuple:
+    """(sha256 hex, size) of a file, hashed once per path + mtime + size (RAWs are 20 MB and more)."""
+    st = p.stat()
+    key = (str(p), st.st_mtime_ns, st.st_size)
+    h = _SHA_CACHE.get(key)
+    if h is None:
+        d = hashlib.sha256()
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                d.update(chunk)
+        h = d.hexdigest()
+        if len(_SHA_CACHE) >= 4096:
+            _SHA_CACHE.clear()
+        _SHA_CACHE[key] = h
+    return h, st.st_size
+
+
 @app.get("/api/photos/{pid}/checkout")
 def checkout(pid: int, agent: str = ""):
     """What an agent needs to take a photo. With agent=<id> whose heartbeat caps contain "versions" the answer also
@@ -1151,6 +1172,11 @@ def checkout(pid: int, agent: str = ""):
     r = photo_row(pid)
     out = {"id": pid, "relpath": r["relpath"], "filename": r["filename"], "size": r["size"], "mtime": r["mtime"],
            "meta_mtime": r["meta_mtime"], "server_time": time.time()}
+    p = scanner.abs_of(r["relpath"])
+    try:
+        out["sha256"], out["size"] = _file_sha256(p)   # of the file on disk, so a download can be checked
+    except OSError:
+        pass   # file missing: the old answer (the app finds out at /original)
     if agent and "versions" in transfers.caps_of(db.conn(), agent[:80]):
         vs = [{"n": v["n"], "name": v["name"], "mtime": v["mtime"], "size": v["size"], "has_file": v["has_file"]}
               for v in versions.list_versions(pid)]

@@ -177,6 +177,16 @@ So an app must still report every job, and should treat a job id it already ran 
 **Password check (R14)**: `GET /api/auth/token` with header `x-lpl-token: <password>` → 200
 `{"required": true, "ok": true}`; wrong or missing → 401 `{"detail": "login required"}`; LPL without a
 password → 200 `{"required": false, "ok": true}`. The login cookie is not looked at.
+`GET /api/auth/check` is the same call under a second name.
+
+**Checkout integrity**: `GET /api/photos/{id}/checkout` also carries `sha256` (hex) and `size` of the original file
+as it is on disk now (the answer's older `size` is the same number unless the file changed since the last scan).
+The hash is computed once per path + mtime + size and kept in memory, so a RAW is not read again on every request;
+after a server restart the first checkout of a photo hashes it once. A missing file: both keys are left out.
+`GET /api/photos/{id}/original` is unchanged (answers Range).
+
+**Late report (R13)**: a job handed out again may still be reported done by its first taker; `POST /api/jobs/{id}/done`
+is accepted, a repeat changes nothing, and a done job is never handed out again.
 
 **PC agent**: sends `agent=` with every XMP post and step/progress as above. Agents from before keep working.
 
