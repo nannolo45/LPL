@@ -132,7 +132,7 @@ def read_board(bid: str, token: str) -> dict:
     return {"name": info.get("name") or "Miro board", "items": items, "connectors": conns}
 
 
-def _resource(item: dict, token: str, fmt: str) -> Optional[str]:
+def _resource(item: dict, token: str, fmt: str, raise_errors: bool = False) -> Optional[str]:
     """The real address of a picture's file (Miro answers a little JSON with it when asked with redirect=false)."""
     url = (item.get("data") or {}).get("imageUrl")
     if not url:
@@ -143,6 +143,8 @@ def _resource(item: dict, token: str, fmt: str) -> Optional[str]:
         r = fetch(url, token)
         return r.get("url") if isinstance(r, dict) else None
     except Exception as e:
+        if raise_errors:
+            raise
         log.info("miro resource %s: %s", item.get("id"), e)
         return None
 
@@ -169,16 +171,46 @@ def original_name(item: dict, token: str) -> str:
 
 
 def image_bytes(item: dict, token: str) -> Optional[bytes]:
-    """Miro's preview of a picture."""
-    link = _resource(item, token, "preview")
-    if not link:
-        return None
+    """Miro's preview of a picture; tried three times (Miro and its storage sometimes fail or limit a burst of
+    requests, which made two readings of one board find different photos)."""
+    for attempt in range(3):
+        if attempt:
+            time.sleep(1.5 * attempt)
+        try:
+            link = _resource(item, token, "preview", raise_errors=True)
+            if not link:
+                return None  # Miro has no file for it: nothing to try again
+            with urllib.request.urlopen(link, timeout=30) as r:
+                data = r.read()
+            if phash(data) is not None:
+                return data
+        except Exception as e:
+            log.info("miro image %s (try %d): %s", item.get("id"), attempt + 1, e)
+    return None
+
+
+def _pic_table(c) -> None:
+    c.execute("CREATE TABLE IF NOT EXISTS miro_pic (item_key TEXT PRIMARY KEY, data BLOB, ts REAL)")
+
+
+def cached_picture(item: dict, token: str, fetcher: Callable) -> Optional[bytes]:
+    """A picture from an earlier reading of the board when it has not changed on Miro since; else downloaded
+    and kept, so reading a board again gives the same pictures (and is quicker)."""
+    key = "%s@%s" % (item.get("id"), item.get("modifiedAt") or "")
+    c = db.conn()
     try:
-        with urllib.request.urlopen(link, timeout=30) as r:
-            return r.read()
-    except Exception as e:
-        log.info("miro image %s: %s", item.get("id"), e)
-        return None
+        r = c.execute("SELECT data FROM miro_pic WHERE item_key=?", (key,)).fetchone()
+    except Exception:
+        r = None
+    if r and r["data"]:
+        return bytes(r["data"])
+    data = fetcher(item, token)
+    if data:
+        with db.write_lock:
+            _pic_table(db.conn())
+            db.conn().execute("INSERT OR REPLACE INTO miro_pic(item_key, data, ts) VALUES(?,?,?)", (key, data, time.time()))
+            db.conn().commit()
+    return data
 
 
 # ------------------------------------------------------------------ geometry
@@ -481,14 +513,25 @@ def match(pictures: List[dict], token: str, scope: Optional[Dict[str, Any]] = No
         pool = scope_ids({})
     ids, H, AR = pool_hashes(pool, lambda d, t: progress("library", d, t))
     progress("pictures", 0, len(still))
-    with ThreadPoolExecutor(6) as ex:
-        got = list(ex.map(lambda x: picture_bytes(x[0], token), still))
-    for k, ((it, cands), data) in enumerate(zip(still, got)):
-        if k % 20 == 0:
-            progress("pictures", k, len(still))
+    with db.write_lock:
+        _pic_table(db.conn())
+        db.conn().commit()
+    from concurrent.futures import as_completed
+    got_by: Dict[str, Optional[bytes]] = {}
+    with ThreadPoolExecutor(4) as ex:
+        futs = {ex.submit(cached_picture, x[0], token, picture_bytes): x[0]["id"] for x in still}
+        for k, fu in enumerate(as_completed(futs)):
+            try:
+                got_by[futs[fu]] = fu.result()
+            except Exception:
+                got_by[futs[fu]] = None
+            if k % 10 == 0:
+                progress("pictures", k, len(still))
+    for it, cands in still:
+        data = got_by.get(it["id"])
         h = phash(data) if data else None
         if h is None:
-            out[it["id"]] = {"photo": None}
+            out[it["id"]] = {"photo": None, "unreadable": True}
             continue
         pics[it["id"]] = data
         if cands:  # several photos with this name: the one that looks like it
@@ -705,7 +748,8 @@ def _report(job: dict) -> dict:
             "how": how, "duplicates": lay["duplicates"], "unmatched": lay["unplaced"], "frames": len(lay["frames"]),
             "notes": sum(1 for x in lay["shapes"] if x["kind"] == "note") - len(lay["unplaced"]),
             "arrows": sum(1 for x in lay["shapes"] if x["kind"] == "arrow"), "skipped": lay["skipped"],
-            "sample": [i["id"] for i in lay["items"][:12]], "check": check[:3000]}
+            "sample": [i["id"] for i in lay["items"][:12]], "check": check[:3000],
+            "unreadable": sum(1 for m in matches.values() if m.get("unreadable"))}
 
 
 def _run(job: dict, bid: str, token: str, scope: Dict[str, Any]) -> None:
