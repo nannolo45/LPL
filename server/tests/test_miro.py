@@ -79,6 +79,9 @@ def test_preview_and_import(client, monkeypatch):
     # a frame inside another is a chapter of its own (strip lane), right after the frame holding it
     lanes = client.get("/api/series/%d/strip" % sid).json()["lanes"]
     assert [(l["label"], [p["filename"] for p in l["photos"]]) for l in lanes] == [("Walk", ["IMG_0001.jpg", "IMG_0002.jpg"]), ("Lake", ["IMG_0003.jpg"])]
+    st = client.get("/api/series/%d/strip" % sid).json()
+    assert st["ftree"] == [{"frame": next(g["id"] for g in st["fgroups"]), "depth": 0}, {"lane": lanes[0]["key"], "depth": 1}, {"lane": lanes[1]["key"], "depth": 1}]
+    assert st["fgroups"][0]["label"] == "Walk" and st["fgroups"][0]["count"] == 3
     # a frame that only holds frames is no lane
     from lpl import series
     outer = {"x": 0, "y": 0, "w": 1000, "h": 1000, "id": 1}
