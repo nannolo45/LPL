@@ -520,6 +520,12 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
       try { await api.folderRename(f.id, v); s.reloadSeries(); s.reloadTags(); load(); told() } catch (e: any) { s.toast(e.message) }
       return
     }
+    if (key[0] === 'h') {  // a heading: a frame holding frames on this series' board
+      const g = data?.fgroups?.find(x => x.id === +key.slice(1))
+      if (!g || !v || v === g.label) return
+      try { setData(await api.frameRename(target.id, g.id, v)); told() } catch (e: any) { s.toast(e.message); load() }
+      return
+    }
     const l = state.current.lanes.find(x => x.key === key)
     if (!l || !v || v === l.label || !data) return
     setData({ ...data, lanes: data.lanes.map(x => x.key === key ? { ...x, label: v } : x) })  // at once
@@ -715,6 +721,35 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
           return <LaneRow key={l.key} lane={l} shown={shown} selKey={shown.filter(p => sel.has(p.id)).map(p => p.id).join(',')} foundKey={found.size ? shown.filter(p => found.has(p.id)).map(p => p.id).join(',') : ''} folder={isFolder} linked={linked} depth={depth}
             canReorder={isFolder ? lanes.length > 1 || groups.length > 0 : linked && l.frame && !l.maybe && lanes.filter(x => x.frame && !x.maybe).length > 1} phone={phone} menu={laneMenu(l)}
             editing={editKey === l.key} canRename={canRename(l)} act={stableActs} trayN={trayOn ? trayPick().length : 0} />
+        }
+        if (!isFolder && data?.ftree?.length) {
+          // a series' board with frames inside frames: the same nesting, a frame holding frames as a heading that folds
+          const out: React.ReactNode[] = []
+          let hide = -1
+          for (const e of data.ftree) {
+            if (hide >= 0 && e.depth > hide) continue
+            hide = -1
+            if (e.lane != null) { const l = lanes.find(x => x.key === e.lane); if (l) out.push(row(l, e.depth)); continue }
+            const g = (data.fgroups || []).find(x => x.id === e.frame)
+            if (!g) continue
+            const fk = -g.id   // folded headings are remembered by number: frames as negatives, folders positive
+            const isFolded = folded.includes(fk)
+            if (isFolded) hide = e.depth
+            out.push(
+              <div key={'h' + g.id} className={'strip-group' + (isFolded ? ' folded' : '')} role="group" aria-label={`Frame ${g.label}`} data-depth={e.depth}
+                style={{ marginLeft: e.depth * (phone ? 10 : 22), ...(g.color ? { borderColor: hexA(g.color, .6), background: hexA(g.color, .1) } : {}) }}>
+                <button type="button" className="sg-fold" aria-expanded={!isFolded} aria-label={`${isFolded ? 'Unfold' : 'Fold'} ${g.label}`} onClick={() => fold(fk)}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: isFolded ? 'none' : 'rotate(90deg)', transition: 'transform .12s' }}><path d="M9 6l6 6-6 6" /></svg>
+                </button>
+                {editKey === 'h' + g.id
+                  ? <NameEdit value={g.label} label={`New name for the frame ${g.label}`} onDone={v => rename('h' + g.id, v)} />
+                  : <><span className={'sg-name display' + (phone ? ' tap' : '')} onDoubleClick={() => setEditKey('h' + g.id)} onClick={phone ? () => setEditKey('h' + g.id) : undefined} title="Double-click to rename">{g.label}</span>
+                    <button type="button" className="lane-ren" aria-label={`Rename the frame ${g.label}`} title={phone ? `Rename ${g.label}` : 'Rename (or double-click the name)'} onClick={() => setEditKey('h' + g.id)}><Pencil /></button></>}
+                <span className="lane-n">{phone ? `${g.frames} · ${g.count}` : `${g.frames} frame${g.frames === 1 ? '' : 's'} · ${g.count} photo${g.count === 1 ? '' : 's'}`}</span>
+                <div className="grow" />
+              </div>)
+          }
+          return out
         }
         if (!isFolder || !data?.tree || !groups.length) return lanes.map(l => row(l))
         // a folder with subfolders: each subfolder's lanes together under a heading that folds, indented per depth

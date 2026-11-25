@@ -1850,13 +1850,53 @@ def series_strip(sid: int):
     nums = nums_of(c, sid)
     ords = {r["photo_id"]: r["ord"] for r in c.execute("SELECT photo_id, ord FROM series_items WHERE series_id=?", (sid,)).fetchall()}
     lanes = []
-    for key, f, ids in series_lanes(c, s):
+    sl = series_lanes(c, s)
+    for key, f, ids in sl:
         lanes.append({"key": key, "series": None, "label": f["label"] if f else ("Outside the frames" if key == "out" else s["name"]),
                       "color": (f.get("color") or "") if f else (s["color"] or ""), "maybe": int(bool(f and f["maybe"])), "frame": f is not None,
                       "photos": _photos(c, ids, sid, nums, ords)})
     extra = board_extra(s, [])
-    return {"series": {"id": s["id"], "name": s["name"], "folder_id": s["folder_id"], "color": s["color"] or ""}, "folder": extra["folder"],
-            "linked": extra["linked"], "lanes": lanes}
+    out = {"series": {"id": s["id"], "name": s["name"], "folder_id": s["folder_id"], "color": s["color"] or ""}, "folder": extra["folder"],
+           "linked": extra["linked"], "lanes": lanes}
+    # frames inside frames: the strip shows the same nesting, a frame holding frames as a heading that folds
+    if is_linked(s):
+        frames = [dict(r) for r in c.execute("SELECT * FROM series_frames WHERE series_id=?", (sid,)).fetchall()]
+        par = frame_parents(frames)
+        if any(p is not None for p in par.values()):
+            byid = {f["id"]: f for f in frames}
+            depth = {}
+            for f in frames:
+                d, p = 0, par[id(f)]
+                while p is not None and d < 50:
+                    d, p = d + 1, par[id(p)]
+                depth[f["id"]] = d
+            holders = {p["id"] for p in par.values() if p is not None}
+            count = {l["key"]: len(l["photos"]) for l in lanes}
+            under: Dict[int, int] = {}
+            for f in frames:  # photos in a holder and everything inside it
+                p = f
+                while p is not None:
+                    if p["id"] in holders:
+                        under[p["id"]] = under.get(p["id"], 0) + count.get("f%d" % f["id"], 0)
+                    p = par[id(p)]
+            tree = []
+            lane_keys = {l["key"] for l in lanes}
+            for f in frames_sorted(frames):
+                if f["maybe"]:
+                    continue
+                if f["id"] in holders:
+                    tree.append({"frame": f["id"], "depth": depth[f["id"]]})
+                    if "f%d" % f["id"] in lane_keys:  # its own photos, not in an inner frame
+                        tree.append({"lane": "f%d" % f["id"], "depth": depth[f["id"]] + 1})
+                elif "f%d" % f["id"] in lane_keys:
+                    tree.append({"lane": "f%d" % f["id"], "depth": depth[f["id"]]})
+            for l in lanes:
+                if l["key"] == "out" or l["maybe"]:
+                    tree.append({"lane": l["key"], "depth": 0})
+            out["ftree"] = tree
+            out["fgroups"] = [{"id": i, "label": byid[i]["label"], "color": byid[i].get("color") or "", "count": under.get(i, 0),
+                               "frames": sum(1 for f in frames if par[id(f)] is not None and par[id(f)]["id"] == i)} for i in holders]
+    return out
 
 
 @router.post("/api/series/{sid}/strip/move")

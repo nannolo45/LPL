@@ -151,7 +151,9 @@ export interface BoardData { series?: { id: number; name: string }; folder?: Fol
 export interface Lane { key: string; series: { id: number; name: string; color: string } | null; label: string; color: string; maybe: number; frame: boolean; photos: Photo[]
   folder_id?: number | null; depth?: number }
 export interface StripData { series?: { id: number; name: string; folder_id: number | null; color: string }; folder?: FolderHead | null; linked: boolean; lanes: Lane[]
-  root?: { id: number; name: string }; path?: { id: number; name: string }[]; groups?: GroupInfo[]; tree?: { folder?: number; series?: number; depth: number }[] }
+  root?: { id: number; name: string }; path?: { id: number; name: string }[]; groups?: GroupInfo[]; tree?: { folder?: number; series?: number; depth: number }[]
+  /** a single series whose board has frames inside frames: what to draw, top to bottom (a heading for a frame holding frames, or a lane) */
+  ftree?: { frame?: number; lane?: string; depth: number }[]; fgroups?: { id: number; label: string; color: string; count: number; frames: number }[] }
 /** How far a board and its strip are apart (GET …/link): what linking them again would do. */
 export interface LinkState { linked: boolean; same: boolean; frames: number; series?: number; photos?: number; in_folder?: boolean
   free_frames?: { id: number; label: string; photos: number }[]; missing_frames?: string[]; moves?: number; reordered?: number
