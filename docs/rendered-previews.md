@@ -37,3 +37,15 @@ never waits for or locks an open darktable. A PC announces the cap `render` only
 - **Stop:** `POST /api/previews/render/{job}/stop`: a job not handed out yet becomes `stopped`; a running one becomes
   `stopping` and every heartbeat answer of its PC carries `stop_render: [job]` until the agent reports it done; the
   agent stops after the photo in hand.
+
+## A PC that sleeps or restarts mid-job
+
+- **Sleep (lid closed):** the agent is paused with the PC. LPL shows "Laptop stopped reporting while rendering previews
+  (n of N)"; on waking the job carries on where it was. A photo whose download or upload the sleep cut off is tried once
+  more after 5 s before it counts as failed.
+- **Long jobs:** while the agent reports a render job running, the server keeps it freshly taken, so it is never handed
+  out a second time beside itself (before, any job taken over 30 minutes ago was handed out again). The agent also
+  ignores a render job it already has.
+- **Restart (PC or agent):** the agent tells LPL when it started (`state.agent_started`). A render job taken before
+  that and not reported running is queued again at once (at most 3 hand-outs in all), without the photos whose
+  preview arrived since the job was made. A job being stopped when the agent restarted is simply stopped.
