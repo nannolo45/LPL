@@ -9,20 +9,21 @@ import { api, RenderJob, RenderScope } from '../api'
 import { useStore } from '../store'
 import { bumpSeries } from '../seriesops'
 import { Bar } from './DevicesBits'
+import { pace } from '../renderpace'
 
 type Toast = (m: string) => void
 const ASK = 'lpl-render-ask'
 const REFRESH = 'lpl-render-refresh'
 
 /** Open the dialog for `scope`. what: how the photos are named in it ("“Grecia”", "the folder 2023/Athens"). */
-export function updatePreviews(scope: RenderScope, what: string, _toast?: Toast) {
-  window.dispatchEvent(new CustomEvent(ASK, { detail: { scope, what } }))
+export function updatePreviews(scope: RenderScope, what: string, _toast?: Toast, notOn?: string) {
+  window.dispatchEvent(new CustomEvent(ASK, { detail: { scope, what, notOn } }))
 }
 
 /** The dialog: how many photos, which PCs (all that can render, ticked), render. Mounted once in the app. */
 export function RenderDialog() {
   const s = useStore()
-  const [ask, setAsk] = useState<{ scope: RenderScope; what: string } | null>(null)
+  const [ask, setAsk] = useState<{ scope: RenderScope; what: string; notOn?: string } | null>(null)
   const [n, setN] = useState<{ stale: number; all: number } | null>(null)
   const [pcs, setPcs] = useState<{ id: string; name: string }[]>([])
   const [why, setWhy] = useState<string | undefined>()
@@ -40,8 +41,9 @@ export function RenderDialog() {
           setPcs(st.agents); setWhy(st.why)
           let keep: string[] = []
           try { keep = JSON.parse(localStorage.getItem('lpl.renderpcs') || '[]') } catch { /* ignore */ }
-          const want = st.agents.filter(p => keep.includes(p.id))
-          setPicked(new Set((want.length ? want : st.agents).map(p => p.id)))
+          const others = st.agents.filter(p => p.id !== d.notOn)  // notOn: the PC that could not render them
+          const want = others.filter(p => keep.includes(p.id))
+          setPicked(new Set((d.notOn ? others : want.length ? want : st.agents).map(p => p.id)))
         }).catch(err => { s.toast(err.message); setAsk(null) })
     }
     window.addEventListener(ASK, h)
@@ -102,16 +104,6 @@ export function RenderDialog() {
   )
 }
 
-const secs = (x: number) => (x >= 90 ? `${Math.round(x / 60)} min` : `${x < 10 ? x.toFixed(1) : Math.round(x)} s`)
-
-/** "about 9 s per photo: download 6 s, darktable 2.5 s" from the agent's report (when it says). */
-function pace(p: NonNullable<RenderJob['progress']>) {
-  const n = p.done + p.failed
-  if (!n || p.render_s == null) return ''
-  const t = ((p.ended || Date.now() / 1000) - p.started) / n
-  return ` · about ${secs(t)} per photo (download ${secs((p.download_s || 0) / n)}, darktable ${secs((p.render_s || 0) / n)})`
-}
-
 /** The bar under the top bar. Nothing when there is no render job to show. */
 export function RenderProgress() {
   const s = useStore()
@@ -164,6 +156,16 @@ export function RenderProgress() {
               )}
               <button className="btn tiny ghost" title={active ? 'Stop and clear' : 'Clear'} aria-label={active ? 'Stop and clear' : 'Clear'} onClick={() => act(api.previewsClear(j.id))}>×</button>
             </div>
+            {p?.lacking?.length ? (
+              <div className="row renderline" style={{ gap: 10 }}>
+                <span className="small grow">
+                  {p.lacking.length} photo{p.lacking.length === 1 ? '' : 's'} use{p.lacking.length === 1 ? 's' : ''} {(p.lacking_modules || []).join(', ') || 'a darktable module'}, which darktable on {j.agent_name} does not have.
+                </span>
+                <button className="btn tiny" onClick={() => updatePreviews({ ids: p.lacking }, `the ${p.lacking!.length} photo${p.lacking!.length === 1 ? '' : 's'} ${j.agent_name} could not render`, undefined, j.agent_id)}>
+                  Render {p.lacking.length === 1 ? 'it' : 'them'} on another PC…
+                </button>
+              </div>
+            ) : null}
             {open === j.id && p?.errors?.length ? (
               <div className="col renderwhy">
                 {p.errors.map((e, i) => <span key={i} className="tiny"><b>{e.photo}</b>: {e.error}</span>)}

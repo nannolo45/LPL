@@ -168,7 +168,7 @@ export interface WorkItem { id: number; version?: number; filename: string; stat
 /** A PC's render job as its agent reports it (agent/lpl_agent.py render_job): previews rendered with darktable-cli. */
 export interface RenderProgress {
   job: number; total: number; done: number; failed: number; current: string | null; started: number; ended: number | null; stopped: boolean
-  errors?: { photo: string; error: string }[]; download_s?: number; render_s?: number; upload_s?: number; bytes?: number
+  errors?: { photo: string; error: string }[]; download_s?: number; render_s?: number; upload_s?: number; bytes?: number; fetched?: number; rendered?: number; lacking?: number[]; lacking_modules?: string[]
 }
 /** A render job as the bar at the top shows it (GET /api/previews/jobs). */
 export interface RenderJob { id: number; status: string; agent_id: string; agent_name: string; online: boolean; total: number; created: number; ended: number | null; progress: RenderProgress | null }
