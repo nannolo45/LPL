@@ -536,7 +536,7 @@ def test_migrating_a_library_from_before(tmp_path):
     assert [r[1] for r in con.execute("PRAGMA table_info(agents)")][:6] == ["id", "name", "os", "last_seen", "state", "caps"]
     assert [r[:5] for r in con.execute("SELECT * FROM agents ORDER BY rowid")] == before["agents"]
     assert [r[5] for r in con.execute("SELECT * FROM agents")] == [None, None]
-    assert con.execute("SELECT * FROM jobs ORDER BY rowid").fetchall() == before["jobs"]
+    assert [r[:len(b)] for r, b in zip(con.execute("SELECT * FROM jobs ORDER BY rowid").fetchall(), before["jobs"])] == before["jobs"]
     assert con.execute("SELECT * FROM settings ORDER BY rowid").fetchall() == before["settings"]
     assert con.execute("SELECT COUNT(*) FROM transfers").fetchone()[0] == 0
     assert con.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

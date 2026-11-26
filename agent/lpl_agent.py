@@ -412,9 +412,10 @@ def render_batch(cfg: dict, files: list, outdir: Path, timeout_each=120) -> dict
             args += ["--import", str(f)]
         args += [str(outdir / "$(FILE_NAME)"), "--out-ext", "jpg", "--width", str(RENDER_SIZE), "--height", str(RENDER_SIZE),
                  "--hq", "false", "--core", "--configdir", str(tmp), "--library", ":memory:"]
+        r = None
         try:
-            subprocess.run(args, capture_output=True, text=True, timeout=60 + timeout_each * len(files),
-                           **({"creationflags": NO_WINDOW} if IS_WIN else {}))
+            r = subprocess.run(args, capture_output=True, text=True, timeout=60 + timeout_each * len(files),
+                               **({"creationflags": NO_WINDOW} if IS_WIN else {}))
         except subprocess.TimeoutExpired:
             log.warning("darktable-cli took too long for %d photos", len(files))
     finally:
@@ -424,6 +425,9 @@ def render_batch(cfg: dict, files: list, outdir: Path, timeout_each=120) -> dict
         o = outdir / (Path(f).stem + ".jpg")
         if o.is_file() and o.stat().st_size > 0:
             got[f] = o
+    if len(got) < len(files) and r is not None:
+        tail = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()[-6:]
+        log.warning("darktable-cli (exit %s) made %d of %d: %s", r.returncode, len(got), len(files), " / ".join(tail))
     return got
 
 
@@ -632,6 +636,32 @@ def poke_darktable():
             log.debug("could not wake darktable over D-Bus: %s", e)
 
     threading.Thread(target=run, daemon=True).start()
+
+
+def bundled_bridge():
+    """The lpl_bridge.lua that came with this agent (beside the script, or beside the .exe)."""
+    for src in (Path(__file__).resolve().parent / "darktable" / "lpl_bridge.lua",
+                Path(sys.executable).resolve().parent / "darktable" / "lpl_bridge.lua"):
+        if src.is_file():
+            return src
+    return None
+
+
+def refresh_bridge(cfg: dict):
+    """At start: when darktable already has the bridge installed and it differs from the one this agent brings, put
+    the new one in (darktable loads it at its next start). Nothing is installed where there was none."""
+    src = bundled_bridge()
+    if not src:
+        return None
+    try:
+        dest = darktable_config_dir(cfg) / "lua" / "lightphotolibrary" / "lpl_bridge.lua"
+        if dest.is_file() and dest.read_bytes() != src.read_bytes():
+            shutil.copy2(src, dest)
+            log.info("darktable bridge updated in %s (restart darktable to load it)", dest.parent)
+            return dest
+    except OSError as e:
+        log.warning("darktable bridge not updated: %s", e)
+    return None
 
 
 def install_bridge(cfg: dict) -> Path:
@@ -1443,7 +1473,8 @@ class Agent:
         self.shared = SharedSync(self)  # R11: styles, presets, module layouts
         self.luts = LutSync(self)
         self.renderer = Renderer(self)  # previews that show the edit (darktable-cli)
-        self.render_seen = set()        # render jobs this run has taken      # R19: darktable's LUT folder
+        self.render_seen = set()        # render jobs this run has taken
+        refresh_bridge(cfg)             # a newer darktable bridge came with this agent: put it in      # R19: darktable's LUT folder
         for d in (WORK, BRIDGE / "outbox"):
             d.mkdir(parents=True, exist_ok=True)
         if STATE_FILE.is_file():
@@ -1675,26 +1706,46 @@ class Agent:
         """Photos on the NAS whose preview is from before their edit. A download thread fetches each original and
         XMP into a temporary folder (or the working-set copy is used) a few photos ahead, while darktable-cli renders
         them in batches; each JPEG is posted and the temporary files deleted. A photo that fails (a download cut off
-        by sleep, a file darktable cannot read) is tried once more on its own before it counts as failed."""
+        by sleep, a file darktable cannot read) is tried once more on its own before it counts as failed.
+        Progress (with the last errors and where the time goes) goes to LPL with the heartbeat and to darktable through
+        the bridge folder (render.txt; darktable's cancel writes render-stop.txt)."""
         tmp_root = data_dir() / "render" / ("job-%s" % jid)
         prog = self.render_progress = {"job": jid, "total": len(ids), "done": 0, "failed": 0, "current": None,
-                                       "started": time.time(), "ended": None, "stopped": False}
-        stopped = lambda: jid in self.cancel_jobs or jid in getattr(self, "stop_render", ())
+                                       "started": time.time(), "ended": None, "stopped": False, "errors": [],
+                                       "download_s": 0.0, "render_s": 0.0, "upload_s": 0.0, "bytes": 0}
+        stop_file = BRIDGE / "render-stop.txt"  # names the job it stops: one left from another job does nothing
+
+        def stopped():
+            if jid in self.cancel_jobs or jid in getattr(self, "stop_render", ()):
+                return True
+            try:  # Cancel on the job in darktable's background jobs
+                return stop_file.read_text().strip() == str(jid)
+            except OSError:
+                return False
         ready = Queue(maxsize=self.RENDER_AHEAD)
         END = object()
+        self.render_tell_bridge(prog)
 
         def fetch():
             for pid in ids:
                 if stopped():
                     break
+                t = time.time()
                 try:
-                    ready.put(self.render_source(pid, tmp_root))
+                    src = self.render_source(pid, tmp_root)
                 except Exception as e:
                     time.sleep(5)  # once more: the PC may just have woken up and the network come back
                     try:
-                        ready.put(self.render_source(pid, tmp_root))
+                        src = self.render_source(pid, tmp_root)
                     except Exception as e2:
-                        ready.put({"pid": pid, "error": "%s (first try: %s)" % (e2, e)})
+                        src = {"pid": pid, "name": str(pid), "error": "download: %s (first try: %s)" % (e2, e)}
+                prog["download_s"] += time.time() - t
+                if src.get("raw") is not None and src.get("tmp"):
+                    try:
+                        prog["bytes"] += src["raw"].stat().st_size
+                    except OSError:
+                        pass
+                ready.put(src)
             ready.put(END)
         threading.Thread(target=fetch, name="render-fetch", daemon=True).start()
 
@@ -1703,10 +1754,29 @@ class Agent:
                 prog["done"] += 1
             else:
                 prog["failed"] += 1
-                log.warning("preview of photo %s not rendered: %s", src["pid"], why)
+                why = str(why)[:400]
+                prog["errors"] = (prog["errors"] + [{"photo": src.get("name") or src["pid"], "error": why}])[-5:]
+                log.warning("preview of %s not rendered: %s", src.get("name") or src["pid"], why)
             if src.get("tmp"):
                 shutil.rmtree(src["tmp"], ignore_errors=True)
+            self.render_tell_bridge(prog)
             self.wake.set()  # the next heartbeat carries the progress now
+
+        def single(src, outdir):
+            out = outdir / ("%s-single.jpg" % src["pid"])
+            t = time.time()
+            try:
+                render_preview(self.cfg, src["raw"], src["xmp"], out)
+            finally:
+                prog["render_s"] += time.time() - t
+            return out
+
+        def post(src, out):
+            t = time.time()
+            try:
+                self.srv.upload("/api/photos/%s/preview" % src["pid"], out.read_bytes(), "image/jpeg")
+            finally:
+                prog["upload_s"] += time.time() - t
 
         ended = False
         while not ended:
@@ -1733,34 +1803,37 @@ class Agent:
                 continue
             names = [x["name"] for x in todo]
             prog["current"] = names[0] + (" +%d" % (len(names) - 1) if len(names) > 1 else "")
+            self.render_tell_bridge(prog)
             self.message = "Rendering previews: %d of %d" % (prog["done"] + prog["failed"] + len(todo), len(ids))
             outdir = tmp_root / ("out-%s" % uuid.uuid4().hex[:6])
-            # one run for the downloaded ones (named <photo id>.<ext>: the outputs cannot clash)
-            together = [x for x in todo if x.get("tmp")]
-            got = {}
+            together = [x for x in todo if x.get("tmp")]  # downloaded, named <photo id>.<ext>: outputs cannot clash
+            got, batch_err = {}, None
             if len(together) > 1:
+                t = time.time()
                 try:
                     got = render_batch(self.cfg, [x["raw"] for x in together], outdir)
+                    if len(got) < len(together):
+                        batch_err = "the batch run left out %d of %d" % (len(together) - len(got), len(together))
                 except Exception as e:
+                    batch_err = str(e)
                     log.warning("batch of %d not rendered together: %s", len(together), e)
+                prog["render_s"] += time.time() - t
             for src in todo:
                 out = got.get(src["raw"])
                 try:
                     if out is None:  # alone: a working-set copy, a batch of one, or one the batch run left out
-                        out = outdir / ("%s-single.jpg" % src["pid"])
-                        render_preview(self.cfg, src["raw"], src["xmp"], out)
-                    self.srv.upload("/api/photos/%s/preview" % src["pid"], out.read_bytes(), "image/jpeg")
+                        out = single(src, outdir)
+                    post(src, out)
                     finish(src, True)
                 except Exception as e:
                     time.sleep(5)
                     try:
                         if out is None or not out.is_file():
-                            out = outdir / ("%s-single.jpg" % src["pid"])
-                            render_preview(self.cfg, src["raw"], src["xmp"], out)
-                        self.srv.upload("/api/photos/%s/preview" % src["pid"], out.read_bytes(), "image/jpeg")
+                            out = single(src, outdir)
+                        post(src, out)
                         finish(src, True)
                     except Exception as e2:
-                        finish(src, False, "%s (first try: %s)" % (e2, e))
+                        finish(src, False, "%s (first try: %s)%s" % (e2, e, ("; batch: %s" % batch_err) if batch_err else ""))
             shutil.rmtree(outdir, ignore_errors=True)
         was_stopped = stopped()
         if was_stopped:  # let the download thread see it and end; nothing more is fetched
@@ -1773,13 +1846,32 @@ class Agent:
                 pass
         shutil.rmtree(tmp_root, ignore_errors=True)
         prog.update(ended=time.time(), current=None, stopped=was_stopped)
+        self.render_tell_bridge(prog)
+        try:
+            stop_file.unlink()
+        except OSError:
+            pass
         self.wake.set()
         done, failed = prog["done"], prog["failed"]
         self.message = "Previews rendered: %d%s" % (done, (", %d failed (see the agent log)" % failed) if failed else "")
-        log.info(self.message)
+        log.info("%s (download %.0f s, darktable %.0f s, upload %.0f s)", self.message, prog["download_s"], prog["render_s"], prog["upload_s"])
         if was_stopped:
             return "stopped"
         return "done" if done or not failed else "failed"
+
+    def render_tell_bridge(self, prog):
+        """The render job's progress for darktable (the bridge shows it as a background job with Cancel):
+        <bridge>/render.txt = job, done, failed, total, ended (0/1), stopped (0/1), current, tab separated."""
+        try:
+            BRIDGE.mkdir(parents=True, exist_ok=True)
+            line = "\t".join(str(x) for x in (prog["job"], prog["done"], prog["failed"], prog["total"],
+                                               1 if prog["ended"] else 0, 1 if prog["stopped"] else 0,
+                                               (prog["current"] or "").replace("\t", " ")))
+            tmp = BRIDGE / "render.txt.tmp"
+            tmp.write_text(line + "\n", encoding="utf-8")
+            os.replace(tmp, BRIDGE / "render.txt")
+        except OSError:
+            pass
 
     def render_source(self, pid, tmp_root: Path) -> dict:
         """One photo to render: its working-set copy, or its original and XMP downloaded as <id>.<ext> (+ .xmp, the

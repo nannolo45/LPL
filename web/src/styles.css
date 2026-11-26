@@ -873,3 +873,6 @@ td.devcheckcell, th.devcheckcell { width: 34px; padding-right: 0; }
 .renderbar { flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; padding: 6px 16px; background: var(--accent-bg); border-bottom: 1px solid var(--accent-line); color: var(--accent-text); }
 .renderline .renderbarbar { flex: 0 0 220px; display: flex; }
 .renderline .renderbarbar .xbar { width: 100%; }
+.renderline .renderfail { color: var(--accent-text); font-size: 12px; flex: 0 0 auto; }
+.renderwhy { gap: 3px; padding: 6px 10px; border-radius: 6px; background: rgba(0,0,0,.25); color: var(--text); max-height: 160px; overflow: auto; }
+.dialog.renderdlg { width: min(460px, calc(100vw - 32px)); }

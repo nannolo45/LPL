@@ -49,6 +49,7 @@ def fake_dt(tmp_path, agent_mod, monkeypatch):  # noqa: F811
     (conf / "darktablerc").write_text("plugins/darkroom/lut3d/def_path=/luts\n")
     (conf / "data.db").write_bytes(b"styles")
     monkeypatch.setattr(agent_mod, "data_dir", lambda: tmp_path / "agentdata")
+    monkeypatch.setattr(agent_mod, "BRIDGE", tmp_path / "bridge")
     return {"darktable": str(b / "darktable"), "darktable_configdir": str(conf), "log": log}
 
 
@@ -301,3 +302,76 @@ def test_a_photo_the_batch_left_out_is_rendered_alone(agent_mod, fake_dt, tmp_pa
     got = agent_mod.render_batch({"darktable": fake_dt["darktable"], "darktable_configdir": fake_dt["darktable_configdir"]},
                                  files, tmp_path / "out")
     assert list(got) == [files[0]] and got[files[0]].name == "1.jpg"
+
+
+def test_darktable_sees_the_progress_and_can_cancel(clean, base_url, agent_mod, fake_dt, tmp_path, monkeypatch):  # noqa: F811
+    a = agent_mod.Agent({"id": "pc-render6", "name": "Laptop", "server": base_url, "password": "", "auto_sync_seconds": 0,
+                         "darktable": fake_dt["darktable"], "darktable_configdir": fake_dt["darktable_configdir"]})
+    monkeypatch.setattr(agent_mod.time, "sleep", lambda s: None)
+    assert a.render_job(["1", "2"], 50) == "done"
+    assert (tmp_path / "bridge" / "render.txt").read_text().split("\t")[:6] == ["50", "2", "0", "2", "1", "0"]
+    p = a.state()["render"]
+    assert p["errors"] == [] and p["download_s"] >= 0 and p["render_s"] > 0 and p["bytes"] > 0
+    (tmp_path / "bridge" / "render-stop.txt").write_text("51")   # Cancel in darktable
+    assert a.render_job(["1", "2"], 51) == "stopped"
+    assert not (tmp_path / "bridge" / "render-stop.txt").exists()
+    assert (tmp_path / "bridge" / "render.txt").read_text().split("\t")[4:6] == ["1", "1"]
+
+
+def test_failures_say_why(clean, base_url, agent_mod, fake_dt, monkeypatch):  # noqa: F811
+    a = agent_mod.Agent({"id": "pc-render7", "name": "Laptop", "server": base_url, "password": "", "auto_sync_seconds": 0,
+                         "darktable": fake_dt["darktable"], "darktable_configdir": fake_dt["darktable_configdir"]})
+    monkeypatch.setattr(agent_mod.time, "sleep", lambda s: None)
+    assert a.render_job(["999999"], 52) == "failed"                     # no such photo on the NAS
+    e = a.state()["render"]["errors"]
+    assert len(e) == 1 and e[0]["error"].startswith("download:")
+
+
+def test_job_list_stop_offline_clear_and_several_pcs(clean):
+    c = clean
+    with db.write_lock:
+        db.conn().execute("DELETE FROM agents")
+        db.conn().execute("DELETE FROM jobs")
+        db.conn().commit()
+    for i in (1, 2, 3):
+        make_stale(i)
+    hb = lambda aid, name, st=None: c.post("/api/agents/heartbeat", json={"id": aid, "name": name, "os": "linux",
+                                                                         "caps": ["render"], "state": st or {}}).json()
+    hb("pc-d", "Desktop")
+    hb("pc-l", "Laptop")
+    r = c.post("/api/previews/render", json={"ids": [1, 2, 3], "agent_ids": ["pc-d", "pc-l"]}).json()
+    assert [(j["agent_name"], j["count"]) for j in r["jobs"]] == [("Desktop", 2), ("Laptop", 1)]
+    assert r["agent_name"] == "Desktop and Laptop"
+    jd, jl = r["jobs"][0]["id"], r["jobs"][1]["id"]
+    jobs = {j["id"]: j for j in c.get("/api/previews/jobs").json()["jobs"]}
+    assert jobs[jd]["status"] == "queued" and jobs[jd]["total"] == 2 and jobs[jd]["progress"] is None
+    hb("pc-l", "Laptop", {"agent_started": time.time() - 10})              # the Laptop takes its job ...
+    hb("pc-l", "Laptop", {"agent_started": time.time() - 10, "render": {"job": jl, "done": 0, "total": 1, "ended": None}})
+    assert c.get("/api/previews/jobs").json()["jobs"][1]["progress"]["job"] == jl
+    with db.write_lock:                                                   # ... and goes to sleep
+        db.conn().execute("UPDATE agents SET last_seen=? WHERE id='pc-l'", (time.time() - 3600,))
+        db.conn().commit()
+    c.post("/api/previews/render/%d/stop" % jl)                           # Stop while it is away: stopped at once
+    assert db.conn().execute("SELECT status FROM jobs WHERE id=?", (jl,)).fetchone()[0] == "stopped"
+    back = hb("pc-l", "Laptop", {"agent_started": time.time() - 10, "render": {"job": jl, "done": 0, "total": 1, "ended": None}})
+    assert back.get("stop_render") == [jl] and back["jobs"] == []         # back and still at it: told to stop
+    c.post("/api/previews/render/%d/clear" % jd)                          # cleared: stopped (queued) and off the bar
+    ids_on_bar = [j["id"] for j in c.get("/api/previews/jobs").json()["jobs"]]
+    assert jd not in ids_on_bar and jl in ids_on_bar                      # Laptop's ended a moment ago: still shown
+    assert db.conn().execute("SELECT status FROM jobs WHERE id=?", (jd,)).fetchone()[0] == "stopped"
+    with db.write_lock:
+        db.conn().execute("UPDATE jobs SET ended=? WHERE id=?", (time.time() - 120, jl))
+        db.conn().commit()
+    assert c.get("/api/previews/jobs").json()["jobs"] == []               # ended over a minute ago: gone by itself
+
+
+def test_an_installed_bridge_is_refreshed_when_the_agent_starts(agent_mod, tmp_path):  # noqa: F811
+    conf = tmp_path / "dtconf"
+    dest = conf / "lua" / "lightphotolibrary" / "lpl_bridge.lua"
+    assert agent_mod.refresh_bridge({"darktable_configdir": str(conf)}) is None       # none installed: none added
+    assert not dest.exists()
+    dest.parent.mkdir(parents=True)
+    dest.write_text("-- old bridge")
+    assert agent_mod.refresh_bridge({"darktable_configdir": str(conf)}) == dest
+    assert "render.txt" in dest.read_text()
+    assert agent_mod.refresh_bridge({"darktable_configdir": str(conf)}) is None       # same now: left alone

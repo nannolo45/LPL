@@ -1104,6 +1104,11 @@ def heartbeat(body: Dict[str, Any] = Body(...)):
             out.append({"id": j["id"], "kind": j["kind"], "payload": payload})
         extra = transfers.on_heartbeat(c, aid, body, out, now)  # nothing for a device that announces no caps
         stop_render = [r[0] for r in c.execute("SELECT id FROM jobs WHERE agent_id=? AND kind='render' AND status='stopping'", (aid,))]
+        rs = (state if isinstance(state, dict) else {}).get("render")
+        if isinstance(rs, dict) and rs.get("ended") is None and isinstance(rs.get("job"), int) and rs["job"] not in stop_render:
+            st = c.execute("SELECT status FROM jobs WHERE id=?", (rs["job"],)).fetchone()
+            if st and st[0] in ("stopped", "done", "failed"):  # stopped while the PC was away, and it is still at it
+                stop_render.append(rs["job"])
         if stop_render:  # render jobs to stop (POST /api/previews/render/{jid}/stop), said until the job is done
             extra = {**extra, "stop_render": stop_render}
         if transfers.caps_of(c, aid):  # R18: what this server can do, for a device that announces caps (others: no new key)
@@ -1244,18 +1249,62 @@ def previews_count(body: Dict[str, Any] = Body(...)):
 
 @app.post("/api/previews/render/{jid}/stop")
 def previews_render_stop(jid: int):
-    """Stop a render job: one not handed out yet never starts; a running one stops after the photo in hand."""
+    """Stop a render job: one not handed out yet never starts; a running one stops after the batch in hand. When its
+    PC is offline (asleep, shut down) the job is stopped at once: it is not handed out again when the PC is back, and
+    if the PC comes back still running it, the heartbeat tells it to stop."""
+    with db.write_lock:
+        c = db.conn()
+        j = c.execute("SELECT status, kind, agent_id FROM jobs WHERE id=?", (jid,)).fetchone()
+        if not j or j["kind"] != "render":
+            raise HTTPException(404, "no such render job")
+        online = any(a["id"] == j["agent_id"] and a["online"] for a in list_agents())
+        if j["status"] == "queued" or (j["status"] in ("taken", "stopping") and not online):
+            c.execute("UPDATE jobs SET status='stopped', ended=? WHERE id=?", (time.time(), jid))
+        elif j["status"] == "taken":
+            c.execute("UPDATE jobs SET status='stopping' WHERE id=?", (jid,))
+        c.commit()
+    return {"ok": True}
+
+
+@app.post("/api/previews/render/{jid}/clear")
+def previews_render_clear(jid: int):
+    """Take a render job off the bar at the top (stopping it first if it has not ended)."""
     with db.write_lock:
         c = db.conn()
         j = c.execute("SELECT status, kind FROM jobs WHERE id=?", (jid,)).fetchone()
         if not j or j["kind"] != "render":
             raise HTTPException(404, "no such render job")
-        if j["status"] == "queued":
-            c.execute("UPDATE jobs SET status='stopped' WHERE id=?", (jid,))
-        elif j["status"] == "taken":
-            c.execute("UPDATE jobs SET status='stopping' WHERE id=?", (jid,))
-        c.commit()
+    if j["status"] in ("queued", "taken", "stopping"):
+        previews_render_stop(jid)
+    with db.write_lock:
+        db.conn().execute("UPDATE jobs SET hidden=1 WHERE id=?", (jid,))
+        db.conn().commit()
     return {"ok": True}
+
+
+RENDER_SHOW_ENDED = 60  # seconds an ended render job stays on the bar
+
+
+@app.get("/api/previews/jobs")
+def previews_jobs():
+    """The bar at the top: render jobs not cleared that are waiting, running, being stopped, or ended in the last
+    minute; with their PC, its last progress report for that job (if any) and whether it is online."""
+    c = db.conn()
+    agents = {a["id"]: a for a in list_agents()}
+    out = []
+    for j in c.execute("SELECT * FROM jobs WHERE kind='render' AND COALESCE(hidden,0)=0 AND (status IN "
+                       "('queued','taken','stopping') OR ended>?) ORDER BY id", (time.time() - RENDER_SHOW_ENDED,)):
+        a = agents.get(j["agent_id"]) or {}
+        r = (a.get("state") or {}).get("render")
+        prog = r if isinstance(r, dict) and r.get("job") == j["id"] else None
+        try:
+            total = len(json.loads(j["payload"] or "{}").get("ids") or [])
+        except ValueError:
+            total = 0
+        out.append({"id": j["id"], "status": j["status"], "agent_id": j["agent_id"], "agent_name": a.get("name") or j["agent_id"],
+                    "online": bool(a.get("online")), "total": total, "created": j["created"], "ended": j["ended"],
+                    "progress": prog})
+    return {"jobs": out}
 
 
 @app.get("/api/previews/stale")
@@ -1263,29 +1312,42 @@ def previews_stale():
     """How many edited photos still show a preview from before their edit, and which PCs can render them now."""
     c = db.conn()
     n = c.execute("SELECT COUNT(*) FROM photos WHERE " + STALE_SQL).fetchone()[0]
-    return {"count": n, "agents": [{"id": a["id"], "name": a["name"]} for a in _render_agents(c)]}
+    agents = _render_agents(c)
+    return {"count": n, "agents": [{"id": a["id"], "name": a["name"]} for a in agents],
+            **({} if agents else {"why": _why_no_render(c)})}
 
 
 @app.post("/api/previews/render")
 def previews_render(body: Dict[str, Any] = Body(...)):
-    """ids: these photos; or stale: true for every edited photo whose preview is from before its edit. agent_id
-    optional (else the only online PC that can render, or the first). One "render" job; the PC downloads each photo
-    and its XMP, renders with darktable-cli and posts the JPEG to /api/photos/{id}/preview."""
+    """Which photos: see _render_ids. agent_ids (or agent_id): the PCs to render on, the photos split between them in
+    runs; none given: the first online PC that can render. One "render" job per PC; the PC downloads each photo and
+    its XMP, renders with darktable-cli and posts the JPEG to /api/photos/{id}/preview."""
     c = db.conn()
     ids = _render_ids(c, body)
     if not ids:
         return {"id": None, "count": 0, "agent_id": None}
     agents = _render_agents(c)
-    aid = body.get("agent_id") or (agents[0]["id"] if agents else None)
-    if not aid or aid not in [a["id"] for a in agents]:
+    want = body.get("agent_ids") or ([body["agent_id"]] if body.get("agent_id") else [])
+    chosen = [a for a in agents if a["id"] in want] if want else agents[:1]
+    if not chosen:
         raise HTTPException(409, _why_no_render(c))
+    # split among the chosen PCs in runs of photos next to each other (a series' order stays together per PC)
+    k = len(chosen)
+    size = -(-len(ids) // k)
+    parts = [ids[i * size:(i + 1) * size] for i in range(k)]
+    jobs = []
     with db.write_lock:
         c = db.conn()
-        jid = c.execute("INSERT INTO jobs(agent_id,kind,payload,created) VALUES(?,?,?,?)",
-                        (aid, "render", json.dumps({"ids": ids}), time.time())).lastrowid
+        for a, part in zip(chosen, parts):
+            if not part:
+                continue
+            jid = c.execute("INSERT INTO jobs(agent_id,kind,payload,created) VALUES(?,?,?,?)",
+                            (a["id"], "render", json.dumps({"ids": part}), time.time())).lastrowid
+            jobs.append({"id": jid, "agent_id": a["id"], "agent_name": a["name"], "count": len(part)})
         c.commit()
-    name = next((a["name"] for a in agents if a["id"] == aid), aid)
-    return {"id": jid, "count": len(ids), "agent_id": aid, "agent_name": name}
+    first = jobs[0]
+    return {"id": first["id"], "count": len(ids), "agent_id": first["agent_id"],
+            "agent_name": " and ".join(j["agent_name"] for j in jobs), "jobs": jobs}
 
 
 @app.get("/api/jobs")
@@ -1297,7 +1359,7 @@ def jobs_list():
 @app.post("/api/jobs/{jid}/done")
 def job_done(jid: int, body: Dict[str, Any] = Body(default={})):
     with db.write_lock:
-        db.conn().execute("UPDATE jobs SET status=? WHERE id=?", (body.get("status") or "done", jid))
+        db.conn().execute("UPDATE jobs SET status=?, ended=? WHERE id=?", (body.get("status") or "done", time.time(), jid))
         transfers.on_done(db.conn(), jid, body)
         db.conn().commit()
     return {"ok": True}

@@ -166,7 +166,12 @@ export interface WorkItem { id: number; version?: number; filename: string; stat
   /** the PC agent from 23 Nov 2026: the copy from the NAS never completed (nothing of the user's in it) */
   copy_failed?: boolean }
 /** A PC's render job as its agent reports it (agent/lpl_agent.py render_job): previews rendered with darktable-cli. */
-export interface RenderProgress { job: number; total: number; done: number; failed: number; current: string | null; started: number; ended: number | null; stopped: boolean }
+export interface RenderProgress {
+  job: number; total: number; done: number; failed: number; current: string | null; started: number; ended: number | null; stopped: boolean
+  errors?: { photo: string; error: string }[]; download_s?: number; render_s?: number; upload_s?: number; bytes?: number
+}
+/** A render job as the bar at the top shows it (GET /api/previews/jobs). */
+export interface RenderJob { id: number; status: string; agent_id: string; agent_name: string; online: boolean; total: number; created: number; ended: number | null; progress: RenderProgress | null }
 /** What a render request covers: these photos, every out-of-date one, or a series / series folder / library folder. */
 export type RenderScope = { ids?: number[]; stale?: boolean; series?: number; series_folder?: number; folder?: string; all?: boolean }
 export interface Agent { id: string; name: string; os: string; last_seen: number; online: boolean; state: { working_set?: WorkItem[]; render?: RenderProgress | null; render_unavailable?: string; darktable_running?: boolean; bridge_alive?: boolean; bridge_status?: string; version?: string; message?: string; local_url?: string; local_error?: string }
@@ -322,10 +327,12 @@ export const api = {
   agents: () => call<{ agents: Agent[]; server_time: number }>('GET', '/api/agents'),
   job: (kind: string, payload: Record<string, unknown>, agent_id?: string) => call<{ id: number; agent_id: string | null; message?: string }>('POST', '/api/jobs', { kind, payload, agent_id }),
   // previews that show darktable's edit, rendered by a PC with darktable-cli
-  previewsStale: () => call<{ count: number; agents: { id: string; name: string }[] }>('GET', '/api/previews/stale'),
+  previewsStale: () => call<{ count: number; agents: { id: string; name: string }[]; why?: string }>('GET', '/api/previews/stale'),
+  previewsJobs: () => call<{ jobs: RenderJob[] }>('GET', '/api/previews/jobs'),
+  previewsClear: (job: number) => call<unknown>('POST', `/api/previews/render/${job}/clear`),
   previewsCount: (body: RenderScope) => call<{ count: number }>('POST', '/api/previews/count', body),
   previewsStop: (job: number) => call<unknown>('POST', `/api/previews/render/${job}/stop`),
-  previewsRender: (body: RenderScope & { agent_id?: string }) => call<{ id: number | null; count: number; agent_id: string | null; agent_name?: string }>('POST', '/api/previews/render', body),
+  previewsRender: (body: RenderScope & { agent_id?: string; agent_ids?: string[] }) => call<{ id: number | null; count: number; agent_id: string | null; agent_name?: string }>('POST', '/api/previews/render', body),
   jobs: () => call<{ jobs: { id: number; agent_id: string | null; kind: string; payload: any; created: number; status: string }[] }>('GET', '/api/jobs'),
 }
 

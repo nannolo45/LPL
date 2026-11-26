@@ -18,6 +18,10 @@
     <bridge>/outbox/<name>.jpg + <name>.done
                            written when you leave an image in darkroom: a rendered preview for LPL
                            and a marker telling the agent to sync the XMP back to the NAS now.
+    <bridge>/render.txt    written by the agent while it renders previews for LPL with darktable-cli:
+                           job, done, failed, total, ended (0/1), stopped (0/1), current photo (tab separated).
+                           Shown here as a darktable background job with a progress bar; its Cancel writes
+    <bridge>/render-stop.txt  (the job number), which the agent reads before each batch.
     <bridge> = %LOCALAPPDATA%\LightPhotoLibrary\bridge  (Windows)
                ~/.local/share/lightphotolibrary/bridge  (Linux)
 ]]
@@ -271,9 +275,42 @@ local busy = false
 local last_tick = 0
 local rearm = nil  -- set by the loop below
 
+-- previews LPL has this PC render with darktable-cli: a background job in darktable (bottom of the left panel)
+-- with a progress bar and Cancel, and a message when it ends
+local RENDER = BRIDGE .. sep .. "render.txt"
+local RENDER_STOP = BRIDGE .. sep .. "render-stop.txt"
+local render_job, render_id = nil, nil
+
+local function render_tick()
+  local f = io.open(RENDER, "rb")
+  if not f then return end
+  local line = f:read("*l") or ""
+  f:close()
+  local job, done, failed, total, ended, stopped_ = line:match("^(%d+)\t(%d+)\t(%d+)\t(%d+)\t(%d)\t(%d)")
+  if not job then return end
+  done, failed, total = tonumber(done), tonumber(failed), tonumber(total)
+  if ended == "0" then
+    if render_job == nil or render_id ~= job then
+      if render_job then pcall(function() render_job.valid = false end) end
+      local ok, j = pcall(dt.gui.create_job, "LPL: rendering " .. total .. " previews with darktable", true,
+        function(_) write_file(RENDER_STOP, job); dt.print("LPL: stopping the previews after the photos in hand") end)
+      if ok then render_job, render_id = j, job else status("no background job for rendering: " .. tostring(j)) end
+    end
+    if render_job and total > 0 then
+      pcall(function() render_job.percent = math.min(1, (done + failed) / total) end)
+    end
+  elseif render_job and render_id == job then  -- ended: only a job shown in this session gets the message
+    pcall(function() render_job.valid = false end)
+    render_job, render_id = nil, nil
+    pcall(dt.print, "LPL: " .. (stopped_ == "1" and "previews stopped, " or "previews updated: ") .. done .. " rendered" ..
+      (failed > 0 and (", " .. failed .. " failed (see the agent's log)") or ""))
+  end
+end
+
 -- background loop: alive + read requests only
 local function tick_bg()
   write_file(ALIVE, tostring(os.time()))
+  pcall(render_tick)
   local ok, err = pcall(collect)
   if not ok then status("reading requests failed: " .. tostring(err)) end
   if #pending > 0 and not announced then

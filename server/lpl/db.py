@@ -241,6 +241,10 @@ def migrate(c: sqlite3.Connection) -> None:
     jcols = {r[1] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
     if "attempts" not in jcols:  # how often a job was handed out (a taken job is handed out again after a while)
         c.execute("ALTER TABLE jobs ADD COLUMN attempts INTEGER DEFAULT 0")
+    if "ended" not in jcols:  # when a job was reported done or was stopped (render jobs: the bar at the top)
+        c.execute("ALTER TABLE jobs ADD COLUMN ended REAL")
+    if "hidden" not in jcols:  # a render job cleared from the bar at the top
+        c.execute("ALTER TABLE jobs ADD COLUMN hidden INTEGER DEFAULT 0")
     scols = {r[1] for r in c.execute("PRAGMA table_info(series)").fetchall()}
     # series folders and the board link: a series is at the top level (folder_id NULL) or in one folder, has a place
     # among its neighbours (pos), a lane colour, and says whether its own board gives its order (linked, default yes)
