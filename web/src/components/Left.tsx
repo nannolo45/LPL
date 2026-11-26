@@ -172,13 +172,16 @@ export function FilterPanel() {
           })}
         </div>
       </Section>
-      <Section id="darktable" title="darktable" summary={[f.edited === 'yes' ? 'edited' : f.edited === 'no' ? 'not edited' : '', f.exports === 'yes' ? 'has exports' : ''].filter(Boolean).join(' · ')}>
+      <Section id="darktable" title="darktable" summary={[f.edited === 'yes' ? 'edited' : f.edited === 'no' ? 'not edited' : '', f.preview === 'stale' ? 'preview not updated' : '', f.exports === 'yes' ? 'has exports' : ''].filter(Boolean).join(' · ')}>
         <div className="row" style={{ gap: 4 }}>
           {[['', 'all'], ['yes', 'edited'], ['no', 'not edited']].map(([v, l]) => (
             <button key={v} className={'chip' + ((f.edited || '') === v ? ' on' : '')} onClick={() => s.patchFilters({ edited: v as any })}>{l}</button>
           ))}
         </div>
         <div className="row" style={{ gap: 4, marginTop: 4 }}>
+          <button className={'chip' + (f.preview === 'stale' ? ' on' : '')} aria-pressed={f.preview === 'stale'}
+            title="Edited photos whose preview in LPL does not show the darktable edit yet (select them and use “Update previews from the edit”)"
+            onClick={() => s.patchFilters({ preview: f.preview === 'stale' ? '' : 'stale' })}>preview not updated</button>
           <button className={'chip' + (f.exports === 'yes' ? ' on' : '')} aria-pressed={f.exports === 'yes'} onClick={() => s.patchFilters({ exports: f.exports === 'yes' ? '' : 'yes' })}>has exports</button>
         </div>
       </Section>
