@@ -977,6 +977,8 @@ LUT_EVERY = 600  # seconds between passes (and one at start)
 LUT_EXTS = (".cube", ".3dl", ".png", ".gmz")
 LUT_MAX = 64 * 1024 * 1024
 LUT_KEY = "plugins/darkroom/lut3d/def_path"
+LUT_MAX_FILES = 3000      # more LUT files than this: the folder is not a LUT folder (a home folder, a photo library)
+LUT_MAX_WALK = 100000     # entries looked at before giving up on a folder that big
 
 
 def lut_folder(cfg: dict):
@@ -997,6 +999,13 @@ def lut_folder(cfg: dict):
         return None, "darktable's LUT folder is not an absolute path: %s" % value
     if not p.is_dir():
         return None, "darktable's LUT folder does not exist: %s" % value
+    try:
+        rp, home = p.resolve(), Path.home().resolve()
+    except OSError:
+        rp, home = p, Path.home()
+    if rp == Path(rp.anchor) or rp == home or rp in home.parents:
+        return None, ("darktable's LUT folder is %s, a whole home folder or drive: set a folder with only LUT files "
+                      "(darktable: preferences > processing > LUT 3D root folder)" % value)
     return p, None
 
 
@@ -1011,14 +1020,23 @@ def lut_path_ok(rel: str) -> bool:
     return rel.lower().endswith(LUT_EXTS)
 
 
+class TooManyLuts(Exception):
+    pass
+
+
 def lut_files(folder: Path):
-    """relative path -> file of every LUT file under folder (links not followed); and the paths left out, with why."""
+    """relative path -> file of every LUT file under folder (links and hidden folders and files not followed); and the
+    paths left out, with why. TooManyLuts when the folder is clearly not a LUT folder (too many files)."""
     out, skipped = {}, {}
+    seen = 0
     for root, dirs, files in os.walk(folder, followlinks=False):
-        dirs[:] = sorted(d for d in dirs if not os.path.islink(os.path.join(root, d)))
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and not os.path.islink(os.path.join(root, d)))
+        seen += len(dirs) + len(files)
+        if seen > LUT_MAX_WALK:
+            raise TooManyLuts("more than %d files and folders" % LUT_MAX_WALK)
         for n in sorted(files):
             full = Path(root) / n
-            if full.is_symlink() or not n.lower().endswith(LUT_EXTS) or n.startswith(".lpl-lut-"):
+            if n.startswith(".") or full.is_symlink() or not n.lower().endswith(LUT_EXTS):
                 continue
             rel = full.relative_to(folder).as_posix()
             if not lut_path_ok(rel):
@@ -1031,6 +1049,8 @@ def lut_files(folder: Path):
             except OSError:
                 continue
             out[rel] = full
+            if len(out) > LUT_MAX_FILES:
+                raise TooManyLuts("more than %d LUT-type files" % LUT_MAX_FILES)
     return out, skipped
 
 
@@ -1053,6 +1073,7 @@ class LutSync:
         self.started = False
         self.status = None             # heartbeat state.luts
         self.lock = threading.RLock()
+        self.running = None            # the thread of the pass under way
         self.state_file = STATE_FILE.with_name("luts.json")
         if self.state_file.is_file():
             try:
@@ -1072,12 +1093,23 @@ class LutSync:
         return "luts" in (self.agent.server_caps or [])
 
     def tick(self, force=False):
-        """From the main loop: a pass at start and every LUT_EVERY seconds."""
+        """From the main loop: a pass at start and every LUT_EVERY seconds, in its own thread, so a long pass (many
+        files to send) never holds up the heartbeat and the jobs."""
         if not self.active():
+            return
+        if self.running is not None and self.running.is_alive():
             return
         if force or not self.started or time.time() - self.last_pass >= LUT_EVERY:
             self.started = True
+            self.last_pass = time.time()
+            self.running = threading.Thread(target=self._pass, name="lut-pass", daemon=True)
+            self.running.start()
+
+    def _pass(self):
+        try:
             self.sync_pass()
+        except Exception as e:
+            log.warning("LUT folder: %s", e)
 
     def hash_of(self, rel: str, full: Path) -> str:
         st = full.stat()
@@ -1150,7 +1182,14 @@ class LutSync:
             self.status = {"folder": None, "reason": reason}
             srv.json("PUT", "/api/luts/state?agent=%s" % aid, {"folder": None, "reason": reason, "files": {}})
             return
-        local, skipped = lut_files(folder)
+        try:
+            local, skipped = lut_files(folder)
+        except TooManyLuts as e:
+            reason = "darktable's LUT folder %s has %s: not sent; set a folder with only LUT files" % (folder, e)
+            self.status = {"folder": None, "reason": reason}
+            srv.json("PUT", "/api/luts/state?agent=%s" % aid, {"folder": None, "reason": reason, "files": {}})
+            log.warning("LUT folder: %s", reason)
+            return
         listed = srv.json("GET", "/api/luts?since=0")
         server = {e["path"]: e for e in listed.get("files") or [] if not e.get("deleted")}
         base, removed, refused = self.data["base"], set(self.data["removed"]), self.data["refused"]
@@ -1836,6 +1875,8 @@ class Agent:
                 log.warning("LUT folder: %s", e)
             if once:
                 time.sleep(0.5)
+                if self.luts.running is not None:
+                    self.luts.running.join(600)
                 while not self.jobs.empty():
                     time.sleep(0.2)
                 time.sleep(0.5)

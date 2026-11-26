@@ -58,3 +58,20 @@ export function lutCount(o: Pick<LutOverview, 'files' | 'bytes_current' | 'bytes
 /** What "Remove from LPL" asks first. */
 export const removeQuestion = (path: string) =>
   `Remove ${path} from LightPhotoLibrary? No device loses its copy, and LPL keeps the file's earlier versions. A device that changes the file sends it again.`
+
+/** Files by their top folder ("" for files at the top), folders in name order, the top level first. */
+export function lutGroups(files: LutFile[]): [string, LutFile[]][] {
+  const m = new Map<string, LutFile[]>()
+  for (const f of files) {
+    const i = f.path.indexOf('/')
+    const k = i < 0 ? '' : f.path.slice(0, i)
+    if (!m.has(k)) m.set(k, [])
+    m.get(k)!.push(f)
+  }
+  return [...m.entries()].sort((a, b) => (a[0] === '' ? -1 : b[0] === '' ? 1 : a[0].localeCompare(b[0], undefined, { sensitivity: 'base' })))
+}
+
+/** What "Remove folder from LPL" asks first. */
+export const removeFolderQuestion = (folder: string, n: number) =>
+  `Remove the folder ${folder} (${n} file${n === 1 ? '' : 's'}) from LightPhotoLibrary? No device loses its copies. ` +
+  `Unlike removing one file, LPL also deletes their stored copies and earlier versions from the NAS.`

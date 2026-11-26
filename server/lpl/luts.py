@@ -86,6 +86,8 @@ def clean_path(p: Any) -> str:
     parts = p.split("/")
     if any(s in ("", ".", "..") for s in parts):
         raise ValueError("empty, . or .. step in the path")
+    if any(s.startswith(".") for s in parts):  # hidden folders and files (a LUT folder set to a home folder: ~/.cache)
+        raise ValueError("hidden folder or file in the path: %s" % p)
     if not p.lower().endswith(EXTENSIONS):
         raise ValueError("not a LUT file (.cube, .3dl, .png, .gmz): %s" % p)
     return p
@@ -238,6 +240,51 @@ def luts_delete(path: str = ""):
         return entry(_row(c, path))
 
 
+def _in_folder(path: str, folder: str) -> bool:
+    return path.startswith(folder + "/") if folder else True
+
+
+@router.post("/api/luts/remove-folder")
+def luts_remove_folder(body: Dict[str, Any] = Body(...)):
+    """Web UI only: every path under folder ("" = all) is removed from LPL, like DELETE /api/luts/file, and, because
+    such a folder is usually files that never were LUTs (a home folder's .cache), their stored contents and earlier
+    versions are deleted from the NAS too when nothing else uses them. No device deletes its copy. Paths the
+    contract no longer allows (hidden folders) can be removed this way; they are not checked with clean_path."""
+    folder = body.get("folder")
+    if not isinstance(folder, str) or len(folder) > MAX_PATH_BYTES or folder.startswith("/") or "\\" in folder:
+        raise HTTPException(400, "folder required")
+    folder = folder.strip("/")
+    with db.write_lock:
+        c = db.conn()
+        rows = [r for r in c.execute("SELECT path, sha256, deleted FROM lut_files").fetchall() if _in_folder(r["path"], folder)]
+        if not rows:
+            raise HTTPException(404, "no LUT files in that folder")
+        now, seq, n = time.time(), _next_seq(c), 0
+        shas = set()
+        for r in rows:
+            shas.add(r["sha256"])
+            if not r["deleted"]:
+                c.execute("UPDATE lut_files SET deleted=1, seq=?, changed_at=?, device_id=NULL, device_name=NULL WHERE path=?",
+                          (seq, now, r["path"]))
+                seq += 1
+                n += 1
+            for h in c.execute("SELECT sha256 FROM lut_history WHERE path=?", (r["path"],)):
+                shas.add(h[0])
+            c.execute("DELETE FROM lut_history WHERE path=?", (r["path"],))
+        c.commit()
+        used = {x[0] for x in c.execute("SELECT sha256 FROM lut_files WHERE deleted=0")} | \
+            {x[0] for x in c.execute("SELECT sha256 FROM lut_history")}
+    freed = 0
+    for h in shas - used:
+        b = blob_path(h)
+        try:
+            freed += b.stat().st_size
+            b.unlink()
+        except OSError:
+            pass
+    return {"removed": n, "freed_bytes": freed}
+
+
 @router.put("/api/luts/state")
 def luts_state(agent: str = "", body: Dict[str, Any] = Body(...)):
     """The device's whole list (replace): folder (or null and a reason) and, per path, sha256 and state."""
@@ -283,8 +330,9 @@ def _stored_bytes() -> int:
 
 
 @router.get("/api/luts/overview")
-def luts_overview():
-    """For the web UI: every path with its devices, every device that reported, the bytes stored."""
+def luts_overview(removed: int = 0):
+    """For the web UI: every path LPL has (removed ones too with removed=1) with its devices, every device that
+    reported, the bytes stored."""
     from . import transfers
     c = db.conn()
     agents = {a["id"]: a for a in c.execute("SELECT * FROM agents").fetchall()}
@@ -305,7 +353,7 @@ def luts_overview():
                                            "sha256": v.get("sha256"), "state": v.get("state") or "ok"})
     hist = {r[0]: r[1] for r in c.execute("SELECT path, COUNT(*) FROM lut_history GROUP BY path")}
     files = []
-    for r in c.execute("SELECT * FROM lut_files ORDER BY path COLLATE NOCASE").fetchall():
+    for r in c.execute("SELECT * FROM lut_files %sORDER BY path COLLATE NOCASE" % ("" if removed else "WHERE deleted=0 ")).fetchall():
         files.append(dict(entry(r), history=hist.get(r["path"], 0),
                           devices=sorted(have.get(r["path"], []), key=lambda x: (x["name"] or "").casefold())))
     current = c.execute("SELECT COALESCE(SUM(size),0) FROM lut_files WHERE deleted=0").fetchone()[0] or 0
