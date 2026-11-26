@@ -170,6 +170,7 @@ a { color: var(--accent); }
 .frame .fx { position: absolute; right: 8px; top: 6px; z-index: 2; border: 0; background: transparent; color: #7c7c84; font-size: 13px; }
 .bitem { position: absolute; padding: 0; border: 0; border-radius: 4px; background: #2a2a2e; cursor: grab; touch-action: none; box-shadow: 0 2px 6px rgba(0,0,0,.45); }
 .bitem img { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; display: block; pointer-events: none; }
+.bitem img.hi { position: absolute; inset: 0; }   /* the large preview over the small one once zoomed in far */
 .bitem.sel { box-shadow: 0 0 0 2px #212124, 0 0 0 4px var(--accent); }
 .bitem .num { position: absolute; left: 4px; top: 4px; min-width: 14px; padding: 1px 4px; font: 600 10px/14px Inter, sans-serif; color: #1a1a1a; background: var(--accent); border-radius: 3px; }
 .bitem .num.maybe { background: #9a9aa0; }
