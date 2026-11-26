@@ -3,7 +3,7 @@
 Work package P6b, LPL branch `p6b-lut-folder`. The contract below is a copy of darktable-android `docs/PLAN.md` 4.6 (branch `p6b-lut3d-files`); that copy is the source of truth. A change to the contract is made in both places in the same step. PR text: `docs/luts-r19-PR.md`.
 
 ## LUT folder (R19, brief P6b, specified 26 Nov 2026)
-Owner's decision (26 Nov 2026): LUT 3D files come from either place, a folder on the phone and the PCs' darktable LUT folder, carried by LPL. Opt-in like R11: a device adds `"luts"` to heartbeat `caps`, the server lists `"luts"` in `server_caps`. A device or server without it behaves as before.
+Owner's decision (26 Nov 2026): LUT 3D files come from either place, a folder on the phone and the PCs' darktable LUT folder, carried by LPL. Opt-in like R11: a device adds `"luts"` to heartbeat `caps` (the PC agent always; the phone once the server has listed it in `server_caps`, as with `shared`), the server lists `"luts"` in `server_caps` to a device that announces caps. A device or server without it behaves as before.
 
 **How desktop does it** (pinned `src/iop/lut3d.c`): the LUT folder is the preference `plugins/darkroom/lut3d/def_path`; the parameter `filepath` holds the path **relative to that folder** with `/` separators, so an XMP made on one device works on another whose LUT folder has the same file at the same relative path. Formats `.cube`, `.3dl`, `.png` (Hald CLUT), and `.gmz` only in a darktable built with G'MIC. A missing or unreadable file renders the module as a pass-through (the picture is unchanged) and shows "error - invalid cube file: <full path>" (`invalid png file`, `invalid 3dl file`); the file list shows `INVALID >> <relative path>`.
 
