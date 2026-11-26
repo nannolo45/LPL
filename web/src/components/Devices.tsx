@@ -11,6 +11,7 @@ import { ago, deviceCounts, deviceRows, FailedItem, filterCounts, filterRows, is
 import { Bar, Chevron, CrossIcon, PlayIcon, StopIcon } from './DevicesBits'
 import { devicesApi, refreshStatus } from '../devicesApi'
 import { SharedSection } from './Shared'
+import { LutSection } from './Luts'
 import { ProgressBar, useTick } from './EditRecord'
 import { SettingsDialog } from './Shortcuts'
 import { boxState, bulkActions, prune, rangeIds, RowKind, Selection, SelRow, toggleGroup, toggleId } from '../selection'
@@ -529,6 +530,7 @@ export function DevicesView() {
           </div>
           {none}{cards}
           <SharedSection phone now={now} />
+          <LutSection phone now={now} />
           <RecentHandoffs now={now} act={act} phone />
           <div style={{ padding: '4px 2px' }}>{settingsLink}</div>
         </div>
@@ -547,6 +549,7 @@ export function DevicesView() {
           </div>
           {none}{cards}
           <SharedSection phone={false} now={now} />
+          <LutSection phone={false} now={now} />
           <RecentHandoffs now={now} act={act} />
         </div>
       )}
