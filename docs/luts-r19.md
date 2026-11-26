@@ -1,6 +1,6 @@
 # R19: LUT folder (LUT 3D files) — LPL side
 
-Work package P6b, LPL branch `p6b-lut-folder`. The contract below is a copy of darktable-android `docs/PLAN.md` 4.6 (branch `p6b-lut3d-files`); that copy is the source of truth. A change to the contract is made in both places in the same step.
+Work package P6b, LPL branch `p6b-lut-folder`. The contract below is a copy of darktable-android `docs/PLAN.md` 4.6 (branch `p6b-lut3d-files`); that copy is the source of truth. A change to the contract is made in both places in the same step. PR text: `docs/luts-r19-PR.md`.
 
 ## LUT folder (R19, brief P6b, specified 26 Nov 2026)
 Owner's decision (26 Nov 2026): LUT 3D files come from either place, a folder on the phone and the PCs' darktable LUT folder, carried by LPL. Opt-in like R11: a device adds `"luts"` to heartbeat `caps`, the server lists `"luts"` in `server_caps`. A device or server without it behaves as before.
