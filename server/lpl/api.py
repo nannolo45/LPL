@@ -1108,7 +1108,7 @@ def heartbeat(body: Dict[str, Any] = Body(...)):
 @app.post("/api/jobs")
 def job_create(body: Dict[str, Any] = Body(...)):
     kind = body.get("kind")
-    if kind not in ("edit", "sync", "release", "open", "forget"):
+    if kind not in ("edit", "sync", "release", "open", "forget", "render"):
         raise HTTPException(400, "unknown job")
     if config.local:
         if kind not in ("edit", "open"):
@@ -1130,6 +1130,54 @@ def job_create(body: Dict[str, Any] = Body(...)):
             transfers.register(c, cur.lastrowid, agent_id, body.get("payload") or {})
         c.commit()
     return {"id": cur.lastrowid, "agent_id": agent_id}
+
+
+# ---------------------------------------------------------------- previews that show the edit (darktable-cli on a PC)
+# The NAS has no darktable, so a photo's preview is the camera's JPEG until a PC sends darktable's rendering: the bridge
+# when you leave a photo in darkroom, the agent itself (darktable-cli) after any other sync, or a "render" job for
+# photos already on the NAS. A preview is stale when the photo has darktable edits and the preview is not a rendering
+# from after the XMP's last change.
+STALE_SQL = ("edited=1 AND (COALESCE(preview_src,'')<>'rendered' OR preview_ts IS NULL "
+             "OR (xmp_mtime IS NOT NULL AND preview_ts < xmp_mtime - 60))")
+
+
+def _render_agents(c):
+    from . import transfers
+    return [a for a in list_agents() if a["online"] and a["os"] != "android" and "render" in transfers.caps_of(c, a["id"])]
+
+
+@app.get("/api/previews/stale")
+def previews_stale():
+    """How many edited photos still show a preview from before their edit, and which PCs can render them now."""
+    c = db.conn()
+    n = c.execute("SELECT COUNT(*) FROM photos WHERE " + STALE_SQL).fetchone()[0]
+    return {"count": n, "agents": [{"id": a["id"], "name": a["name"]} for a in _render_agents(c)]}
+
+
+@app.post("/api/previews/render")
+def previews_render(body: Dict[str, Any] = Body(...)):
+    """ids: these photos; or stale: true for every edited photo whose preview is from before its edit. agent_id
+    optional (else the only online PC that can render, or the first). One "render" job; the PC downloads each photo
+    and its XMP, renders with darktable-cli and posts the JPEG to /api/photos/{id}/preview."""
+    c = db.conn()
+    if body.get("stale"):
+        ids = [r[0] for r in c.execute("SELECT id FROM photos WHERE " + STALE_SQL + " ORDER BY id")]
+    else:
+        ids = [int(i) for i in (body.get("ids") or []) if str(i).isdigit()][:5000]
+    if not ids:
+        return {"id": None, "count": 0, "agent_id": None}
+    agents = _render_agents(c)
+    aid = body.get("agent_id") or (agents[0]["id"] if agents else None)
+    if not aid or aid not in [a["id"] for a in agents]:
+        raise HTTPException(409, "No PC that can render with darktable is online. Start the agent on a PC with darktable "
+                                 "(its darktable-cli is used), then try again.")
+    with db.write_lock:
+        c = db.conn()
+        jid = c.execute("INSERT INTO jobs(agent_id,kind,payload,created) VALUES(?,?,?,?)",
+                        (aid, "render", json.dumps({"ids": ids}), time.time())).lastrowid
+        c.commit()
+    name = next((a["name"] for a in agents if a["id"] == aid), aid)
+    return {"id": jid, "count": len(ids), "agent_id": aid, "agent_name": name}
 
 
 @app.get("/api/jobs")

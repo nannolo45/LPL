@@ -349,6 +349,16 @@ export function Inspector() {
           <button className="btn primary" onClick={() => s.editInDarktable(photos.map(p => p.id))}>
             {photos.length > 1 ? `Edit ${photos.length} in darktable` : 'Edit in darktable'}
           </button>
+          {!s.isLocal && photos.some(p => p.edited) && (
+            <button className="btn" title="The NAS can't run darktable: a PC with darktable renders the edited photos and sends the result as their preview"
+              onClick={() => {
+                const ids = photos.filter(p => p.edited).map(p => p.id)
+                api.previewsRender({ ids }).then(r => s.toast(r.count ? `Rendering ${r.count} preview${r.count === 1 ? '' : 's'} on ${r.agent_name || 'the PC'}. They update when each is done.` : 'Nothing to render.'))
+                  .catch(e => s.toast(e.message))
+              }}>
+              Update preview{photos.filter(p => p.edited).length > 1 ? 's' : ''} from the edit
+            </button>
+          )}
           {s.isLocal && <button className="btn" onClick={() => { s.setSendIds(photos.map(p => p.id)); s.setView('send') }}>
             Send {photos.length > 1 ? `${photos.length} photos` : 'this photo'} to the NAS…
           </button>}
