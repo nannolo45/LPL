@@ -40,3 +40,24 @@ Owner's decision (26 Nov 2026): LUT 3D files come from either place, a folder on
 Conflict choices, as R11's dialog: **mine** -> `PUT` with `x-base-sha256` = the server's current hash; **theirs** -> download the server's file over the local one; **keep both** -> the local file is renamed `<name> (<this device's name>).<ext>` (a taken name gets ` 2`, ` 3`) and uploaded as a new path, then the server's file is downloaded to the original path. "Remove" in Settings › LUT files deletes the phone's copy only, marks the path `removed` (not downloaded again); "Get from LightPhotoLibrary" in the module clears the mark and downloads it.
 
 **Not shared:** which LUT a photo uses (that travels in its XMP); G'MIC's compressed LUTs inside the parameters.
+
+## 26 Nov 2026: a LUT folder that is a home folder
+
+On the Laptop (Linux) darktable's `plugins/darkroom/lut3d/def_path` was the home folder. The agent walked all of it
+and sent every `.png` it found, mostly `~/.cache/gnome-software/icons/…` (16,660 files, 179 MB). The pass ran in the
+agent's main loop, so no heartbeat went out while it ran and LPL showed the Laptop offline.
+
+- **Agent:** the LUT pass runs in its own thread (never two at once); hidden folders and files (name starting with
+  `.`) are not looked at; a LUT folder that is the home folder, a folder above it or a drive's root is refused with a
+  reason; more than 3,000 LUT-type files or 100,000 entries looked at stops the pass with a reason ("set a folder with
+  only LUT files"), and nothing is sent. The reason shows on the Devices page like "no LUT folder".
+- **Server (path rule added to the contract's list):** a path with a step starting with `.` is refused (400) by
+  `PUT /api/luts/file` and left out of `PUT /api/luts/state`. `GET /api/luts/overview` leaves removed paths out
+  unless `?removed=1`.
+- **`POST /api/luts/remove-folder {folder}`** (web UI only): every path under the folder is removed from LPL as
+  `DELETE /api/luts/file` does (devices still see the removal in `GET /api/luts?since=`), and, unlike removing one file,
+  their stored contents and earlier versions are deleted from the NAS when no other path uses them. It does not apply
+  the path rules, so rows stored before the hidden-path rule can be removed.
+- **Devices page:** "LUT files" and "Styles, presets and module layouts" fold (folded by default, remembered per
+  browser, included in Fold all / Unfold all) with a one-line summary; LUT files are grouped by their top folder, each
+  group folds and has "Remove folder from LPL"; long lists show the first rows and "show them".

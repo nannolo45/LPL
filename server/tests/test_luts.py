@@ -208,3 +208,36 @@ def test_state_reports_and_overview(c):
     c.post("/api/agents/heartbeat", json=dict(PHONE, caps=[]))
     assert "Phone" not in [d["name"] for d in c.get("/api/luts/overview").json()["devices"]]
     assert c.put("/api/luts/state", params={"agent": PC["id"]}, json={"files": []}).status_code == 400
+
+
+def test_hidden_folders_are_refused_and_a_folder_is_removed_with_its_contents(c):
+    # 26 Nov 2026: a Linux PC whose darktable LUT folder was the home folder sent ~/.cache/... icons
+    for bad in (".cache/icons/x.png", "a/.hidden/b.cube", ".x.cube"):
+        assert put(c, PC2, bad, CUBE_A).status_code == 400
+    put(c, PC, "Film/a.cube", CUBE_A)
+    put(c, PC, "Film/b.cube", CUBE_B)
+    put(c, PC, "Film/b.cube", CUBE_C)            # b gets an earlier version
+    put(c, PC, "Other/a.cube", CUBE_A)           # same content as Film/a.cube, outside the folder
+    r = c.post("/api/luts/remove-folder", json={"folder": "Film"})
+    assert r.status_code == 200 and r.json()["removed"] == 2
+    assert r.json()["freed_bytes"] == len(CUBE_B) + len(CUBE_C)
+    assert not luts.blob_path(sha(CUBE_B)).exists() and not luts.blob_path(sha(CUBE_C)).exists()
+    assert luts.blob_path(sha(CUBE_A)).is_file()  # still the current file of Other/a.cube
+    ov = c.get("/api/luts/overview").json()
+    assert [f["path"] for f in ov["files"]] == ["Other/a.cube"]   # removed paths are left out by default
+    assert len(c.get("/api/luts/overview", params={"removed": 1}).json()["files"]) == 3
+    tomb = {f["path"]: f for f in listing(c)["files"]}
+    assert tomb["Film/a.cube"]["deleted"] and tomb["Film/b.cube"]["deleted"]   # devices still learn of the removal
+    assert c.post("/api/luts/remove-folder", json={"folder": "Nope"}).status_code == 404
+    assert c.post("/api/luts/remove-folder", json={"folder": "/abs"}).status_code == 400
+
+
+def test_old_hidden_paths_can_be_removed_by_folder(c):
+    # rows a server before this check stored: put them in directly
+    with db.write_lock:
+        db.conn().execute("INSERT INTO lut_files(path,sha256,size,seq,changed_at,device_id,device_name,deleted) "
+                          "VALUES('.cache/i/x.png','00',3,1,1,'pc-luts-b','Laptop',0)")
+        db.conn().commit()
+    r = c.post("/api/luts/remove-folder", json={"folder": ".cache"})
+    assert r.status_code == 200 and r.json()["removed"] == 1
+    assert c.get("/api/luts/overview").json()["files"] == []

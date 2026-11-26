@@ -865,3 +865,7 @@ td.devcheckcell, th.devcheckcell { width: 34px; padding-right: 0; }
 .mfind-alts { max-width: 100%; overflow-x: auto; padding-bottom: 4px; }
 .mfind-look .backdrop { z-index: 60; }
 .mfind-look .dialog { z-index: 61; }
+/* Devices page: sections that fold (styles and presets, LUT files) and the LUT files' folder groups */
+.devsechead { align-self: flex-start; flex-wrap: wrap; row-gap: 2px; max-width: 100%; }
+.devsechead .small { font-family: inherit; }
+.lutgroup + .lutgroup { border-top: 1px solid var(--line); padding-top: 8px; }

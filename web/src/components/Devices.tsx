@@ -8,7 +8,7 @@ import { Agent, api, WorkItem } from '../api'
 import { useStore } from '../store'
 import { agentLabel, devicePills, hasUnsavedEdits, isPhoneAgent, itemProgress, serverNow, STATUS } from '../devices'
 import { ago, deviceCounts, deviceRows, FailedItem, filterCounts, filterRows, isFolded, onlineCount, reporting, RowFilter, stoppedLines, TransferItem, transferLines } from '../transfer'
-import { Bar, Chevron, CrossIcon, PlayIcon, StopIcon } from './DevicesBits'
+import { Bar, Chevron, CrossIcon, foldAllSections, PlayIcon, StopIcon } from './DevicesBits'
 import { devicesApi, refreshStatus } from '../devicesApi'
 import { SharedSection } from './Shared'
 import { LutSection } from './Luts'
@@ -504,7 +504,7 @@ export function DevicesView() {
     setMine(m => ({ ...m, ...f }))
     devicesApi.fold(f).then(refreshStatus).catch(e => s.toast(e.message))
   }
-  const foldAll = (v: boolean) => setFolds(Object.fromEntries(s.agents.map(a => [key(a), v])))
+  const foldAll = (v: boolean) => { foldAllSections(v); if (s.agents.length) setFolds(Object.fromEntries(s.agents.map(a => [key(a), v]))) }
   // while something moves: tick, so bars and "ago" follow the clock and stop claiming progress when a device goes quiet
   useTick(s.agents.some(a => a.transfer || (a.online && (a.state?.working_set || []).some(w => w.step))))
   const allFolded = s.agents.length > 0 && s.agents.every(folded)
@@ -542,7 +542,7 @@ export function DevicesView() {
               <span className="soft">Photos copied to your devices so darktable can edit them at SSD speed. The NAS is read once and only the XMP goes back.</span>
             </div>
             {settingsLink}
-            <div className="seg" role="group" aria-label="Fold or unfold every device" style={{ flexWrap: 'nowrap' }}>
+            <div className="seg" role="group" aria-label="Fold or unfold every device and section" style={{ flexWrap: 'nowrap' }}>
               <button onClick={() => foldAll(true)}>Fold all</button>
               <button onClick={() => foldAll(false)}>Unfold all</button>
             </div>

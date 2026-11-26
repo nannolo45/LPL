@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useStore } from '../store'
 import { fmtWhen } from '../edits'
-import { Chevron } from './DevicesBits'
+import { Chevron, FoldSection, useShowMore } from './DevicesBits'
 import {
   conflictChoices, DeleteChoice, DOTS, kindText, lastChange, overviewItems, SharedDevice, SharedOverview,
   updateLabel, updateNote, updatePayload, waitingLine, whatText,
@@ -100,7 +100,8 @@ function DeviceShared({ d, phone, reload, now }: { d: SharedDevice; phone: boole
 }
 
 function Overview({ o, phone, now }: { o: SharedOverview; phone: boolean; now: number }) {
-  const items = overviewItems(o)
+  const all = overviewItems(o)
+  const { shown: items, more } = useShowMore(all, 12)
   const initials = o.devices.map(d => d.name.slice(0, 1).toUpperCase())
   const dots = (i: (typeof items)[number]) => o.devices.map(d => {
     const v = i.devices[d.id] || 'absent'
@@ -110,7 +111,7 @@ function Overview({ o, phone, now }: { o: SharedOverview; phone: boolean; now: n
     <div className="card sharedpanel">
       <span className="display" style={{ fontSize: 17 }}>Shared through LPL</span>
       <span className="small muted">The newest copy of each item, who changed it last, and which devices have it.</span>
-      {!items.length ? <span className="small muted">Nothing shared yet. Styles, presets and module layouts you make in darktable appear here.</span>
+      {!all.length ? <span className="small muted">Nothing shared yet. Styles, presets and module layouts you make in darktable appear here.</span>
         : phone ? (
           <div className="col" style={{ gap: 8 }}>
             {items.map(i => (
@@ -134,6 +135,7 @@ function Overview({ o, phone, now }: { o: SharedOverview; phone: boolean; now: n
             </tbody>
           </table>
         )}
+      {more}
       <span className="tiny muted">● has the newest · ○ waiting · ! changed on two devices · – not there (or needs a newer darktable)</span>
     </div>
   )
@@ -150,15 +152,20 @@ export function SharedSection({ phone, now }: { phone: boolean; now: number }) {
   }, [reload])
   if (!o || !o.devices.length) return null
   const cards = o.devices.map(d => <DeviceShared key={d.id} d={d} phone={phone} reload={reload} now={now} />)
+  // folded: one line saying what needs you, if anything
+  const pending = o.devices.filter(d => d.waiting.length + d.conflicts.length > 0)
+  const choices = o.devices.reduce((n, d) => n + (d.phone ? 0 : d.conflicts.length), 0)
+  const summary = `${o.items.length} item${o.items.length === 1 ? '' : 's'} · ` + (pending.length
+    ? pending.map(d => `${d.name}: ${d.waiting.length + d.conflicts.length} waiting`).join(' · ') + (choices ? ` · ${choices} to choose` : '')
+    : 'every device up to date')
   return (
-    <div className="col sharedsection" style={{ gap: 10 }}>
-      <span className="display" style={{ fontSize: phone ? 18 : 20 }}>Styles, presets and module layouts</span>
+    <FoldSection id="shared" title="Styles, presets and module layouts" summary={summary} warn={choices > 0} phone={phone}>
       {phone ? <>{cards}<Overview o={o} phone now={now} /></> : (
         <div className="sharedgrid">
           <div className="col" style={{ gap: 10, minWidth: 0 }}>{cards}</div>
           <Overview o={o} phone={false} now={now} />
         </div>
       )}
-    </div>
+    </FoldSection>
   )
 }

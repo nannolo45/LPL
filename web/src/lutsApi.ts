@@ -6,4 +6,5 @@ import type { LutOverview } from './luts'
 export const lutsApi = {
   overview: () => call<LutOverview>('GET', '/api/luts/overview'),
   remove: (path: string) => call<unknown>('DELETE', `/api/luts/file?path=${encodeURIComponent(path)}`),
+  removeFolder: (folder: string) => call<{ removed: number; freed_bytes: number }>('POST', '/api/luts/remove-folder', { folder }),
 }

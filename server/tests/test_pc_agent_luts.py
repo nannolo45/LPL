@@ -82,6 +82,7 @@ def test_caps_and_status_without_a_lut_folder(agent_mod, base_url, fresh, tmp_pa
     assert "luts" in a.heartbeat_body()["caps"]
     assert a.luts.active()
     a.luts.tick()
+    a.luts.running.join(10)  # the pass runs in its own thread
     assert a.luts.status["folder"] is None and "no LUT folder" in a.luts.status["reason"]
     r = report(fresh, a.cfg["id"])
     assert r["folder"] is None and "no LUT folder" in r["reason"]
@@ -95,6 +96,7 @@ def test_a_server_without_luts_is_left_alone(agent_mod, base_url, fresh, tmp_pat
     a.server_caps = ["shared"]  # as an older server answers
     (folder / "x.cube").write_bytes(CUBE_A)
     a.luts.tick()
+    assert a.luts.running is None  # no pass started at all
     assert listing(fresh) == {}
 
 
@@ -193,3 +195,45 @@ def test_the_lut_folder_is_read_from_darktablerc(agent_mod, tmp_path):
     for bad in ("../x.cube", "a//b.cube", "x.txt", "/abs.cube"):
         assert not agent_mod.lut_path_ok(bad)
     assert agent_mod.lut_path_ok("Film/K 2383.CUBE")
+
+
+def test_hidden_folders_and_files_are_not_sent(agent_mod, base_url, fresh, tmp_path, monkeypatch):
+    a, folder = make_agent(agent_mod, base_url, tmp_path, monkeypatch)
+    (folder / ".cache" / "icons").mkdir(parents=True)
+    (folder / ".cache" / "icons" / "app.png").write_bytes(b"\x89PNG\r\n\x1a\nx")
+    (folder / ".hidden.cube").write_bytes(CUBE_B)
+    (folder / "Film").mkdir()
+    (folder / "Film" / "k.cube").write_bytes(CUBE_A)
+    a.luts.sync_pass()
+    assert set(listing(fresh)) == {"Film/k.cube"}
+
+
+def test_a_home_folder_or_a_huge_folder_is_not_a_lut_folder(agent_mod, base_url, fresh, tmp_path, monkeypatch):
+    a, folder = make_agent(agent_mod, base_url, tmp_path, monkeypatch)
+    monkeypatch.setattr(agent_mod.Path, "home", staticmethod(lambda: folder))
+    f, reason = agent_mod.lut_folder(a.cfg)
+    assert f is None and "whole home folder" in reason
+    monkeypatch.setattr(agent_mod.Path, "home", staticmethod(lambda: folder / "Me"))   # the folder above home
+    assert agent_mod.lut_folder(a.cfg)[0] is None
+    monkeypatch.undo()
+    a, folder = make_agent(agent_mod, base_url, tmp_path, monkeypatch, aid="pc-luts-many")
+    monkeypatch.setattr(agent_mod, "LUT_MAX_FILES", 3)
+    for i in range(5):
+        (folder / ("p%d.png" % i)).write_bytes(b"\x89PNG\r\n\x1a\nx")
+    a.luts.sync_pass()
+    assert listing(fresh) == {}
+    assert a.luts.status["folder"] is None and "only LUT files" in a.luts.status["reason"]
+    assert "only LUT files" in report(fresh, a.cfg["id"])["reason"]
+
+
+def test_a_long_pass_does_not_hold_up_the_main_loop(agent_mod, base_url, fresh, tmp_path, monkeypatch):
+    import threading
+    a, folder = make_agent(agent_mod, base_url, tmp_path, monkeypatch)
+    gate = threading.Event()
+    monkeypatch.setattr(a.luts, "sync_pass", lambda: gate.wait(10))
+    a.luts.tick()
+    assert a.luts.running.is_alive()       # tick came back while the pass is still running
+    a.luts.tick(force=True)                # a second pass is not started on top of it
+    gate.set()
+    a.luts.running.join(10)
+    assert not a.luts.running.is_alive()
