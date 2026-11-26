@@ -16,14 +16,22 @@ from lpl import db
 from test_pc_agent import agent_mod, base_url  # noqa: F401  (fixtures)
 
 FAKE_CLI = '''#!%s
-import json, sys
+import json, os, sys
 from PIL import Image
 a = sys.argv[1:]
-out = a[2]
 log = %r
 with open(log, "a") as f:
     f.write(json.dumps(a) + "\\n")
-Image.new("RGB", (64, 40), (200, 30, 30)).save(out, "JPEG")
+if "--import" in a:  # a batch: --import <file> ... <outdir>/$(FILE_NAME) --out-ext jpg
+    files = [a[i + 1] for i, x in enumerate(a) if x == "--import"]
+    pattern = a[a.index("--out-ext") - 1]
+    for f in files:
+        if "unreadable" in f:
+            continue
+        stem = os.path.splitext(os.path.basename(f))[0]
+        Image.new("RGB", (64, 40), (200, 30, 30)).save(pattern.replace("$(FILE_NAME)", stem) + ".jpg", "JPEG")
+else:
+    Image.new("RGB", (64, 40), (200, 30, 30)).save(a[2], "JPEG")
 '''
 
 
@@ -249,14 +257,14 @@ def test_agent_retries_a_photo_once_and_ignores_a_job_it_has(clean, base_url, ag
     a = agent_mod.Agent({"id": "pc-render4", "name": "Laptop", "server": base_url, "password": "", "auto_sync_seconds": 0,
                          "darktable": fake_dt["darktable"], "darktable_configdir": fake_dt["darktable_configdir"]})
     monkeypatch.setattr(agent_mod.time, "sleep", lambda s: None)
-    real, calls = a.render_one, []
+    real, calls = a.render_source, []
 
-    def flaky(pid, tmp, out, prog):
+    def flaky(pid, tmp_root):
         calls.append(pid)
         if calls.count(pid) == 1 and pid == "1":
             raise OSError("connection reset (woke from sleep)")
-        return real(pid, tmp, out, prog)
-    monkeypatch.setattr(a, "render_one", flaky)
+        return real(pid, tmp_root)
+    monkeypatch.setattr(a, "render_source", flaky)
     assert a.render_job(["1", "2"], 21) == "done"
     assert a.state()["render"]["done"] == 2 and a.state()["render"]["failed"] == 0 and calls == ["1", "1", "2"]
     reported = []
@@ -265,3 +273,31 @@ def test_agent_retries_a_photo_once_and_ignores_a_job_it_has(clean, base_url, ag
     a.handle({"id": 30, "kind": "render", "payload": {"ids": [1]}})
     assert reported == [] and calls == ["1", "1", "2"]     # handed out again while still had: left to the first
     assert "agent_started" in a.state()
+
+
+def test_photos_are_rendered_in_batches_at_preview_quality(clean, base_url, agent_mod, fake_dt, monkeypatch):  # noqa: F811
+    a = agent_mod.Agent({"id": "pc-render5", "name": "Laptop", "server": base_url, "password": "", "auto_sync_seconds": 0,
+                         "darktable": fake_dt["darktable"], "darktable_configdir": fake_dt["darktable_configdir"]})
+    monkeypatch.setattr(agent_mod.time, "sleep", lambda s: None)
+    ids = [str(r[0]) for r in db.conn().execute("SELECT id FROM photos ORDER BY id LIMIT 3")]
+    for i in ids:
+        make_stale(int(i))
+    before = len(fake_dt["log"].read_text().splitlines()) if fake_dt["log"].exists() else 0
+    assert a.render_job(ids, 40) == "done"
+    runs = [json.loads(l) for l in fake_dt["log"].read_text().splitlines()[before:]]
+    assert all("--hq" in r and r[r.index("--hq") + 1] == "false" for r in runs)
+    batched = [r for r in runs if "--import" in r]
+    assert len(batched) == 1 and batched[0].count("--import") == 3      # all three in one darktable-cli run
+    assert sum(r.count("--import") for r in batched) + len(runs) - len(batched) == 3
+    assert all(db.conn().execute("SELECT preview_src FROM photos WHERE id=?", (int(i),)).fetchone()[0] == "rendered" for i in ids)
+
+
+def test_a_photo_the_batch_left_out_is_rendered_alone(agent_mod, fake_dt, tmp_path):  # noqa: F811
+    files = []
+    for n in ("1.NEF", "2-unreadable.NEF"):
+        f = tmp_path / n
+        f.write_bytes(b"x")
+        files.append(f)
+    got = agent_mod.render_batch({"darktable": fake_dt["darktable"], "darktable_configdir": fake_dt["darktable_configdir"]},
+                                 files, tmp_path / "out")
+    assert list(got) == [files[0]] and got[files[0]].name == "1.jpg"
