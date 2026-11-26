@@ -54,22 +54,27 @@ type LaneProps = {
   lane: Lane; shown: Photo[]; selKey: string; folder: boolean; linked: boolean; canReorder: boolean; phone: boolean; menu: MenuItem[] | null; depth?: number
   editing: boolean; canRename: boolean; act: LaneActs; trayN: number
   foundKey?: string   // photos matching the find box
+  grid?: boolean      // shown alone, its photos wrapping in rows (no sideways scrolling)
 }
 /** What a lane's header can do (one object for all lanes, so a lane is drawn again only when its own things change). */
-type LaneActs = { edit: (key: string | null) => void; rename: (key: string, name: string | null) => void; trayAdd: (key: string) => void }
-/** One lane: its header and its photos in a row that scrolls sideways. Drawn again only when its own photos,
+type LaneActs = { edit: (key: string | null) => void; rename: (key: string, name: string | null) => void; trayAdd: (key: string) => void; focus: (key: string | null) => void }
+function GridIcon() {
+  return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1" /><rect x="9" y="2" width="5" height="5" rx="1" /><rect x="2" y="9" width="5" height="5" rx="1" /><rect x="9" y="9" width="5" height="5" rx="1" /></svg>
+}
+
+/** One lane: its header and its photos in a row that scrolls sideways (or, shown alone as a grid, in rows). Drawn again only when its own photos,
  *  numbers or selection change; everything that happens while dragging is done on the page directly (StripView). */
-const LaneRow = memo(function LaneRow({ lane, shown, selKey, folder, linked, canReorder, phone, menu, depth = 0, editing, canRename, act, trayN, foundKey }: LaneProps) {
+const LaneRow = memo(function LaneRow({ lane, shown, selKey, folder, linked, canReorder, phone, menu, depth = 0, editing, canRename, act, trayN, foundKey, grid }: LaneProps) {
   const sel = useMemo(() => new Set(selKey ? selKey.split(',').map(Number) : []), [selKey])
   const found = useMemo(() => new Set(foundKey ? foundKey.split(',').map(Number) : []), [foundKey])
   const c = lane.color
   const n = shown.length
   return (
-    <section className={'lane' + (lane.maybe ? ' maybe' : '')} aria-label={lane.label} data-lane={lane.key}
+    <section className={'lane' + (lane.maybe ? ' maybe' : '') + (grid ? ' grid' : '')} aria-label={lane.label} data-lane={lane.key}
       data-skey={folder && lane.series ? 's' + lane.series.id : undefined} data-parent={folder ? lane.folder_id ?? undefined : undefined} data-depth={depth || undefined}
       style={{ ...(c ? { borderColor: hexA(c, .55), background: hexA(c, .07) } : {}), ...(depth ? { marginLeft: depth * (phone ? 10 : 22) } : {}) }}>
       <div className="lane-h">
-        {canReorder && <button type="button" className="lane-grip" data-grip={lane.key} aria-label={`${phone ? 'Hold and drag' : 'Drag'} to reorder the series ${lane.label}`}><Grip /></button>}
+        {canReorder && !grid && <button type="button" className="lane-grip" data-grip={lane.key} aria-label={`${phone ? 'Hold and drag' : 'Drag'} to reorder the series ${lane.label}`}><Grip /></button>}
         <span className="lane-chip" style={c ? { background: c } : undefined} />
         {editing
           ? <NameEdit value={lane.label} label={`New name for ${lane.label}`} onDone={v => act.rename(lane.key, v)} />
@@ -79,9 +84,10 @@ const LaneRow = memo(function LaneRow({ lane, shown, selKey, folder, linked, can
         <div className="grow" />
         {!phone && linked && lane.frame && <span className="lane-frame"><LinkIcon />frame on the board</span>}
         {trayN > 0 && !lane.maybe && <button type="button" className="btn lane-tray" onClick={() => act.trayAdd(lane.key)}>+ {trayN} here</button>}
+        {!grid && n > 0 && <button type="button" className="lane-grid" aria-label={`Show ${lane.label} as a grid`} title="Show only this one, its photos in rows" onClick={() => act.focus(lane.key)}><GridIcon /></button>}
         {menu && <MenuButton label={folder ? `More for ${lane.label}: rename, colour, move to another folder, delete` : `More for ${lane.label}`} items={menu} className="smore lane-more" />}
       </div>
-      <div className="srow" data-row={lane.key}>
+      <div className={'srow' + (grid ? ' grid' : '')} data-row={lane.key}>
         {shown.map(p => (
           <button key={p.id} type="button" className={'sth' + (sel.has(p.id) ? ' sel' : '') + (found.has(p.id) ? ' found' : '') + (p.hidden ? ' hid' : '')} data-id={p.id} aria-label={`${num2(p.num) || (p.hidden ? 'hidden' : 'not in the order')} ${p.filename}`} aria-pressed={sel.has(p.id)}>
             <span className="box"><img src={thumbUrl(p)} alt="" draggable={false} loading="lazy" />
@@ -141,6 +147,9 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
   const isFolder = target.kind === 'folder'
   const showHidden = !!s.filters.show_hidden
   const [editKey, setEditKey] = useState<string | null>(null)
+  const [focusKey, setFocusKey] = useState<string | null>(null)  // a lane shown alone, as a grid
+  const focusRef = useRef<string | null>(null)
+  focusRef.current = focusKey
   const trayIds = useTray()
   const [traySel, setTraySel] = useState<number[]>([])
   const [trayPhotos, setTrayPhotos] = useState<Photo[]>([])
@@ -203,9 +212,15 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
   const openPhoto = (id: number) => {
     const how = getSettings().boardPhotoDouble
     if (how === 'darktable') { s.editInDarktable([id]); return }
-    const list = pageList(), k = list.findIndex(p => p.id === id)
+    const fk = focusRef.current
+    const list = (fk && state.current.shownOf.get(fk)) || pageList(), k = list.findIndex(p => p.id === id)
     if ((how === 'fullscreen' || phone) && k >= 0) s.setFullscreen({ list, index: k })
     else s.setViewer(id)
+  }
+  const openFull = (id: number) => {  // full screen from the selection bar, paging through this lane (grid) or the page
+    const fk = focusRef.current
+    const list = (fk && state.current.shownOf.get(fk)) || pageList(), k = list.findIndex(p => p.id === id)
+    if (k >= 0) s.setFullscreen({ list, index: k })
   }
   const pick = (id: number, e: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
     const st = state.current
@@ -353,14 +368,26 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
         const key = hit.dataset.row!
         const shown = state.current.shownOf.get(key) || []
         const { w, gap } = cellOf(hit)
-        const slot = slotAt(d.x - b.left + hit.scrollLeft, w, shown.length)
+        let slot: number, x: number, y = b.top
+        if (hit.classList.contains('grid')) {  // photos in rows: the photo the pointer is before, line by line
+          const cells = [...hit.querySelectorAll<HTMLElement>('.sth')]
+          slot = cells.length
+          x = b.left
+          for (let i = 0; i < cells.length; i++) {
+            const r = cells[i].getBoundingClientRect()
+            if (d.y < r.top || (d.y <= r.bottom && d.x < r.left + r.width / 2)) { slot = i; x = r.left - gap / 2 - 2; y = r.top; break }
+            x = r.right + gap / 2 - 2; y = r.top
+          }
+        } else {
+          slot = slotAt(d.x - b.left + hit.scrollLeft, w, shown.length)
+          x = b.left - hit.scrollLeft + slot * w - gap / 2 - 2
+        }
         d.drop = { lane: key, slot }
-        const x = b.left - hit.scrollLeft + slot * w - gap / 2 - 2
         if (m) {
           const box = hit.querySelector<HTMLElement>('.box')
           if (m.className !== 'strip-mark') m.className = 'strip-mark'
           m.style.width = ''; m.style.height = (box ? box.offsetHeight : 64) + 'px'
-          m.style.transform = `translate(${Math.max(b.left - 3, Math.min(b.right - 1, x))}px, ${b.top}px)`
+          m.style.transform = `translate(${Math.max(b.left - 3, Math.min(b.right - 1, x))}px, ${y}px)`
           m.style.display = 'block'
         }
         if (tip.current) {
@@ -547,9 +574,9 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
     await dropIn(ids, key, null)
     tray.remove(ids); setTraySel([])
   }
-  const acts = useRef<LaneActs>({ edit: () => {}, rename: () => {}, trayAdd: () => {} })
-  acts.current.edit = setEditKey; acts.current.rename = rename; acts.current.trayAdd = trayAdd
-  const stableActs = useMemo<LaneActs>(() => ({ edit: k => acts.current.edit(k), rename: (k, v) => acts.current.rename(k, v), trayAdd: k => acts.current.trayAdd(k) }), [])
+  const acts = useRef<LaneActs>({ edit: () => {}, rename: () => {}, trayAdd: () => {}, focus: () => {} })
+  acts.current.edit = setEditKey; acts.current.rename = rename; acts.current.trayAdd = trayAdd; acts.current.focus = setFocusKey
+  const stableActs = useMemo<LaneActs>(() => ({ edit: k => acts.current.edit(k), rename: (k, v) => acts.current.rename(k, v), trayAdd: k => acts.current.trayAdd(k), focus: k => acts.current.focus(k) }), [])
   useEffect(() => { if (!trayOn) { setTrayPhotos([]); return } api.get(trayIds).then(r => setTrayPhotos(r.items)).catch(() => {}) }, [trayOn, trayIds.join(',')])
   const trayPerDay = async () => {
     if (!folder) return
@@ -716,12 +743,20 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
     <div className={'strip' + (phone ? ' phone' : '')} ref={root} onPointerDown={onPointerDown}>
       {!data && <div className="muted" style={{ padding: 20 }}>Loading…</div>}
       {(() => {
-        const row = (l: Lane, depth = 0) => {
+        const row = (l: Lane, depth = 0, grid = false) => {
           const shown = shownOf.get(l.key) || []
-          return <LaneRow key={l.key} lane={l} shown={shown} selKey={shown.filter(p => sel.has(p.id)).map(p => p.id).join(',')} foundKey={found.size ? shown.filter(p => found.has(p.id)).map(p => p.id).join(',') : ''} folder={isFolder} linked={linked} depth={depth}
+          return <LaneRow key={l.key} grid={grid} lane={l} shown={shown} selKey={shown.filter(p => sel.has(p.id)).map(p => p.id).join(',')} foundKey={found.size ? shown.filter(p => found.has(p.id)).map(p => p.id).join(',') : ''} folder={isFolder} linked={linked} depth={depth}
             canReorder={isFolder ? lanes.length > 1 || groups.length > 0 : linked && l.frame && !l.maybe && lanes.filter(x => x.frame && !x.maybe).length > 1} phone={phone} menu={laneMenu(l)}
             editing={editKey === l.key} canRename={canRename(l)} act={stableActs} trayN={trayOn ? trayPick().length : 0} />
         }
+        const focused = focusKey ? lanes.find(l => l.key === focusKey) : undefined
+        if (focused) return [
+          <div key="focus-bar" className="strip-focus row">
+            <button type="button" className="btn" onClick={() => setFocusKey(null)} aria-label={`Back to all of ${name}`}>‹ {isFolder || lanes.length > 1 ? `All of ${name}` : 'Row'}</button>
+            <span className="small muted grow">{focused.label} as a grid · double-tap a photo for full screen</span>
+          </div>,
+          row(focused, 0, true),
+        ]
         if (!isFolder && data?.ftree?.length) {
           // a series' board with frames inside frames: the same nesting, a frame holding frames as a heading that folds
           const out: React.ReactNode[] = []
@@ -782,13 +817,13 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
         }
         return out
       })()}
-      {data && isFolder && <button type="button" className="strip-new" onClick={() => onNewSeries?.()}>{lifted ? `Drop here: a new series in ${name}` : `+ New series in ${name}`}</button>}
+      {data && isFolder && !focusKey && <button type="button" className="strip-new" onClick={() => onNewSeries?.()}>{lifted ? `Drop here: a new series in ${name}` : `+ New series in ${name}`}</button>}
       {data && !isFolder && !all.length && <div className="muted" style={{ padding: '6px 2px' }}>No photos in this series yet. “+ Add photos” brings them in.</div>}
       {data && !(phone && (selHere.length > 0 || trayOn)) && (
         <div className="strip-hint">
           {phone
             ? <><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" /></svg>
-                <span>Press and hold a photo, then drag it to a new place or another lane.{isFolder && lanes.length > 1 ? ' Hold a lane handle to move the series.' : linked && lanes.filter(l => l.frame && !l.maybe).length > 1 ? ' Hold a frame handle to move the frame.' : ''}</span></>
+                <span>Double-tap a photo to see it full screen. Press and hold a photo, then drag it to a new place or another lane.{isFolder && lanes.length > 1 ? ' Hold a lane handle to move the series.' : linked && lanes.filter(l => l.frame && !l.maybe).length > 1 ? ' Hold a frame handle to move the frame.' : ''}</span></>
             : isFolder
               ? <>Drag a photo to change its place, or drop it in another lane to move it to that series. Drag a lane by its handle to reorder the series. {linked ? 'The board follows.' : 'The board is not linked: it stays as it is.'}</>
               : <>Drag a photo to change its place{lanes.length > 1 ? ', or drop it in another lane to move it to that frame' : ''}. {linked && lanes.filter(l => l.frame && !l.maybe).length > 1 ? 'Drag a frame by its handle to change the reading order. ' : ''}Ctrl or Shift selects several. {linked ? 'The board follows.' : data.folder ? `The board of ${data.folder.name} follows if it is linked.` : 'The board is not linked: it stays as it is.'}</>}
@@ -797,6 +832,7 @@ export function StripView({ target, name, folder, ops, onInfo, onNewSeries, ext,
       {selHere.length > 0 && !lifted && (
         <div className="strip-sel">
           <span className="small soft">{selHere.length} photo{selHere.length > 1 ? 's' : ''}</span>
+          <button className="btn" title="Full screen (or double-tap / double-click a photo)" onClick={() => openFull(selectionIds(all.map(p => p.id), selHere)[0])}>View full screen</button>
           <button className="btn" onClick={() => s.editInDarktable(selectionIds(all.map(p => p.id), selHere))}>Edit in darktable</button>
           {phone && (() => { const ids = selectionIds(all.map(p => p.id), selHere); return <EditOnPhone ids={ids} start={ids[0]} series={isFolder ? null : target.id} title={name} className="btn" /> })()}
           <button className="btn" title={`Hide from the library, the board and the strip (${keysOf('hide')[0] || 'no key'})`} onClick={toggleHidden}>{selHere.every(id => byId.get(id)?.hidden) ? 'Unhide' : 'Hide'}</button>

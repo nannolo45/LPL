@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, LinkState, SeriesFolder, Target } from '../api'
-import { useStore } from '../store'
+import { DEFAULTS, useStore } from '../store'
 import { keyOf, resolveTarget } from '../seriesnav'
 import { bumpSeries, setPendingUndo, MenuButton, MenuItem, useSeriesOps } from '../seriesops'
 import { useBackLayer } from '../back'
@@ -272,7 +272,10 @@ export function SeriesView() {
     { label: s.sel.length === 1 ? "Show the selected photo's folder in the library" : `Show ${folder ? 'the folder' : 'the series'} in the library, in order`, onClick: showInLibrary },
     ...(folder ? [{ label: `New series in ${folder.name}`, onClick: () => { ops.newSeries(folder) } }, { label: `New folder in ${folder.name}`, onClick: () => { ops.newFolder(folder) } }] : []),
     ...(folder && crumbs.length ? [{ label: `Open the folder ${crumbs[crumbs.length - 1].name}`, onClick: () => ops.open({ kind: 'folder', id: crumbs[crumbs.length - 1].id }) }] : []),
-    ...(!s.isLocal ? [{ label: 'Update previews from the darktable edits', onClick: () => updatePreviews(folder ? { series_folder: folder.id } : { series: series!.id }, `“${name}”`, s.toast) }] : []),
+    ...(!s.isLocal ? [
+      { label: 'Update previews from the darktable edits', onClick: () => updatePreviews(folder ? { series_folder: folder.id } : { series: series!.id }, `“${name}”`, s.toast) },
+      { label: 'Show the photos whose preview is not updated', onClick: () => s.newTab({ view: 'grid', filters: { ...DEFAULTS.filters, ...(folder ? { series_folder: folder.id } : { series: series!.id }), preview: 'stale' } }, `${name} · preview not updated`) },
+    ] : []),
     { label: 'Rename', onClick: () => (folder ? ops.renameFolder(folder) : ops.renameSeries(series!)) },
     ...(series && parent ? [{ label: `Open the folder ${parent.name}`, onClick: () => ops.open({ kind: 'folder', id: parent.id }) }] : []),
     { label: folder ? 'Delete folder' : 'Delete', danger: true, onClick: () => { folder ? ops.deleteFolder(folder) : ops.deleteSeries(series!) } },

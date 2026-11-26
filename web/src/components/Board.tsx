@@ -1081,6 +1081,11 @@ export function BoardView({ target, active = true, onInfo, find, onFind }: {
                 <div className="bselbar">
                   <span className="small soft">{[selPhotosHere.length ? `${selPhotosHere.length} photo${selPhotosHere.length > 1 ? 's' : ''}` : '', nSh ? `${nSh} note${nSh > 1 ? 's' : ''} or arrow${nSh > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ')}</span>
                   {selNotes.length > 0 && NOTE_COLORS.map(c => <button key={c} className="swatch" style={{ background: c }} aria-label="Note color" onClick={() => colorNotes(c)} />)}
+                  {selPhotosHere.length > 0 && s.isMobile && (() => {  // full screen, paging through the board's order
+                    const list = [...order, ...shown.filter(it => !pos.has(it.id))] as unknown as Photo[]
+                    const k = list.findIndex(it => it.id === selectionIds(list.map(it => it.id), selPhotosHere)[0])
+                    return k >= 0 ? <button className="btn" title="Or double-tap a photo" onClick={() => s.setFullscreen({ list, index: k })}>View full screen</button> : null
+                  })()}
                   {selPhotosHere.length > 0 && <button className="btn" onClick={() => s.editInDarktable(selPhotosHere)}>Edit in darktable</button>}
                   {selPhotosHere.length > 0 && s.isMobile && (() => {  // the selected photos in the board's own order (as the full screen view pages through it)
                     const ids = selectionIds([...order, ...shown.filter(it => !pos.has(it.id))].map(it => it.id), selPhotosHere)
