@@ -205,3 +205,63 @@ def test_agent_reports_progress_and_stops(clean, base_url, agent_mod, fake_dt, t
     assert a.render_job(["1", "2"], 8) == "stopped"
     p = a.state()["render"]
     assert p["stopped"] and p["done"] == 0
+
+
+def test_sleep_and_restart_of_the_pc(clean):
+    """A long job is not handed out beside itself; after the agent restarted it is handed out again at once, without
+    the photos already rendered; one being stopped stays stopped."""
+    c = clean
+    with db.write_lock:
+        db.conn().execute("DELETE FROM agents")
+        db.conn().execute("DELETE FROM jobs")
+        db.conn().commit()
+    for i in (1, 2, 3):
+        make_stale(i)
+    hb = lambda st=None: c.post("/api/agents/heartbeat", json={"id": "pc-s", "name": "Laptop", "os": "linux", "caps": ["render"],
+                                                                  "state": st or {}}).json()
+    hb({"agent_started": time.time() - 100})
+    jid = c.post("/api/previews/render", json={"ids": [1, 2, 3]}).json()["id"]
+    first = time.time() - 100
+    assert [j["id"] for j in hb({"agent_started": first})["jobs"]] == [jid]
+    long_ago = time.time() - 4000      # taken over an hour ago, still running: kept fresh, not handed out again
+    with db.write_lock:
+        db.conn().execute("UPDATE jobs SET taken=? WHERE id=?", (long_ago, jid))
+        db.conn().commit()
+    assert hb({"agent_started": first, "render": {"job": jid, "ended": None, "total": 3, "done": 1}})["jobs"] == []
+    assert db.conn().execute("SELECT taken FROM jobs WHERE id=?", (jid,)).fetchone()[0] > time.time() - 5
+    # photo 1 got its preview, then the PC was restarted: the agent started after it took the job
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (20, 20)).save(buf, "JPEG")
+    c.post("/api/photos/1/preview", content=buf.getvalue())
+    again = hb({"agent_started": time.time()})["jobs"]
+    assert [j["id"] for j in again] == [jid] and again[0]["payload"]["ids"] == [2, 3]
+    # a job being stopped when the agent restarted is stopped, not handed out
+    j2 = c.post("/api/previews/render", json={"ids": [2]}).json()["id"]
+    hb({"agent_started": time.time() - 50})
+    c.post("/api/previews/render/%d/stop" % j2)
+    hb({"agent_started": time.time()})
+    assert db.conn().execute("SELECT status FROM jobs WHERE id=?", (j2,)).fetchone()[0] == "stopped"
+
+
+def test_agent_retries_a_photo_once_and_ignores_a_job_it_has(clean, base_url, agent_mod, fake_dt, monkeypatch):  # noqa: F811
+    a = agent_mod.Agent({"id": "pc-render4", "name": "Laptop", "server": base_url, "password": "", "auto_sync_seconds": 0,
+                         "darktable": fake_dt["darktable"], "darktable_configdir": fake_dt["darktable_configdir"]})
+    monkeypatch.setattr(agent_mod.time, "sleep", lambda s: None)
+    real, calls = a.render_one, []
+
+    def flaky(pid, tmp, out, prog):
+        calls.append(pid)
+        if calls.count(pid) == 1 and pid == "1":
+            raise OSError("connection reset (woke from sleep)")
+        return real(pid, tmp, out, prog)
+    monkeypatch.setattr(a, "render_one", flaky)
+    assert a.render_job(["1", "2"], 21) == "done"
+    assert a.state()["render"]["done"] == 2 and a.state()["render"]["failed"] == 0 and calls == ["1", "1", "2"]
+    reported = []
+    monkeypatch.setattr(a, "report_done", lambda jid, st: reported.append((jid, st)) or True)
+    a.render_seen.add(30)
+    a.handle({"id": 30, "kind": "render", "payload": {"ids": [1]}})
+    assert reported == [] and calls == ["1", "1", "2"]     # handed out again while still had: left to the first
+    assert "agent_started" in a.state()

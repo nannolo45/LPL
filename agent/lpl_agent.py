@@ -81,6 +81,7 @@ BRIDGE = data_dir() / "bridge"
 WORK = data_dir() / "work"
 STATE_FILE = data_dir() / "state.json"
 LOG_FILE = data_dir() / "agent.log"
+AGENT_STARTED = time.time()  # told to LPL: a render job taken before this was lost with the previous run
 log = logging.getLogger("lpl-agent")
 
 
@@ -1404,7 +1405,8 @@ class Agent:
         self.server_caps = []          # what the server said it can do (heartbeat answer); [] = a server from before
         self.shared = SharedSync(self)  # R11: styles, presets, module layouts
         self.luts = LutSync(self)
-        self.renderer = Renderer(self)  # previews that show the edit (darktable-cli)      # R19: darktable's LUT folder
+        self.renderer = Renderer(self)  # previews that show the edit (darktable-cli)
+        self.render_seen = set()        # render jobs this run has taken      # R19: darktable's LUT folder
         for d in (WORK, BRIDGE / "outbox"):
             d.mkdir(parents=True, exist_ok=True)
         if STATE_FILE.is_file():
@@ -1430,6 +1432,7 @@ class Agent:
         running = darktable_running()
         return {"working_set": ws, "darktable_running": running, "bridge_alive": bridge_alive(),
                 "bridge_status": bridge_status(running), "version": VERSION, "message": self.message,
+                "agent_started": AGENT_STARTED,
                 "local_url": LOCAL["url"], "local_error": LOCAL["error"],
                 **({"shared_update": self.shared.update} if self.shared.active() else {}),
                 **({"luts": self.luts.status} if self.luts.active() and self.luts.status else {}),
@@ -1592,6 +1595,9 @@ class Agent:
                 for i in ids:
                     self.forget(i, mode)
             elif kind == "render":
+                if job["id"] in self.render_seen:
+                    return  # handed out again while this run still has it: the first one reports
+                self.render_seen.add(job["id"])
                 status = self.render_job(ids, job["id"]) or "done"
         except Exception as e:
             log.exception("job failed")
@@ -1643,27 +1649,21 @@ class Agent:
             tmp = tmp_root / pid
             out = tmp_root / ("%s.jpg" % pid)
             try:
-                it = self.items.get(pid)
-                if it and Path(it["local_path"]).is_file() and Path(it["local_path"] + ".xmp").is_file():
-                    raw, xmp = Path(it["local_path"]), Path(it["local_path"] + ".xmp")
-                    prog["current"] = it.get("filename")
-                else:
-                    tmp.mkdir(parents=True, exist_ok=True)
-                    name = self.photo_name(pid)
-                    prog["current"] = name
-                    raw = tmp / name
-                    xmp = tmp / (name + ".xmp")
-                    self.srv.download("/api/photos/%s/original" % pid, raw)
-                    self.srv.download("/api/photos/%s/xmp" % pid, xmp)
-                render_preview(self.cfg, raw, xmp, out)
-                self.srv.upload("/api/photos/%s/preview" % pid, out.read_bytes(), "image/jpeg")
+                self.render_one(pid, tmp, out, prog)
                 done += 1
                 prog["done"] = done
                 self.wake.set()  # the next heartbeat carries the progress now
             except Exception as e:
-                failed += 1
-                prog["failed"] = failed
-                log.warning("preview of photo %s not rendered: %s", pid, e)
+                time.sleep(5)  # once more after a pause: the PC may just have woken up and the network come back
+                try:
+                    self.render_one(pid, tmp, out, prog)
+                    done += 1
+                    prog["done"] = done
+                    self.wake.set()
+                except Exception as e2:
+                    failed += 1
+                    prog["failed"] = failed
+                    log.warning("preview of photo %s not rendered: %s (first try: %s)", pid, e2, e)
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
                 try:
@@ -1676,6 +1676,23 @@ class Agent:
         self.message = "Previews rendered: %d%s" % (done, (", %d failed (see the agent log)" % failed) if failed else "")
         log.info(self.message)
         return "done" if done or not failed else "failed"
+
+    def render_one(self, pid, tmp: Path, out: Path, prog: dict):
+        """One photo of a render job: its working-set copy or a download of the original and XMP, rendered, posted."""
+        it = self.items.get(pid)
+        if it and Path(it["local_path"]).is_file() and Path(it["local_path"] + ".xmp").is_file():
+            raw, xmp = Path(it["local_path"]), Path(it["local_path"] + ".xmp")
+            prog["current"] = it.get("filename")
+        else:
+            tmp.mkdir(parents=True, exist_ok=True)
+            name = self.photo_name(pid)
+            prog["current"] = name
+            raw = tmp / name
+            xmp = tmp / (name + ".xmp")
+            self.srv.download("/api/photos/%s/original" % pid, raw)
+            self.srv.download("/api/photos/%s/xmp" % pid, xmp)
+        render_preview(self.cfg, raw, xmp, out)
+        self.srv.upload("/api/photos/%s/preview" % pid, out.read_bytes(), "image/jpeg")
 
     def photo_name(self, pid) -> str:
         """The photo's file name on the NAS (darktable-cli needs the real extension)."""

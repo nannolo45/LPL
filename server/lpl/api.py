@@ -1087,6 +1087,7 @@ def heartbeat(body: Dict[str, Any] = Body(...)):
         # an Android agent (the darktable phone app) only takes jobs addressed to it, never ones meant for any PC
         anyone = "" if body.get("os") == "android" else " OR agent_id IS NULL"
         now = time.time()
+        _render_jobs_on_heartbeat(c, aid, state if isinstance(state, dict) else {}, now)
         jobs = c.execute("SELECT * FROM jobs WHERE status='queued' AND (agent_id=?%s) ORDER BY id" % anyone, (aid,)).fetchall()
         if config.job_retry_seconds > 0:
             # taken by this agent long ago and never reported done (the app died, or the report got lost): again
@@ -1097,7 +1098,10 @@ def heartbeat(body: Dict[str, Any] = Body(...)):
         for j in jobs:
             c.execute("UPDATE jobs SET status='taken', taken=?, agent_id=?, attempts=COALESCE(attempts,0)+1 WHERE id=?",
                       (now, aid, j["id"]))
-            out.append({"id": j["id"], "kind": j["kind"], "payload": json.loads(j["payload"] or "{}")})
+            payload = json.loads(j["payload"] or "{}")
+            if j["kind"] == "render" and (j["attempts"] or 0) > 0:
+                payload = _render_left(c, j, payload)  # handed out again: not the photos rendered since it was made
+            out.append({"id": j["id"], "kind": j["kind"], "payload": payload})
         extra = transfers.on_heartbeat(c, aid, body, out, now)  # nothing for a device that announces no caps
         stop_render = [r[0] for r in c.execute("SELECT id FROM jobs WHERE agent_id=? AND kind='render' AND status='stopping'", (aid,))]
         if stop_render:  # render jobs to stop (POST /api/previews/render/{jid}/stop), said until the job is done
@@ -1201,6 +1205,35 @@ def _render_ids(c, body) -> list:
                          (f, like)).fetchall()
         return [r[0] for r in rows]
     return []
+
+
+def _render_jobs_on_heartbeat(c, aid: str, state: dict, now: float) -> None:
+    """Render jobs and a PC that sleeps or restarts. While the agent reports a render job running, the job counts as
+    freshly taken (a long job is never handed out a second time beside itself). When the agent started after it took a
+    render job that it no longer reports running (the PC was restarted, or the agent), the job is queued again at once,
+    within the hand-out limit; one being stopped is simply stopped."""
+    r = state.get("render") if isinstance(state.get("render"), dict) else None
+    running = r.get("job") if r and r.get("ended") is None and isinstance(r.get("job"), int) else None
+    if running is not None:
+        c.execute("UPDATE jobs SET taken=? WHERE id=? AND agent_id=? AND kind='render' AND status IN ('taken','stopping')",
+                  (now, running, aid))
+    started = state.get("agent_started")
+    if isinstance(started, (int, float)):
+        c.execute("UPDATE jobs SET status='stopped' WHERE agent_id=? AND kind='render' AND status='stopping' AND taken<? "
+                  "AND id IS NOT ?", (aid, started, running))
+        c.execute("UPDATE jobs SET status='queued' WHERE agent_id=? AND kind='render' AND status='taken' AND taken<? "
+                  "AND id IS NOT ? AND COALESCE(attempts,0)<?", (aid, started, running, JOB_MAX_HANDOUTS))
+
+
+def _render_left(c, job, payload: dict) -> dict:
+    """A render job handed out again: leave out the photos whose preview arrived after the job was made."""
+    ids = [i for i in payload.get("ids") or [] if isinstance(i, int)]
+    if not ids:
+        return payload
+    q = ",".join("?" * len(ids))
+    done = {r[0] for r in c.execute("SELECT id FROM photos WHERE id IN (%s) AND preview_src='rendered' AND preview_ts>=?" % q,
+                                    ids + [job["created"] or 0])}
+    return {**payload, "ids": [i for i in ids if i not in done]}
 
 
 @app.post("/api/previews/count")
