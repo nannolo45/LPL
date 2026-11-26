@@ -882,3 +882,13 @@ td.devcheckcell, th.devcheckcell { width: 34px; padding-right: 0; }
 .renderbar.phone .renderline > .small { flex: 1 1 100%; white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.35; }
 .renderbar.phone .renderline .renderbarbar { flex: 1 1 auto; min-width: 120px; }
 .renderbar.phone .btn.tiny { min-height: 36px; padding: 0 14px; }
+/* the strip: a lane shown alone as a grid (its photos wrap into rows instead of scrolling sideways) */
+.strip-focus { gap: 10px; align-items: center; padding: 2px 2px 6px; position: sticky; top: 0; z-index: 3; background: var(--bg); }
+.lane .lane-grid { flex: 0 0 auto; width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; color: var(--text2); background: transparent; border: 1px solid transparent; }
+.lane .lane-grid:hover { border-color: var(--line2); color: var(--text); }
+.strip.phone .lane .lane-grid { width: 40px; height: 40px; }
+.srow.grid { flex-wrap: wrap; overflow: visible; }
+.lane.grid { flex: 1 1 auto; }
+.strip.phone .srow.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.strip.phone .srow.grid .sth { min-width: 0; }
+.strip.phone .srow.grid .sth .box { width: 100%; height: auto; aspect-ratio: 3 / 2; }
