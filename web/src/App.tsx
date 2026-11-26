@@ -18,6 +18,7 @@ import { takeDeepLink } from './devices'
 import { DevicePicker } from './components/DevicePicker'
 import { DevicesIndicator, openDevices } from './components/DevicesIndicator'
 import { FindBox } from './components/FindBox'
+import { RenderProgress } from './components/RenderProgress'
 
 function TopBar() {
   const s = useStore()
@@ -119,6 +120,7 @@ function Desktop() {
   return (
     <div className="app">
       <TopBar />
+      <RenderProgress />
       <div className="main" key={s.activeTab}>
         {libView && <LeftPanel />}
         {s.view === 'board' ? <SeriesView /> : (

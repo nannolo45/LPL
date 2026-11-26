@@ -155,3 +155,53 @@ def test_the_409_says_why_each_pc_cannot_render(clean):
     clean.post("/api/agents/heartbeat", json={"id": "pc-b", "name": "Desktop", "os": "windows", "caps": ["batch"]})
     d = clean.post("/api/previews/render", json={"stale": True}).json()["detail"]
     assert "Laptop: darktable-cli not found next to /opt/dt" in d and "Desktop: its agent is from before" in d
+
+
+def test_scopes_count_and_stop(clean):
+    c = clean
+    with db.write_lock:
+        db.conn().execute("UPDATE photos SET edited=0")
+        db.conn().execute("DELETE FROM agents")
+        db.conn().execute("DELETE FROM jobs")
+        db.conn().commit()
+    ids = [r[0] for r in db.conn().execute("SELECT id FROM photos ORDER BY id LIMIT 3")]
+    for i in ids:
+        make_stale(i)
+    with db.write_lock:  # the third one already shows its edit
+        db.conn().execute("UPDATE photos SET preview_src='rendered', preview_ts=?, xmp_mtime=? WHERE id=?", (time.time(), time.time(), ids[2]))
+        db.conn().commit()
+    fid = c.post("/api/series-folders", json={"name": "Trip"}).json()["id"]
+    sid = c.post("/api/series", json={"name": "Render scope", "ids": ids, "folder_id": fid}).json()["id"]
+    count = lambda b: c.post("/api/previews/count", json=b).json()["count"]
+    assert count({"series": sid}) == 2 and count({"series": sid, "all": True}) == 3
+    assert count({"series_folder": fid}) == 2
+    folder = db.conn().execute("SELECT folder FROM photos WHERE id=?", (ids[0],)).fetchone()[0]
+    top = folder.split("/")[0]
+    assert count({"folder": top}) >= 1 and count({"folder": "no/such"}) == 0
+    assert count({"ids": ids + [999999]}) == 3          # selected: every edited one, out of date or not
+    # stop: one not handed out never starts; a running one is told with the heartbeat until it is done
+    c.post("/api/agents/heartbeat", json={"id": "pc-r", "name": "Laptop", "os": "linux", "caps": ["render"]})
+    j1 = c.post("/api/previews/render", json={"series": sid}).json()["id"]
+    assert c.post("/api/previews/render/%d/stop" % j1).status_code == 200
+    assert db.conn().execute("SELECT status FROM jobs WHERE id=?", (j1,)).fetchone()[0] == "stopped"
+    j2 = c.post("/api/previews/render", json={"series": sid}).json()["id"]
+    hb = c.post("/api/agents/heartbeat", json={"id": "pc-r", "name": "Laptop", "os": "linux", "caps": ["render"]}).json()
+    assert [j["id"] for j in hb["jobs"]] == [j2] and "stop_render" not in hb
+    c.post("/api/previews/render/%d/stop" % j2)
+    hb = c.post("/api/agents/heartbeat", json={"id": "pc-r", "name": "Laptop", "os": "linux", "caps": ["render"]}).json()
+    assert hb["stop_render"] == [j2]
+    c.post("/api/jobs/%d/done" % j2, json={"status": "stopped"})
+    assert "stop_render" not in c.post("/api/agents/heartbeat", json={"id": "pc-r", "name": "Laptop", "os": "linux", "caps": ["render"]}).json()
+    assert c.post("/api/previews/render/999999/stop").status_code == 404
+
+
+def test_agent_reports_progress_and_stops(clean, base_url, agent_mod, fake_dt, tmp_path):  # noqa: F811
+    a = agent_mod.Agent({"id": "pc-render3", "name": "Laptop", "server": base_url, "password": "", "auto_sync_seconds": 0,
+                         "darktable": fake_dt["darktable"], "darktable_configdir": fake_dt["darktable_configdir"]})
+    assert a.render_job(["1", "2"], 7) == "done"
+    p = a.state()["render"]
+    assert (p["job"], p["total"], p["done"], p["failed"], p["stopped"]) == (7, 2, 2, 0, False) and p["ended"]
+    a.take({"jobs": [], "stop_render": [8]})
+    assert a.render_job(["1", "2"], 8) == "stopped"
+    p = a.state()["render"]
+    assert p["stopped"] and p["done"] == 0

@@ -165,7 +165,11 @@ const tbase = (t: Target) => (t.kind === 'folder' ? `/api/series-folders/${t.id}
 export interface WorkItem { id: number; version?: number; filename: string; status: string; local_path?: string; error?: string; checkout_ts?: number; synced_ts?: number; step?: string; progress?: number
   /** the PC agent from 23 Nov 2026: the copy from the NAS never completed (nothing of the user's in it) */
   copy_failed?: boolean }
-export interface Agent { id: string; name: string; os: string; last_seen: number; online: boolean; state: { working_set?: WorkItem[]; darktable_running?: boolean; bridge_alive?: boolean; bridge_status?: string; version?: string; message?: string; local_url?: string; local_error?: string }
+/** A PC's render job as its agent reports it (agent/lpl_agent.py render_job): previews rendered with darktable-cli. */
+export interface RenderProgress { job: number; total: number; done: number; failed: number; current: string | null; started: number; ended: number | null; stopped: boolean }
+/** What a render request covers: these photos, every out-of-date one, or a series / series folder / library folder. */
+export type RenderScope = { ids?: number[]; stale?: boolean; series?: number; series_folder?: number; folder?: string; all?: boolean }
+export interface Agent { id: string; name: string; os: string; last_seen: number; online: boolean; state: { working_set?: WorkItem[]; render?: RenderProgress | null; render_unavailable?: string; darktable_running?: boolean; bridge_alive?: boolean; bridge_status?: string; version?: string; message?: string; local_url?: string; local_error?: string }
   /** what the device says it can do (batch, cancel, open); what is being sent to it; a batch that was stopped; folded on the Devices page (null: never chosen) */
   caps?: string[]; transfer?: import('./transfer').Transfer | null; stopped?: import('./transfer').StoppedRun | null; folded?: boolean | null; folded_phone?: boolean | null
   /** photos it could not copy, until Retry or "Clear from queue" (server/lpl/transfers.py failed_items) */
@@ -319,7 +323,9 @@ export const api = {
   job: (kind: string, payload: Record<string, unknown>, agent_id?: string) => call<{ id: number; agent_id: string | null; message?: string }>('POST', '/api/jobs', { kind, payload, agent_id }),
   // previews that show darktable's edit, rendered by a PC with darktable-cli
   previewsStale: () => call<{ count: number; agents: { id: string; name: string }[] }>('GET', '/api/previews/stale'),
-  previewsRender: (body: { ids?: number[]; stale?: boolean; agent_id?: string }) => call<{ id: number | null; count: number; agent_id: string | null; agent_name?: string }>('POST', '/api/previews/render', body),
+  previewsCount: (body: RenderScope) => call<{ count: number }>('POST', '/api/previews/count', body),
+  previewsStop: (job: number) => call<unknown>('POST', `/api/previews/render/${job}/stop`),
+  previewsRender: (body: RenderScope & { agent_id?: string }) => call<{ id: number | null; count: number; agent_id: string | null; agent_name?: string }>('POST', '/api/previews/render', body),
   jobs: () => call<{ jobs: { id: number; agent_id: string | null; kind: string; payload: any; created: number; status: string }[] }>('GET', '/api/jobs'),
 }
 

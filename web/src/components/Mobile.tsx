@@ -24,6 +24,7 @@ import { useBackLayer } from '../back'
 import { phoneSpot } from '../phonetabs'
 import { tabTitle } from './Tabs'
 import { NewSeriesSheet } from './NewSeries'
+import { RenderProgress } from './RenderProgress'
 
 type Tab = 'lib' | 'folders' | 'series'  // (same as PhoneTab; the Devices page is not a tab: `devices` below)
 
@@ -210,6 +211,7 @@ export function MobileApp() {
   const fcount = [s.filters.folder, (s.filters.folders || []).length, s.filters.month, s.filters.tag, s.filters.series, s.filters.series_folder, s.filters.edited, (s.filters.lenses || []).length, (s.filters.cameras || []).length, (s.filters.formats || []).length, (s.filters.labels || []).length, (s.filters.ratings || []).length].filter(Boolean).length
   return (
     <div className="app">
+      <RenderProgress />
       <div className="mhead">
         {(devices || photo != null || board != null) && <button className="btn ghost big" onClick={() => { if (devices) closeDevices(); else if (photo != null) setPhoto(null); else { setBoard(null); s.setView('grid') } }} aria-label={board != null && photo == null ? 'Back to all series' : 'Back'}>‹</button>}
         {!devices && board != null && photo == null

@@ -14,6 +14,7 @@ import { bumpSeries } from '../seriesops'
 import { ExportsList } from './Exports'
 import { bumpVersions } from '../versions'
 import { useVersionsFor, VersionsStrip } from './Versions'
+import { updatePreviews } from './RenderProgress'
 
 /** s.meta for one version of the photos (R17): sends `version`, and has the versions strip load again afterwards. */
 function metaFor(meta: (b: Record<string, unknown>, ids?: number[]) => Promise<void>, version?: number) {
@@ -351,11 +352,7 @@ export function Inspector() {
           </button>
           {!s.isLocal && photos.some(p => p.edited) && (
             <button className="btn" title="The NAS can't run darktable: a PC with darktable renders the edited photos and sends the result as their preview"
-              onClick={() => {
-                const ids = photos.filter(p => p.edited).map(p => p.id)
-                api.previewsRender({ ids }).then(r => s.toast(r.count ? `Rendering ${r.count} preview${r.count === 1 ? '' : 's'} on ${r.agent_name || 'the PC'}. They update when each is done.` : 'Nothing to render.'))
-                  .catch(e => s.toast(e.message))
-              }}>
+              onClick={() => { const ids = photos.filter(p => p.edited).map(p => p.id); updatePreviews({ ids }, ids.length === 1 ? 'this photo' : `the ${ids.length} selected photos`, s.toast) }}>
               Update preview{photos.filter(p => p.edited).length > 1 ? 's' : ''} from the edit
             </button>
           )}

@@ -1433,7 +1433,8 @@ class Agent:
                 "local_url": LOCAL["url"], "local_error": LOCAL["error"],
                 **({"shared_update": self.shared.update} if self.shared.active() else {}),
                 **({"luts": self.luts.status} if self.luts.active() and self.luts.status else {}),
-                **({"render_unavailable": render_unavailable(self.cfg)} if not self.renderer.available() else {})}
+                **({"render_unavailable": render_unavailable(self.cfg)} if not self.renderer.available() else {}),
+                **({"render": self.render_progress} if getattr(self, "render_progress", None) else {})}
 
     def recover(self):
         """At start: whatever was being copied when the agent last stopped never arrived. Its partial file goes,
@@ -1531,6 +1532,7 @@ class Agent:
                     self.batches[j["id"]] = {"state": "queued", "arrived": [], "present": [], "failed": [], "skipped": [],
                                              "photo": None, "bytes": 0, "unsaid": False}
             self.jobs.put(j)
+        self.stop_render = set(x for x in answer.get("stop_render") or [] if isinstance(x, int))
         sc = answer.get("server_caps")
         self.server_caps = [x for x in sc if isinstance(x, str)] if isinstance(sc, list) else []
         self.take_rename(answer.get("rename"))
@@ -1628,9 +1630,15 @@ class Agent:
         temporary folder (or the working-set copy is used), rendered with darktable-cli, posted, and deleted."""
         done = failed = 0
         tmp_root = data_dir() / "render" / ("job-%s" % jid)
+        prog = self.render_progress = {"job": jid, "total": len(ids), "done": 0, "failed": 0, "current": None,
+                                       "started": time.time(), "ended": None, "stopped": False}
         for k, pid in enumerate(ids):
-            if jid in self.cancel_jobs:
+            if jid in self.cancel_jobs or jid in getattr(self, "stop_render", ()):
+                prog.update(ended=time.time(), stopped=True, current=None)
+                shutil.rmtree(tmp_root, ignore_errors=True)
+                self.wake.set()
                 return "stopped"
+            prog["current"] = None
             self.message = "Rendering previews: %d of %d" % (k + 1, len(ids))
             tmp = tmp_root / pid
             out = tmp_root / ("%s.jpg" % pid)
@@ -1638,9 +1646,11 @@ class Agent:
                 it = self.items.get(pid)
                 if it and Path(it["local_path"]).is_file() and Path(it["local_path"] + ".xmp").is_file():
                     raw, xmp = Path(it["local_path"]), Path(it["local_path"] + ".xmp")
+                    prog["current"] = it.get("filename")
                 else:
                     tmp.mkdir(parents=True, exist_ok=True)
                     name = self.photo_name(pid)
+                    prog["current"] = name
                     raw = tmp / name
                     xmp = tmp / (name + ".xmp")
                     self.srv.download("/api/photos/%s/original" % pid, raw)
@@ -1648,8 +1658,11 @@ class Agent:
                 render_preview(self.cfg, raw, xmp, out)
                 self.srv.upload("/api/photos/%s/preview" % pid, out.read_bytes(), "image/jpeg")
                 done += 1
+                prog["done"] = done
+                self.wake.set()  # the next heartbeat carries the progress now
             except Exception as e:
                 failed += 1
+                prog["failed"] = failed
                 log.warning("preview of photo %s not rendered: %s", pid, e)
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
@@ -1658,6 +1671,8 @@ class Agent:
                 except OSError:
                     pass
         shutil.rmtree(tmp_root, ignore_errors=True)
+        prog.update(ended=time.time(), current=None)
+        self.wake.set()
         self.message = "Previews rendered: %d%s" % (done, (", %d failed (see the agent log)" % failed) if failed else "")
         log.info(self.message)
         return "done" if done or not failed else "failed"

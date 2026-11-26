@@ -4,6 +4,7 @@ import { useStore } from '../store'
 import { useBackLayer } from '../back'
 import { fmtMonth } from '../fields'
 import { RetryImg } from './RetryImg'
+import { updatePreviews } from './RenderProgress'
 
 // The last folder list is kept (in memory and in the browser) so the page shows at once; it's refreshed in the background.
 let lastFolders: FoldersResult | null = null
@@ -207,6 +208,7 @@ export function FoldersView() {
                     <button onClick={() => { setMenu(null); open(f.path) }}>Show all photos</button>
                     {f.hidden ? <button onClick={() => { setMenu(null); hide(f, false) }}>Show again in all views</button>
                       : <button onClick={() => { setMenu(null); hide(f, true) }}>Hide from views</button>}
+                    {!s.isLocal && f.edited > 0 && <button onClick={() => { setMenu(null); updatePreviews({ folder: f.path }, `the folder ${f.path}`, s.toast) }}>Update previews from the darktable edits</button>}
                     <button onClick={() => { setMenu(null); exclude(f.path, true) }}>Leave out of the library…</button>
                   </div>
                 )}
