@@ -1146,6 +1146,23 @@ def _render_agents(c):
     return [a for a in list_agents() if a["online"] and a["os"] != "android" and "render" in transfers.caps_of(c, a["id"])]
 
 
+def _why_no_render(c) -> str:
+    """The 409's message: for each PC that is online, why it cannot render (darktable-cli missing, or an agent from
+    before rendering); or that none is online."""
+    from . import transfers
+    pcs = [a for a in list_agents() if a["online"] and a["os"] != "android"]
+    if not pcs:
+        return "No PC is online. Start the agent on a PC with darktable, then try again."
+    why = []
+    for a in pcs:
+        r = (a.get("state") or {}).get("render_unavailable")
+        if r:
+            why.append("%s: %s" % (a["name"] or a["id"], r))
+        elif "render" not in transfers.caps_of(c, a["id"]):
+            why.append("%s: its agent is from before preview rendering, update it" % (a["name"] or a["id"]))
+    return "No PC can render with darktable right now. " + "; ".join(why) + "."
+
+
 @app.get("/api/previews/stale")
 def previews_stale():
     """How many edited photos still show a preview from before their edit, and which PCs can render them now."""
@@ -1169,8 +1186,7 @@ def previews_render(body: Dict[str, Any] = Body(...)):
     agents = _render_agents(c)
     aid = body.get("agent_id") or (agents[0]["id"] if agents else None)
     if not aid or aid not in [a["id"] for a in agents]:
-        raise HTTPException(409, "No PC that can render with darktable is online. Start the agent on a PC with darktable "
-                                 "(its darktable-cli is used), then try again.")
+        raise HTTPException(409, _why_no_render(c))
     with db.write_lock:
         c = db.conn()
         jid = c.execute("INSERT INTO jobs(agent_id,kind,payload,created) VALUES(?,?,?,?)",

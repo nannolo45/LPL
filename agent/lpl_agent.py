@@ -308,17 +308,54 @@ def darktable_cmd(cfg: dict) -> list:
     return [dtp]
 
 
+def is_appimage(p) -> bool:
+    """A darktable AppImage (by name, or by the AppImage type 2 magic bytes "AI\\x02" at offset 8)."""
+    try:
+        rp = Path(p).resolve()
+        if rp.name.lower().endswith(".appimage"):
+            return True
+        with open(rp, "rb") as f:
+            return f.read(11)[8:11] == b"AI\x02"
+    except OSError:
+        return False
+
+
 def darktable_cli_cmd(cfg: dict):
-    """darktable-cli beside the configured darktable (same folder, or the flatpak's), or on PATH; None if there is none."""
+    """darktable-cli beside the configured darktable (same folder, the flatpak's, or inside the AppImage), or on
+    PATH; None if there is none. An AppImage runs the binary named like the link it is called through (darktable's
+    manual, "invocation per OS"), so a link named darktable-cli to the AppImage is made in the agent's folder."""
     dtp = cfg.get("darktable") or find_darktable()
     if dtp == "flatpak":
         return ["flatpak", "run", "--command=darktable-cli", "org.darktable.Darktable"]
+    if dtp and not IS_WIN and is_appimage(dtp):
+        link = data_dir() / "bin" / "darktable-cli"
+        try:
+            target = Path(dtp).resolve()
+            if not (link.is_symlink() and Path(os.readlink(link)) == target):
+                link.parent.mkdir(parents=True, exist_ok=True)
+                if link.is_symlink() or link.exists():
+                    link.unlink()
+                link.symlink_to(target)
+            return [str(link)]
+        except OSError as e:
+            log.warning("darktable-cli link to the AppImage not made: %s", e)
     if dtp:
         sib = Path(dtp).with_name("darktable-cli.exe" if IS_WIN else "darktable-cli")
         if sib.is_file():
             return [str(sib)]
-    w = shutil.which("darktable-cli")
-    return [w] if w else None
+    for n in ("darktable-cli", "darktable.darktable-cli"):  # the second: the snap
+        w = shutil.which(n)
+        if w:
+            return [w]
+    return None
+
+
+def render_unavailable(cfg: dict):
+    """Why this PC cannot render previews (shown in LPL), or None when it can."""
+    if darktable_cli_cmd(cfg):
+        return None
+    dtp = cfg.get("darktable") or find_darktable()
+    return ("darktable-cli not found next to %s or on PATH" % dtp) if dtp else "darktable not found (set its path with --setup)"
 
 
 RENDER_SIZE = 1920
@@ -1395,7 +1432,8 @@ class Agent:
                 "bridge_status": bridge_status(running), "version": VERSION, "message": self.message,
                 "local_url": LOCAL["url"], "local_error": LOCAL["error"],
                 **({"shared_update": self.shared.update} if self.shared.active() else {}),
-                **({"luts": self.luts.status} if self.luts.active() and self.luts.status else {})}
+                **({"luts": self.luts.status} if self.luts.active() and self.luts.status else {}),
+                **({"render_unavailable": render_unavailable(self.cfg)} if not self.renderer.available() else {})}
 
     def recover(self):
         """At start: whatever was being copied when the agent last stopped never arrived. Its partial file goes,

@@ -128,3 +128,30 @@ def test_no_darktable_cli_no_render_cap(agent_mod, tmp_path, monkeypatch):  # no
     monkeypatch.setattr(agent_mod.shutil, "which", lambda n: None)
     assert agent_mod.darktable_cli_cmd({"darktable": str(tmp_path / "nothing" / "darktable")}) is None
     assert agent_mod.darktable_cli_cmd({"darktable": "flatpak"})[:3] == ["flatpak", "run", "--command=darktable-cli"]
+
+
+def test_an_appimage_gets_a_darktable_cli_link(agent_mod, tmp_path, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(agent_mod, "data_dir", lambda: tmp_path / "agentdata")
+    img = tmp_path / "Apps" / "Darktable-5.2.1-x86_64.AppImage"
+    img.parent.mkdir()
+    img.write_bytes(b"\x7fELF\x02\x01\x01\x00AI\x02" + b"\0" * 32)
+    cmd = agent_mod.darktable_cli_cmd({"darktable": str(img)})
+    link = tmp_path / "agentdata" / "bin" / "darktable-cli"
+    assert cmd == [str(link)] and link.is_symlink() and link.resolve() == img.resolve()
+    assert agent_mod.darktable_cli_cmd({"darktable": str(img)}) == [str(link)]   # made once, then reused
+    renamed = tmp_path / "Apps" / "darktable"                                    # no .AppImage name: the magic bytes
+    renamed.write_bytes(img.read_bytes())
+    assert agent_mod.darktable_cli_cmd({"darktable": str(renamed)}) == [str(link)] and link.resolve() == renamed.resolve()
+
+
+def test_the_409_says_why_each_pc_cannot_render(clean):
+    with db.write_lock:
+        db.conn().execute("DELETE FROM agents")
+        db.conn().commit()
+    make_stale(1)
+    assert "No PC is online" in clean.post("/api/previews/render", json={"stale": True}).json()["detail"]
+    clean.post("/api/agents/heartbeat", json={"id": "pc-a", "name": "Laptop", "os": "linux", "caps": ["batch"],
+                                               "state": {"render_unavailable": "darktable-cli not found next to /opt/dt"}})
+    clean.post("/api/agents/heartbeat", json={"id": "pc-b", "name": "Desktop", "os": "windows", "caps": ["batch"]})
+    d = clean.post("/api/previews/render", json={"stale": True}).json()["detail"]
+    assert "Laptop: darktable-cli not found next to /opt/dt" in d and "Desktop: its agent is from before" in d

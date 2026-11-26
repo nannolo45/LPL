@@ -14,7 +14,10 @@ rendering. Three ways now:
 
 Stale = `edited=1` and the preview is not darktable's, or is older than the XMP by more than a minute.
 
-`darktable-cli` is found beside the configured darktable, on PATH, or in the flatpak
-(`flatpak run --command=darktable-cli org.darktable.Darktable`). It runs with `--core --configdir <copy>
+`darktable-cli` is found beside the configured darktable, on PATH (also the snap's `darktable.darktable-cli`), in the
+flatpak (`flatpak run --command=darktable-cli org.darktable.Darktable`), or inside an **AppImage**: the agent makes a
+link named `darktable-cli` to the AppImage in its own folder (`bin/`), and the AppImage runs the binary named like the
+link (darktable manual, "invocation per OS"). A PC that cannot render says why in its state (`render_unavailable`),
+and the 409 of `POST /api/previews/render` lists each online PC's reason. It runs with `--core --configdir <copy>
 --library :memory:`: a temporary copy of `darktablerc` (LUT folder, OpenCL) and `data.db` (styles, presets), so it
 never waits for or locks an open darktable. A PC announces the cap `render` only when it has darktable-cli.
