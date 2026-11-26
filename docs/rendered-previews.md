@@ -97,3 +97,12 @@ Each failure is tried once more after 5 s.
   "Render them on another PC…" (the dialog with that PC unticked). The error names this PC's darktable version.
 - **Timings:** download time is now per photo downloaded (the agent downloads ahead) with MB/s, darktable time per
   photo rendered, and the overall pace only once 6 photos are done (`web/src/renderpace.ts`).
+
+## Which darktable renders (26 Nov 2026, night)
+
+The Desktop had two darktable installations: an older one in Program Files (what the agent's setup found) without
+`spektrafilm`, and the one Tommaso edits with. The agent now notes the program file of the darktable that is running
+(Windows: `Get-Process darktable`; Linux: `/proc/*/exe`, not an AppImage's temporary mount) at the start of each
+render job and every 10 minutes, keeps it in its config (`darktable_seen`), and uses the `darktable-cli` beside it
+before the configured one. It reports `state.render_with` (`cli`, `version`); the dialog shows each PC's darktable
+version and warns when they differ.

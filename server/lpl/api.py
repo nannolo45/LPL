@@ -1313,7 +1313,10 @@ def previews_stale():
     c = db.conn()
     n = c.execute("SELECT COUNT(*) FROM photos WHERE " + STALE_SQL).fetchone()[0]
     agents = _render_agents(c)
-    return {"count": n, "agents": [{"id": a["id"], "name": a["name"]} for a in agents],
+    def with_(a):
+        w = (a.get("state") or {}).get("render_with")
+        return w.get("version") if isinstance(w, dict) else None
+    return {"count": n, "agents": [{"id": a["id"], "name": a["name"], "darktable": with_(a)} for a in agents],
             **({} if agents else {"why": _why_no_render(c)})}
 
 

@@ -326,6 +326,11 @@ def darktable_cli_cmd(cfg: dict):
     PATH; None if there is none. An AppImage runs the binary named like the link it is called through (darktable's
     manual, "invocation per OS"), so a link named darktable-cli to the AppImage is made in the agent's folder."""
     dtp = cfg.get("darktable") or find_darktable()
+    seen = cfg.get("darktable_seen")
+    if seen and dtp != "flatpak" and not (dtp and not IS_WIN and is_appimage(dtp)):
+        sib = Path(seen).with_name("darktable-cli.exe" if IS_WIN else "darktable-cli")
+        if sib.is_file():
+            return [str(sib)]
     if dtp == "flatpak":
         return ["flatpak", "run", "--command=darktable-cli", "org.darktable.Darktable"]
     if dtp and not IS_WIN and is_appimage(dtp):
@@ -565,6 +570,46 @@ def darktable_running() -> bool:
         return out.returncode == 0
     except Exception:
         return False
+
+
+def running_darktable_exe():
+    """The program file of the darktable that is running now (the one you edit with), or None."""
+    try:
+        if IS_WIN:
+            out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                                  "(Get-Process darktable -ErrorAction SilentlyContinue | Select-Object -First 1).Path"],
+                                 capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW)
+            p = (out.stdout or "").strip().splitlines()
+            return p[0].strip() if p and p[0].strip().lower().endswith(".exe") else None
+        for d in Path("/proc").iterdir():
+            if not d.name.isdigit():
+                continue
+            try:
+                if (d / "comm").read_text().strip() == "darktable":
+                    return os.readlink(d / "exe")
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def note_running_darktable(cfg: dict) -> None:
+    """Remember where the running darktable is (cfg darktable_seen): previews are rendered with the darktable-cli
+    beside it, so they get the same modules and version as your edits, even when another darktable is installed
+    (Desktop, 26 Nov: an older install in Program Files lacked spektrafilm). Kept after darktable closes."""
+    exe = running_darktable_exe()
+    if not exe or "/.mount_" in exe:  # an AppImage's temporary mount: the AppImage itself is used (see below)
+        return
+    cli = Path(exe).with_name("darktable-cli.exe" if IS_WIN else "darktable-cli")
+    if cli.is_file() and cfg.get("darktable_seen") != exe:
+        cfg["darktable_seen"] = exe
+        try:
+            save_config(cfg)
+        except OSError:
+            pass
+        _DT_VERSION.clear()
+        log.info("previews will be rendered with the darktable-cli beside the running darktable: %s", cli)
 
 
 def darktable_running_strict() -> bool:
@@ -1572,7 +1617,8 @@ class Agent:
                 **({"shared_update": self.shared.update} if self.shared.active() else {}),
                 **({"luts": self.luts.status} if self.luts.active() and self.luts.status else {}),
                 **({"render_unavailable": render_unavailable(self.cfg)} if not self.renderer.available() else {}),
-                **({"render": self.render_progress} if getattr(self, "render_progress", None) else {})}
+                **({"render": self.render_progress} if getattr(self, "render_progress", None) else {}),
+                **({"render_with": self.render_with()} if self.renderer.available() else {})}
 
     def recover(self):
         """At start: whatever was being copied when the agent last stopped never arrived. Its partial file goes,
@@ -1776,6 +1822,7 @@ class Agent:
         by sleep, a file darktable cannot read) is tried once more on its own before it counts as failed.
         Progress (with the last errors and where the time goes) goes to LPL with the heartbeat and to darktable through
         the bridge folder (render.txt; darktable's cancel writes render-stop.txt)."""
+        note_running_darktable(self.cfg)
         tmp_root = data_dir() / "render" / ("job-%s" % jid)
         prog = self.render_progress = {"job": jid, "total": len(ids), "done": 0, "failed": 0, "current": None,
                                        "started": time.time(), "ended": None, "stopped": False, "errors": [],
@@ -1940,6 +1987,17 @@ class Agent:
         if was_stopped:
             return "stopped"
         return "done" if done or not failed else "failed"
+
+    def render_with(self):
+        """Which darktable renders previews here (shown in LPL's dialog), looked at again every 10 minutes."""
+        now = time.time()
+        if now - getattr(self, "_render_with_at", 0) > 600:
+            self._render_with_at = now
+            if darktable_running():
+                note_running_darktable(self.cfg)
+            cmd = darktable_cli_cmd(self.cfg) or []
+            self._render_with = {"cli": " ".join(cmd), "version": darktable_version(self.cfg)}
+        return self._render_with
 
     def render_tell_bridge(self, prog):
         """The render job's progress for darktable (the bridge shows it as a background job with Cancel):
