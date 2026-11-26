@@ -1099,6 +1099,9 @@ def heartbeat(body: Dict[str, Any] = Body(...)):
                       (now, aid, j["id"]))
             out.append({"id": j["id"], "kind": j["kind"], "payload": json.loads(j["payload"] or "{}")})
         extra = transfers.on_heartbeat(c, aid, body, out, now)  # nothing for a device that announces no caps
+        stop_render = [r[0] for r in c.execute("SELECT id FROM jobs WHERE agent_id=? AND kind='render' AND status='stopping'", (aid,))]
+        if stop_render:  # render jobs to stop (POST /api/previews/render/{jid}/stop), said until the job is done
+            extra = {**extra, "stop_render": stop_render}
         if transfers.caps_of(c, aid):  # R18: what this server can do, for a device that announces caps (others: no new key)
             extra = {**extra, "server_caps": exports.SERVER_CAPS + shared.SERVER_CAPS + luts.SERVER_CAPS}
         c.commit()
@@ -1163,6 +1166,65 @@ def _why_no_render(c) -> str:
     return "No PC can render with darktable right now. " + "; ".join(why) + "."
 
 
+def _render_ids(c, body) -> list:
+    """Which photos a render request means. ids: those (the edited ones among them). stale: every out-of-date one.
+    series / series_folder (with its subfolders, their series and the photos on its board) / folder (a library folder
+    with its subfolders): the edited photos there whose preview is out of date, or all edited ones with all=true."""
+    if body.get("stale"):
+        return [r[0] for r in c.execute("SELECT id FROM photos WHERE " + STALE_SQL + " ORDER BY id")]
+    if body.get("ids") is not None:
+        want = [int(i) for i in body.get("ids") or [] if str(i).isdigit()][:5000]
+        if not want:
+            return []
+        q = ",".join("?" * len(want))
+        have = {r[0] for r in c.execute("SELECT id FROM photos WHERE edited=1 AND id IN (%s)" % q, want)}
+        return [i for i in want if i in have]
+    cond = "edited=1" if body.get("all") else STALE_SQL
+    if body.get("series") is not None:
+        rows = c.execute("SELECT p.id FROM series_items si JOIN photos p ON p.id=si.photo_id WHERE si.series_id=? AND "
+                         + cond + " ORDER BY si.ord NULLS LAST, p.id", (int(body["series"]),)).fetchall()
+        return [r[0] for r in rows]
+    if body.get("series_folder") is not None:
+        from . import series as series_mod
+        fids = series_mod.folder_ids(c, int(body["series_folder"]))
+        if not fids:
+            return []
+        q = ",".join("?" * len(fids))
+        rows = c.execute("SELECT DISTINCT p.id FROM photos p WHERE " + cond + " AND (p.id IN (SELECT si.photo_id FROM "
+                         "series_items si JOIN series s ON s.id=si.series_id WHERE s.folder_id IN (%s)) OR p.id IN "
+                         "(SELECT photo_id FROM folder_items WHERE folder_id IN (%s))) ORDER BY p.id" % (q, q), fids + fids).fetchall()
+        return [r[0] for r in rows]
+    if isinstance(body.get("folder"), str):
+        f = body["folder"].strip("/")
+        like = f.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"
+        rows = c.execute("SELECT id FROM photos WHERE " + cond + " AND (folder=? OR folder LIKE ? ESCAPE '\\') ORDER BY relpath",
+                         (f, like)).fetchall()
+        return [r[0] for r in rows]
+    return []
+
+
+@app.post("/api/previews/count")
+def previews_count(body: Dict[str, Any] = Body(...)):
+    """How many photos a render request would cover (same body as /api/previews/render), for the menus' labels."""
+    return {"count": len(_render_ids(db.conn(), body))}
+
+
+@app.post("/api/previews/render/{jid}/stop")
+def previews_render_stop(jid: int):
+    """Stop a render job: one not handed out yet never starts; a running one stops after the photo in hand."""
+    with db.write_lock:
+        c = db.conn()
+        j = c.execute("SELECT status, kind FROM jobs WHERE id=?", (jid,)).fetchone()
+        if not j or j["kind"] != "render":
+            raise HTTPException(404, "no such render job")
+        if j["status"] == "queued":
+            c.execute("UPDATE jobs SET status='stopped' WHERE id=?", (jid,))
+        elif j["status"] == "taken":
+            c.execute("UPDATE jobs SET status='stopping' WHERE id=?", (jid,))
+        c.commit()
+    return {"ok": True}
+
+
 @app.get("/api/previews/stale")
 def previews_stale():
     """How many edited photos still show a preview from before their edit, and which PCs can render them now."""
@@ -1177,10 +1239,7 @@ def previews_render(body: Dict[str, Any] = Body(...)):
     optional (else the only online PC that can render, or the first). One "render" job; the PC downloads each photo
     and its XMP, renders with darktable-cli and posts the JPEG to /api/photos/{id}/preview."""
     c = db.conn()
-    if body.get("stale"):
-        ids = [r[0] for r in c.execute("SELECT id FROM photos WHERE " + STALE_SQL + " ORDER BY id")]
-    else:
-        ids = [int(i) for i in (body.get("ids") or []) if str(i).isdigit()][:5000]
+    ids = _render_ids(c, body)
     if not ids:
         return {"id": None, "count": 0, "agent_id": None}
     agents = _render_agents(c)

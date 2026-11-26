@@ -869,3 +869,7 @@ td.devcheckcell, th.devcheckcell { width: 34px; padding-right: 0; }
 .devsechead { align-self: flex-start; flex-wrap: wrap; row-gap: 2px; max-width: 100%; }
 .devsechead .small { font-family: inherit; }
 .lutgroup + .lutgroup { border-top: 1px solid var(--line); padding-top: 8px; }
+/* previews being rendered with darktable on a PC: a strip under the top bar */
+.renderbar { flex: 0 0 auto; display: flex; flex-direction: column; gap: 4px; padding: 6px 16px; background: var(--accent-bg); border-bottom: 1px solid var(--accent-line); color: var(--accent-text); }
+.renderline .renderbarbar { flex: 0 0 220px; display: flex; }
+.renderline .renderbarbar .xbar { width: 100%; }

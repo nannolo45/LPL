@@ -21,3 +21,19 @@ link (darktable manual, "invocation per OS"). A PC that cannot render says why i
 and the 409 of `POST /api/previews/render` lists each online PC's reason. It runs with `--core --configdir <copy>
 --library :memory:`: a temporary copy of `darktablerc` (LUT folder, OpenCL) and `data.db` (styles, presets), so it
 never waits for or locks an open darktable. A PC announces the cap `render` only when it has darktable-cli.
+
+## Progress, stop and whole series / folders (26 Nov 2026, later)
+
+- **Scopes** for `POST /api/previews/render` (and `POST /api/previews/count`, same body, for the confirmation):
+  `ids` (the edited ones among them), `stale`, `series`, `series_folder` (its subfolders, their series and the photos on
+  its board), `folder` (a library folder and its subfolders). For series and folders only out-of-date previews unless
+  `all: true` (the web UI offers that when every edited photo there is already up to date).
+- **Where:** the series view's ⋯ menu and a library folder tile's ⋯ menu ("Update previews from the darktable edits"),
+  the inspector for a selection, the Devices page for every out-of-date one.
+- **Progress:** the agent reports `state.render` (`job, total, done, failed, current, started, ended, stopped`), waking
+  its heartbeat after each photo. The web shows a strip under the top bar (also in full screen and on the phone) with
+  the count, the photo in hand and **Stop**; it stays 20 s after the end. Library tiles, board and strip reload as
+  previews arrive.
+- **Stop:** `POST /api/previews/render/{job}/stop`: a job not handed out yet becomes `stopped`; a running one becomes
+  `stopping` and every heartbeat answer of its PC carries `stop_render: [job]` until the agent reports it done; the
+  agent stops after the photo in hand.

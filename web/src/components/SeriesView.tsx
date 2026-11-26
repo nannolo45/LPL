@@ -14,6 +14,7 @@ import { AddPhotosDialog } from './AddPhotos'
 import { getFindState, setFindState, useFindState } from '../find'
 import { FindBox, SearchIcon } from './FindBox'
 import { actionFor, keysOf } from '../shortcuts'
+import { updatePreviews } from './RenderProgress'
 
 // Full screen for the board or the strip: the app's tab bar, top bar, series list and inspector are hidden
 // (class on <body>) and the browser goes full screen too when it allows it. The header row stays, so Board/Strip
@@ -271,6 +272,7 @@ export function SeriesView() {
     { label: s.sel.length === 1 ? "Show the selected photo's folder in the library" : `Show ${folder ? 'the folder' : 'the series'} in the library, in order`, onClick: showInLibrary },
     ...(folder ? [{ label: `New series in ${folder.name}`, onClick: () => { ops.newSeries(folder) } }, { label: `New folder in ${folder.name}`, onClick: () => { ops.newFolder(folder) } }] : []),
     ...(folder && crumbs.length ? [{ label: `Open the folder ${crumbs[crumbs.length - 1].name}`, onClick: () => ops.open({ kind: 'folder', id: crumbs[crumbs.length - 1].id }) }] : []),
+    ...(!s.isLocal ? [{ label: 'Update previews from the darktable edits', onClick: () => updatePreviews(folder ? { series_folder: folder.id } : { series: series!.id }, `“${name}”`, s.toast) }] : []),
     { label: 'Rename', onClick: () => (folder ? ops.renameFolder(folder) : ops.renameSeries(series!)) },
     ...(series && parent ? [{ label: `Open the folder ${parent.name}`, onClick: () => ops.open({ kind: 'folder', id: parent.id }) }] : []),
     { label: folder ? 'Delete folder' : 'Delete', danger: true, onClick: () => { folder ? ops.deleteFolder(folder) : ops.deleteSeries(series!) } },
