@@ -33,16 +33,17 @@ NAS (Docker)                                 your PC
 
 Docker runs on the UGREEN **DXP** models (not on the DH series). GitHub builds a ready-made image on every push: `ghcr.io/nannolo45/lpl:latest`.
 
-**a) One-time: let the NAS download the private image**
-1. On GitHub: Settings → Developer settings → Personal access tokens → **Tokens (classic)** → Generate new token, tick only **read:packages**. Copy the token.
-2. On the NAS: Control Panel → **Terminal** → enable SSH. From your PC:
+The image is public, so the NAS downloads it without any GitHub login or token.
+
+**a) One-time: find your user ids**
+1. On the NAS: Control Panel → **Terminal** → enable SSH. From your PC:
    ```
    ssh <your-nas-user>@<nas-address>
-   sudo docker login ghcr.io -u nannolo45      # paste the token as the password
    id                                           # note uid and gid, e.g. uid=1000 gid=10
    ```
    You can turn SSH off again afterwards.
-   (UGOS Pro 1.20+ also supports private registries in the Docker app; if you find the registry setting there, adding `ghcr.io` with user `nannolo45` and the token works too.)
+2. If the NAS was set up earlier with a ghcr.io login (from when the image was private) and an update fails with
+   "unauthorized", remove the old login once: `sudo docker logout ghcr.io`.
 
 **b) Create the project**
 1. Install **Docker** from the App Center if it isn't there yet.
