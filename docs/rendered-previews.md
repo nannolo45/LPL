@@ -61,3 +61,25 @@ The render job now: a download thread fetches originals and XMPs up to 8 photos 
 `<id>.<ext>.xmp` in a folder per photo) while darktable-cli renders the ones that are there in runs of up to 6 (waiting
 half a second for more to arrive). A photo a batch run left out, a working-set copy, or a batch of one is rendered alone.
 Each failure is tried once more after 5 s.
+
+## Bar, choice of PCs, failures, darktable (26 Nov 2026, evening)
+
+- **The bar at the top reads the NAS** (`GET /api/previews/jobs`: render jobs waiting, running, being stopped, or ended
+  in the last minute, with their PC's last report), so a PC that went to sleep or was shut down no longer leaves a line
+  forever. Lines: waiting (and whether the PC is offline), running (count, photos in hand, "about N s per photo
+  (download a, darktable b)"), "away (asleep or off): rendering paused", stopping, stopped / updated.
+- **Stop** works for an offline PC too: its job is stopped at once (not handed out again when the PC is back) and if
+  the PC comes back still running it, its heartbeat answer says `stop_render`. **×** clears a line
+  (`POST /api/previews/render/{job}/clear`: stopped first if not ended). Jobs have `ended` and `hidden` columns.
+- **Which PCs:** a dialog replaces the plain confirmation: the count (and "render all N edited photos again" when some
+  are already current), a tick per PC that can render (last choice remembered), the photos split between the ticked
+  PCs in runs (`agent_ids`); one job per PC. With no PC, the reason for each.
+- **Failures say why:** the agent keeps the last 5 errors (`state.render.errors`: photo and text, e.g. darktable-cli's
+  last lines) and the bar shows "N failed · why?". It also reports `download_s`, `render_s`, `upload_s`, `bytes`.
+  When a batch run leaves photos out, darktable-cli's output goes to the agent's log.
+- **In darktable:** the agent writes `<bridge>/render.txt` (job, done, failed, total, ended, stopped, current); the
+  bridge shows a darktable background job "LPL: rendering N previews with darktable" with a progress bar and Cancel
+  (writes `<bridge>/render-stop.txt` with the job number; the agent checks it before each batch), and a message when
+  that job ends. Tested under Lua 5.4 with a stand-in darktable module (tests/lua/bridge_render_check.lua).
+- **Bridge refresh:** at start the agent replaces an installed `lpl_bridge.lua` that differs from the one it brings
+  (never installs one where there was none); darktable loads it at its next start.

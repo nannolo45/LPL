@@ -24,7 +24,7 @@ import { useBackLayer } from '../back'
 import { phoneSpot } from '../phonetabs'
 import { tabTitle } from './Tabs'
 import { NewSeriesSheet } from './NewSeries'
-import { RenderProgress } from './RenderProgress'
+import { RenderDialog, RenderProgress } from './RenderProgress'
 
 type Tab = 'lib' | 'folders' | 'series'  // (same as PhoneTab; the Devices page is not a tab: `devices` below)
 
@@ -212,6 +212,7 @@ export function MobileApp() {
   return (
     <div className="app">
       <RenderProgress />
+      <RenderDialog />
       <div className="mhead">
         {(devices || photo != null || board != null) && <button className="btn ghost big" onClick={() => { if (devices) closeDevices(); else if (photo != null) setPhoto(null); else { setBoard(null); s.setView('grid') } }} aria-label={board != null && photo == null ? 'Back to all series' : 'Back'}>‹</button>}
         {!devices && board != null && photo == null

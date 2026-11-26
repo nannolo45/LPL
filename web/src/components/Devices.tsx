@@ -9,6 +9,7 @@ import { useStore } from '../store'
 import { agentLabel, devicePills, hasUnsavedEdits, isPhoneAgent, itemProgress, serverNow, STATUS } from '../devices'
 import { ago, deviceCounts, deviceRows, FailedItem, filterCounts, filterRows, isFolded, onlineCount, reporting, RowFilter, stoppedLines, TransferItem, transferLines } from '../transfer'
 import { Bar, Chevron, CrossIcon, foldAllSections, PlayIcon, StopIcon } from './DevicesBits'
+import { updatePreviews } from './RenderProgress'
 import { devicesApi, refreshStatus } from '../devicesApi'
 import { SharedSection } from './Shared'
 import { LutSection } from './Luts'
@@ -570,9 +571,7 @@ export const anythingMoving = (agents: Agent[], now: number) => agents.some(a =>
 /** Edited photos whose preview is still the camera's (or from before the last edit): one line and a button that has a
  * PC with darktable render them (POST /api/previews/render). Nothing when there are none. */
 function StalePreviews({ phone }: { phone?: boolean }) {
-  const s = useStore()
-  const [st, setSt] = useState<{ count: number; agents: { id: string; name: string }[] } | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [st, setSt] = useState<{ count: number; agents: { id: string; name: string }[]; why?: string } | null>(null)
   useEffect(() => {
     const load = () => api.previewsStale().then(setSt).catch(() => {})
     load()
@@ -581,20 +580,15 @@ function StalePreviews({ phone }: { phone?: boolean }) {
   }, [])
   if (!st || !st.count) return null
   const n = st.count
-  const go = (agent_id: string) => {
-    setBusy(true)
-    api.previewsRender({ stale: true, agent_id }).then(r => s.toast(`Rendering ${r.count} preview${r.count === 1 ? '' : 's'} on ${r.agent_name}. Each one updates when it is done.`))
-      .catch(e => s.toast(e.message)).finally(() => setBusy(false))
-  }
   return (
     <div className="card row wrap" style={{ gap: 10, alignItems: 'center' }}>
       <span className="grow small">
         <b>{n} edited photo{n === 1 ? '' : 's'}</b> still show{n === 1 ? 's' : ''} the camera's preview, not your darktable edit.
-        {!st.agents.length && <span className="muted"> Start the agent on a PC with darktable to update {n === 1 ? 'it' : 'them'}.</span>}
+        {!st.agents.length && <span className="muted"> {st.why || 'Start the agent on a PC with darktable to update them.'}</span>}
       </span>
-      {st.agents.map(a => (
-        <button key={a.id} className={'btn' + (phone ? ' big' : '')} disabled={busy} onClick={() => go(a.id)}>Update {n === 1 ? 'it' : 'them'} on {a.name}</button>
-      ))}
+      {st.agents.length > 0 && (
+        <button className={'btn' + (phone ? ' big' : '')} onClick={() => updatePreviews({ stale: true }, 'the library')}>Update {n === 1 ? 'it' : 'them'}…</button>
+      )}
     </div>
   )
 }
