@@ -465,6 +465,9 @@ a { color: var(--accent); }
 .sv-link.on .sv-sw i { left: 16px; background: #1a1a1a; }
 .sv-more { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 32px; padding: 0; border: 1px solid var(--line2); border-radius: 6px; background: transparent; color: var(--text); }
 .sv-more:hover { background: #26262b; }
+/* full screen board or strip: only the series header and the board/strip stay */
+body.sv-full .tabbar, body.sv-full .topbar, body.sv-full .main > .right, body.sv-full .board-wrap > .series-list { display: none; }
+.sv-full-btn[aria-pressed="true"] { border-color: var(--accent-line); color: var(--accent-text); background: var(--accent-bg); }
 .sv-body { flex: 1 1 auto; min-height: 0; min-width: 0; position: relative; display: flex; }
 .sv-pane { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .sv-pane.off { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
