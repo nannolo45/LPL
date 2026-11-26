@@ -25,7 +25,7 @@ export function RenderDialog() {
   const s = useStore()
   const [ask, setAsk] = useState<{ scope: RenderScope; what: string; notOn?: string } | null>(null)
   const [n, setN] = useState<{ stale: number; all: number } | null>(null)
-  const [pcs, setPcs] = useState<{ id: string; name: string }[]>([])
+  const [pcs, setPcs] = useState<{ id: string; name: string; darktable?: string | null }[]>([])
   const [why, setWhy] = useState<string | undefined>()
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [everything, setEverything] = useState(false)
@@ -82,12 +82,15 @@ export function RenderDialog() {
             )}
             <div className="col" style={{ gap: 6 }}>
               <span className="small muted">Render on{pcs.length > 1 ? ' (the photos are split between the ticked PCs)' : ''}</span>
+              {new Set(pcs.map(p => p.darktable).filter(Boolean)).size > 1 && (
+                <span className="tiny sharedwarn">These PCs have different darktable versions: an edit made with a module one of them lacks is left for the other.</span>
+              )}
               {pcs.length ? pcs.map(p => (
                 <label key={p.id} className="row small" style={{ gap: 8 }}>
                   <input type="checkbox" checked={picked.has(p.id)} onChange={e => {
                     const x = new Set(picked); if (e.target.checked) x.add(p.id); else x.delete(p.id); setPicked(x)
                   }} />
-                  {p.name}
+                  {p.name}{p.darktable && <span className="muted"> · {p.darktable}</span>}
                 </label>
               )) : <span className="small sharedwarn">{why || 'No PC that can render is online.'}</span>}
             </div>

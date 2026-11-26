@@ -428,3 +428,37 @@ def test_an_edit_with_a_module_this_darktable_lacks_is_left_for_another_pc(clean
     assert "spektrafilm, which darktable on this PC does not have" in p["errors"][0]["error"]
     assert 5 not in slept                                             # not tried again: it would fail the same way
     assert db.conn().execute("SELECT preview_src FROM photos WHERE id=2").fetchone()[0] != "rendered"   # no wrong look posted
+
+
+def test_previews_use_the_darktable_that_runs_not_another_install(agent_mod, tmp_path, monkeypatch):  # noqa: F811
+    """Desktop, 26 Nov: the darktable in Program Files was older than the one Tommaso runs (no spektrafilm)."""
+    monkeypatch.setattr(agent_mod, "data_dir", lambda: tmp_path / "agentdata")
+    monkeypatch.setattr(agent_mod, "save_config", lambda cfg: None)
+    old = tmp_path / "ProgramFiles" / "darktable" / "bin"
+    new = tmp_path / "Apps" / "darktable-dev" / "bin"
+    for d in (old, new):
+        d.mkdir(parents=True)
+        (d / "darktable").write_text("x")
+        (d / "darktable-cli").write_text("x")
+    cfg = {"darktable": str(old / "darktable")}
+    assert agent_mod.darktable_cli_cmd(cfg) == [str(old / "darktable-cli")]
+    monkeypatch.setattr(agent_mod, "running_darktable_exe", lambda: str(new / "darktable"))
+    agent_mod.note_running_darktable(cfg)
+    assert cfg["darktable_seen"] == str(new / "darktable")
+    assert agent_mod.darktable_cli_cmd(cfg) == [str(new / "darktable-cli")]
+    monkeypatch.setattr(agent_mod, "running_darktable_exe", lambda: None)   # closed again: still the one seen
+    agent_mod.note_running_darktable(cfg)
+    assert agent_mod.darktable_cli_cmd(cfg) == [str(new / "darktable-cli")]
+    monkeypatch.setattr(agent_mod, "running_darktable_exe", lambda: "/tmp/.mount_Darktab1/usr/bin/darktable")
+    agent_mod.note_running_darktable(cfg)                                     # an AppImage's mount is not kept
+    assert cfg["darktable_seen"] == str(new / "darktable")
+
+
+def test_the_dialog_learns_each_pcs_darktable(clean):
+    with db.write_lock:
+        db.conn().execute("DELETE FROM agents")
+        db.conn().commit()
+    make_stale(1)
+    clean.post("/api/agents/heartbeat", json={"id": "pc-v", "name": "Desktop", "os": "windows", "caps": ["render"],
+                                              "state": {"render_with": {"cli": "x", "version": "this is darktable 5.5.0+412"}}})
+    assert stale(clean)["agents"] == [{"id": "pc-v", "name": "Desktop", "darktable": "this is darktable 5.5.0+412"}]

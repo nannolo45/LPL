@@ -327,7 +327,7 @@ export const api = {
   agents: () => call<{ agents: Agent[]; server_time: number }>('GET', '/api/agents'),
   job: (kind: string, payload: Record<string, unknown>, agent_id?: string) => call<{ id: number; agent_id: string | null; message?: string }>('POST', '/api/jobs', { kind, payload, agent_id }),
   // previews that show darktable's edit, rendered by a PC with darktable-cli
-  previewsStale: () => call<{ count: number; agents: { id: string; name: string }[]; why?: string }>('GET', '/api/previews/stale'),
+  previewsStale: () => call<{ count: number; agents: { id: string; name: string; darktable?: string | null }[]; why?: string }>('GET', '/api/previews/stale'),
   previewsJobs: () => call<{ jobs: RenderJob[] }>('GET', '/api/previews/jobs'),
   previewsClear: (job: number) => call<unknown>('POST', `/api/previews/render/${job}/clear`),
   previewsCount: (body: RenderScope) => call<{ count: number }>('POST', '/api/previews/count', body),
