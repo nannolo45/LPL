@@ -106,3 +106,10 @@ The Desktop had two darktable installations: an older one in Program Files (what
 render job and every 10 minutes, keeps it in its config (`darktable_seen`), and uses the `darktable-cli` beside it
 before the configured one. It reports `state.render_with` (`cli`, `version`); the dialog shows each PC's darktable
 version and warns when they differ.
+
+## False "missing module" (27 Nov 2026)
+
+darktable prints "cannot get iop-order for X instance N" also for edits with several instances of ordinary modules
+(exposure, tone equalizer, color calibration): a Desktop photo was refused as lacking channelmixerrgb, exposure and
+toneequal. Only "the module `X' requested by image … is not installed on this computer" counts now. The rendering bar
+on the phone puts its text on its own lines, with the bar and buttons under it.

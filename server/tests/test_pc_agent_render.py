@@ -402,7 +402,10 @@ def test_missing_module_messages():
     spec.loader.exec_module(m)
     said = ("Magick: caught exception 0xC0000005 \"Access violation\"...\n1,4363 [dev_read_history] the module `spektrafilm' "
             "requested by image id=1 `43457.RAF' is not installed on this computer!\n1,4776 cannot get iop-order for agx instance 0")
-    assert m.missing_modules(said) == {"spektrafilm": "43457.RAF", "agx": None}
+    assert m.missing_modules(said) == {"spektrafilm": "43457.RAF"}
+    # 27 Nov: several exposure instances etc. on the Desktop, wrongly taken for missing modules
+    assert m.missing_modules("cannot get iop-order for channelmixerrgb instance 1\ncannot get iop-order for exposure instance 2\n"
+                             "cannot get iop-order for toneequal instance 1\n[export_job] exported to `x.jpg'") == {}
     assert m.missing_modules("[export_job] exported to `x.jpg'") == {}
 
 

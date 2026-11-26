@@ -132,7 +132,7 @@ export function RenderProgress() {
   if (!jobs.length) return null
   const act = (p: Promise<unknown>, msg?: string) => p.then(() => { if (msg) s.toast(msg); window.dispatchEvent(new Event(REFRESH)) }).catch(e => s.toast(e.message))
   return (
-    <div className="renderbar" role="status">
+    <div className={'renderbar' + (s.isMobile ? ' phone' : '')} role="status">
       {jobs.map(j => {
         const p = j.progress
         const n = p ? p.done + p.failed : 0

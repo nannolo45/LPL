@@ -373,20 +373,15 @@ def cli_out(p: Path) -> str:
     return p.as_posix() if IS_WIN else str(p)
 
 
-MISSING_MODULE = re.compile(r"the module [`'\"]?([\w.-]+)[`'\"]? requested by image id=\d+ [`'\"]?([^`'\"]+)[`'\"]? is not installed"
-                            r"|cannot get iop-order for ([\w.-]+) instance")
+MISSING_MODULE = re.compile(r"the module [`'\"]?([\w.-]+)[`'\"]? requested by image id=\d+ [`'\"]?([^`'\"]+)[`'\"]? is not installed")
 
 
 def missing_modules(text: str):
-    """darktable modules an edit uses that this darktable lacks, from darktable-cli's output: {module: file or None}.
-    Such a photo is not rendered here (darktable may crash on it, or leave the module out and show a wrong look)."""
-    out = {}
-    for m in MISSING_MODULE.finditer(text or ""):
-        if m.group(1):
-            out[m.group(1)] = m.group(2)
-        elif m.group(3):
-            out.setdefault(m.group(3), None)
-    return out
+    """darktable modules an edit uses that this darktable lacks, from darktable-cli's output: {module: file}.
+    Such a photo is not rendered here (darktable may crash on it, or leave the module out and show a wrong look).
+    Only darktable's "is not installed on this computer" counts: "cannot get iop-order for X instance N" also comes
+    for edits with several instances of an ordinary module (exposure, tone equalizer...) and is harmless there."""
+    return {m.group(1): m.group(2) for m in MISSING_MODULE.finditer(text or "")}
 
 
 class MissingModule(RuntimeError):
