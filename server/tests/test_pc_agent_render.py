@@ -22,15 +22,23 @@ a = sys.argv[1:]
 log = %r
 with open(log, "a") as f:
     f.write(json.dumps(a) + "\\n")
+def lacks(f, xmp):  # like darktable without the module an edit uses (it still exports, without it)
+    try:
+        if "spektrafilm" in open(xmp, encoding="utf-8", errors="ignore").read():
+            sys.stderr.write("1,43 [dev_read_history] the module `spektrafilm' requested by image id=1 `%%s' is not installed on this computer!\\n" %% os.path.basename(f))
+    except OSError:
+        pass
 if "--import" in a:  # a batch: --import <file> ... <outdir>/$(FILE_NAME) --out-ext jpg
     files = [a[i + 1] for i, x in enumerate(a) if x == "--import"]
     pattern = a[a.index("--out-ext") - 1]
     for f in files:
         if "unreadable" in f:
             continue
+        lacks(f, f + ".xmp")
         stem = os.path.splitext(os.path.basename(f))[0]
         Image.new("RGB", (64, 40), (200, 30, 30)).save(pattern.replace("$(FILE_NAME)", stem) + ".jpg", "JPEG")
 else:
+    lacks(a[0], a[1])
     Image.new("RGB", (64, 40), (200, 30, 30)).save(a[2], "JPEG")
 '''
 
@@ -375,3 +383,48 @@ def test_an_installed_bridge_is_refreshed_when_the_agent_starts(agent_mod, tmp_p
     assert agent_mod.refresh_bridge({"darktable_configdir": str(conf)}) == dest
     assert "render.txt" in dest.read_text()
     assert agent_mod.refresh_bridge({"darktable_configdir": str(conf)}) is None       # same now: left alone
+
+
+def test_windows_output_paths_use_forward_slashes(agent_mod, monkeypatch):  # noqa: F811
+    from pathlib import PureWindowsPath
+    monkeypatch.setattr(agent_mod, "IS_WIN", True)
+    p = PureWindowsPath(r"C:\Users\tomma\AppData\Local\LightPhotoLibrary\render\job-54\out-ec00\$(FILE_NAME)")
+    assert agent_mod.cli_out(p) == "C:/Users/tomma/AppData/Local/LightPhotoLibrary/render/job-54/out-ec00/$(FILE_NAME)"
+    monkeypatch.setattr(agent_mod, "IS_WIN", False)
+    assert agent_mod.cli_out(agent_mod.Path("/tmp/x.jpg")) == "/tmp/x.jpg"
+
+
+def test_missing_module_messages():
+    from test_pc_agent import agent_mod as _  # noqa: F401
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ag_mm", str(__import__("pathlib").Path(__file__).resolve().parents[2] / "agent" / "lpl_agent.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    said = ("Magick: caught exception 0xC0000005 \"Access violation\"...\n1,4363 [dev_read_history] the module `spektrafilm' "
+            "requested by image id=1 `43457.RAF' is not installed on this computer!\n1,4776 cannot get iop-order for agx instance 0")
+    assert m.missing_modules(said) == {"spektrafilm": "43457.RAF", "agx": None}
+    assert m.missing_modules("[export_job] exported to `x.jpg'") == {}
+
+
+def test_an_edit_with_a_module_this_darktable_lacks_is_left_for_another_pc(clean, base_url, agent_mod, fake_dt, monkeypatch):  # noqa: F811
+    a = agent_mod.Agent({"id": "pc-render8", "name": "Desktop", "server": base_url, "password": "", "auto_sync_seconds": 0,
+                         "darktable": fake_dt["darktable"], "darktable_configdir": fake_dt["darktable_configdir"]})
+    slept = []
+    monkeypatch.setattr(agent_mod.time, "sleep", lambda s: slept.append(s))
+    real = a.render_source
+
+    def with_spektra(pid, root):
+        src = real(pid, root)
+        if pid == "2":
+            src["xmp"].write_text("<x darktable:operation='spektrafilm'/>")
+        return src
+    monkeypatch.setattr(a, "render_source", with_spektra)
+    make_stale(1)
+    make_stale(2)
+    make_stale(3)
+    assert a.render_job(["1", "2", "3"], 60) == "done"
+    p = a.state()["render"]
+    assert (p["done"], p["failed"], p["lacking"], p["lacking_modules"]) == (2, 1, [2], ["spektrafilm"])
+    assert "spektrafilm, which darktable on this PC does not have" in p["errors"][0]["error"]
+    assert 5 not in slept                                             # not tried again: it would fail the same way
+    assert db.conn().execute("SELECT preview_src FROM photos WHERE id=2").fetchone()[0] != "rendered"   # no wrong look posted

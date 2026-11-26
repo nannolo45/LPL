@@ -362,6 +362,52 @@ def render_unavailable(cfg: dict):
 RENDER_SIZE = 1920
 
 
+def cli_out(p: Path) -> str:
+    """An output path for darktable-cli. darktable expands variables in it and takes a backslash as an escape, so
+    C:\\Users\\x.jpg ends up somewhere else (Desktop, 26 Nov: every preview "missing"); Windows takes forward slashes."""
+    return p.as_posix() if IS_WIN else str(p)
+
+
+MISSING_MODULE = re.compile(r"the module [`'\"]?([\w.-]+)[`'\"]? requested by image id=\d+ [`'\"]?([^`'\"]+)[`'\"]? is not installed"
+                            r"|cannot get iop-order for ([\w.-]+) instance")
+
+
+def missing_modules(text: str):
+    """darktable modules an edit uses that this darktable lacks, from darktable-cli's output: {module: file or None}.
+    Such a photo is not rendered here (darktable may crash on it, or leave the module out and show a wrong look)."""
+    out = {}
+    for m in MISSING_MODULE.finditer(text or ""):
+        if m.group(1):
+            out[m.group(1)] = m.group(2)
+        elif m.group(3):
+            out.setdefault(m.group(3), None)
+    return out
+
+
+class MissingModule(RuntimeError):
+    pass
+
+
+def darktable_version(cfg: dict):
+    """darktable-cli --version, first line (cached per command)."""
+    cmd = darktable_cli_cmd(cfg)
+    if not cmd:
+        return None
+    key = tuple(cmd)
+    if key not in _DT_VERSION:
+        try:
+            r = subprocess.run(cmd + ["--version"], capture_output=True, text=True, timeout=60,
+                               **({"creationflags": NO_WINDOW} if IS_WIN else {}))
+            line = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+            _DT_VERSION[key] = next((l.strip() for l in line if "darktable" in l.lower()), line[0].strip() if line else None)
+        except Exception:
+            _DT_VERSION[key] = None
+    return _DT_VERSION[key]
+
+
+_DT_VERSION = {}
+
+
 def render_preview(cfg: dict, raw: Path, xmp: Path, out: Path, timeout=300) -> None:
     """darktable's rendering of raw with the edit in xmp, as a JPEG of at most 1920 px: what LPL shows as the preview.
     darktable-cli runs with a copy of darktable's settings (darktablerc: LUT folder, OpenCL; data.db: styles and
@@ -381,12 +427,22 @@ def render_preview(cfg: dict, raw: Path, xmp: Path, out: Path, timeout=300) -> N
             out.unlink()
         # --hq false: processed at about the output size instead of full size and scaled down (a preview, about
         # twice as fast; measured with darktable 4.6)
-        args = cmd + [str(raw), str(xmp), str(out), "--width", str(RENDER_SIZE), "--height", str(RENDER_SIZE),
+        args = cmd + [str(raw), str(xmp), cli_out(out), "--width", str(RENDER_SIZE), "--height", str(RENDER_SIZE),
                       "--hq", "false", "--core", "--configdir", str(tmp), "--library", ":memory:"]
         r = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
                            **({"creationflags": NO_WINDOW} if IS_WIN else {}))
+        said = (r.stderr or "") + (r.stdout or "")
+        mm = missing_modules(said)
+        if mm:
+            try:
+                out.unlink()
+            except OSError:
+                pass
+            raise MissingModule("the edit uses %s, which darktable on this PC does not have (%s): render it on a PC "
+                                "whose darktable has it, or update darktable here"
+                                % (", ".join(sorted(mm)), darktable_version(cfg) or "version unknown"))
         if not out.is_file() or out.stat().st_size == 0:
-            tail = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()[-3:]
+            tail = said.strip().splitlines()[-3:]
             raise RuntimeError("darktable-cli made no image (exit %s): %s" % (r.returncode, " / ".join(tail)))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -410,7 +466,7 @@ def render_batch(cfg: dict, files: list, outdir: Path, timeout_each=120) -> dict
         args = list(cmd)
         for f in files:
             args += ["--import", str(f)]
-        args += [str(outdir / "$(FILE_NAME)"), "--out-ext", "jpg", "--width", str(RENDER_SIZE), "--height", str(RENDER_SIZE),
+        args += [cli_out(outdir / "$(FILE_NAME)"), "--out-ext", "jpg", "--width", str(RENDER_SIZE), "--height", str(RENDER_SIZE),
                  "--hq", "false", "--core", "--configdir", str(tmp), "--library", ":memory:"]
         r = None
         try:
@@ -420,9 +476,20 @@ def render_batch(cfg: dict, files: list, outdir: Path, timeout_each=120) -> dict
             log.warning("darktable-cli took too long for %d photos", len(files))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+    said = ((r.stderr or "") + (r.stdout or "")) if r is not None else ""
+    lacking = missing_modules(said)
+    bad_stems = {Path(v).stem for v in lacking.values() if v}
+    if lacking and not bad_stems:
+        bad_stems = {Path(f).stem for f in files}  # cannot tell which photo: each one again on its own
     got = {}
     for f in files:
         o = outdir / (Path(f).stem + ".jpg")
+        if Path(f).stem in bad_stems:
+            try:
+                o.unlink()
+            except OSError:
+                pass
+            continue  # rendered alone next, where its missing module is said
         if o.is_file() and o.stat().st_size > 0:
             got[f] = o
     if len(got) < len(files) and r is not None:
@@ -1712,7 +1779,8 @@ class Agent:
         tmp_root = data_dir() / "render" / ("job-%s" % jid)
         prog = self.render_progress = {"job": jid, "total": len(ids), "done": 0, "failed": 0, "current": None,
                                        "started": time.time(), "ended": None, "stopped": False, "errors": [],
-                                       "download_s": 0.0, "render_s": 0.0, "upload_s": 0.0, "bytes": 0}
+                                       "download_s": 0.0, "render_s": 0.0, "upload_s": 0.0, "bytes": 0,
+                                       "fetched": 0, "rendered": 0, "lacking": [], "lacking_modules": []}
         stop_file = BRIDGE / "render-stop.txt"  # names the job it stops: one left from another job does nothing
 
         def stopped():
@@ -1740,6 +1808,8 @@ class Agent:
                     except Exception as e2:
                         src = {"pid": pid, "name": str(pid), "error": "download: %s (first try: %s)" % (e2, e)}
                 prog["download_s"] += time.time() - t
+                if src.get("tmp"):
+                    prog["fetched"] += 1  # downloaded (working-set copies are not)
                 if src.get("raw") is not None and src.get("tmp"):
                     try:
                         prog["bytes"] += src["raw"].stat().st_size
@@ -1753,6 +1823,12 @@ class Agent:
             if ok:
                 prog["done"] += 1
             else:
+                if isinstance(why, MissingModule):  # for "render these on another PC" in LPL
+                    prog["lacking"].append(int(src["pid"]))
+                    mods = re.findall(r"uses (.+?), which", str(why))
+                    for m in (mods[0].split(", ") if mods else []):
+                        if m not in prog["lacking_modules"]:
+                            prog["lacking_modules"].append(m)
                 prog["failed"] += 1
                 why = str(why)[:400]
                 prog["errors"] = (prog["errors"] + [{"photo": src.get("name") or src["pid"], "error": why}])[-5:]
@@ -1767,6 +1843,7 @@ class Agent:
             t = time.time()
             try:
                 render_preview(self.cfg, src["raw"], src["xmp"], out)
+                prog["rendered"] += 1
             finally:
                 prog["render_s"] += time.time() - t
             return out
@@ -1812,6 +1889,7 @@ class Agent:
                 t = time.time()
                 try:
                     got = render_batch(self.cfg, [x["raw"] for x in together], outdir)
+                    prog["rendered"] += len(got)
                     if len(got) < len(together):
                         batch_err = "the batch run left out %d of %d" % (len(together) - len(got), len(together))
                 except Exception as e:
@@ -1825,6 +1903,8 @@ class Agent:
                         out = single(src, outdir)
                     post(src, out)
                     finish(src, True)
+                except MissingModule as e:
+                    finish(src, False, e)  # no point trying again here
                 except Exception as e:
                     time.sleep(5)
                     try:
@@ -1832,6 +1912,8 @@ class Agent:
                             out = single(src, outdir)
                         post(src, out)
                         finish(src, True)
+                    except MissingModule as e2:
+                        finish(src, False, e2)
                     except Exception as e2:
                         finish(src, False, "%s (first try: %s)%s" % (e2, e, ("; batch: %s" % batch_err) if batch_err else ""))
             shutil.rmtree(outdir, ignore_errors=True)

@@ -83,3 +83,17 @@ Each failure is tried once more after 5 s.
   that job ends. Tested under Lua 5.4 with a stand-in darktable module (tests/lua/bridge_render_check.lua).
 - **Bridge refresh:** at start the agent replaces an installed `lpl_bridge.lua` that differs from the one it brings
   (never installs one where there was none); darktable loads it at its next start.
+
+## Windows paths, missing modules, honest timings (26 Nov 2026, night)
+
+- **Windows:** darktable expands variables in the output file name and takes `\` as an escape (checked with
+  darktable-cli 4.6: `esc\test.jpg` is written as `esctest.jpg`). On the Desktop every preview went to a mangled path,
+  so the agent found no image ("made no image", "batch left out 6 of 6", then "skipping (not modified since export)").
+  Output paths now go with forward slashes on Windows (`cli_out`).
+- **Modules a PC's darktable lacks:** an edit made with a module the PC does not have (26 Nov: `spektrafilm` from the
+  Laptop's darktable, missing on the Desktop) makes darktable-cli crash or render without it. darktable says so
+  ("the module `X' requested by image … is not installed on this computer", "cannot get iop-order for X"): the agent
+  then posts nothing, does not retry, and lists the photos (`state.render.lacking`, `lacking_modules`); the bar offers
+  "Render them on another PC…" (the dialog with that PC unticked). The error names this PC's darktable version.
+- **Timings:** download time is now per photo downloaded (the agent downloads ahead) with MB/s, darktable time per
+  photo rendered, and the overall pace only once 6 photos are done (`web/src/renderpace.ts`).
