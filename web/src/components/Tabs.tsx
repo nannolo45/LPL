@@ -44,6 +44,7 @@ export function tabTitle(t: WTab, series: SeriesInfo[], folders: SeriesFolder[] 
   if (f.cameras?.length) parts.push(f.cameras.length === 1 ? f.cameras[0] : `${f.cameras.length} cameras`)
   if (f.formats?.length) parts.push(f.formats.length === 1 ? f.formats[0] : `${f.formats.length} formats`)
   if (f.edited) parts.push(f.edited === 'yes' ? 'edited' : 'not edited')
+  if (f.preview === 'stale') parts.push('preview not updated')
   if (f.only_hidden) parts.push('hidden photos')
   return parts.join(' · ') || (st.view === 'timeline' ? 'Timeline' : 'All photos')
 }

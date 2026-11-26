@@ -5,7 +5,7 @@
 // device's details) is in Settings > Devices & library. See docs/devices-stop-estimate.md.
 import { useEffect, useState } from 'react'
 import { Agent, api, WorkItem } from '../api'
-import { useStore } from '../store'
+import { DEFAULTS, useStore } from '../store'
 import { agentLabel, devicePills, hasUnsavedEdits, isPhoneAgent, itemProgress, serverNow, STATUS } from '../devices'
 import { ago, deviceCounts, deviceRows, FailedItem, filterCounts, filterRows, isFolded, onlineCount, reporting, RowFilter, stoppedLines, TransferItem, transferLines } from '../transfer'
 import { Bar, Chevron, CrossIcon, foldAllSections, PlayIcon, StopIcon } from './DevicesBits'
@@ -571,6 +571,7 @@ export const anythingMoving = (agents: Agent[], now: number) => agents.some(a =>
 /** Edited photos whose preview is still the camera's (or from before the last edit): one line and a button that has a
  * PC with darktable render them (POST /api/previews/render). Nothing when there are none. */
 function StalePreviews({ phone }: { phone?: boolean }) {
+  const s = useStore()
   const [st, setSt] = useState<{ count: number; agents: { id: string; name: string }[]; why?: string } | null>(null)
   useEffect(() => {
     const load = () => api.previewsStale().then(setSt).catch(() => {})
@@ -586,6 +587,8 @@ function StalePreviews({ phone }: { phone?: boolean }) {
         <b>{n} edited photo{n === 1 ? '' : 's'}</b> still show{n === 1 ? 's' : ''} the camera's preview, not your darktable edit.
         {!st.agents.length && <span className="muted"> {st.why || 'Start the agent on a PC with darktable to update them.'}</span>}
       </span>
+      <button className={'btn' + (phone ? ' big' : '')} title="A library tab with the filter “preview not updated”"
+        onClick={() => s.newTab({ view: 'grid', filters: { ...DEFAULTS.filters, preview: 'stale' } }, 'Preview not updated')}>Show {n === 1 ? 'it' : 'them'}</button>
       {st.agents.length > 0 && (
         <button className={'btn' + (phone ? ' big' : '')} onClick={() => updatePreviews({ stale: true }, 'the library')}>Update {n === 1 ? 'it' : 'them'}…</button>
       )}

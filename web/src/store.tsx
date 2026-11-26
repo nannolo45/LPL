@@ -12,7 +12,7 @@ export interface WTab { id: string; title?: string; st: TabState }
 const newTabId = () => 't' + Math.random().toString(36).slice(2, 9)
 
 interface Saved { view: View; sort: SortLevel[]; group: boolean; gran: Gran; filters: Filters; thumb: number }
-const DEFAULTS: Saved = {
+export const DEFAULTS: Saved = {
   view: 'grid',
   sort: [{ f: 'taken', d: 'asc' }, { f: 'name', d: 'asc' }],
   group: true, gran: 'day', filters: { ratings: [], labels: [], label_mode: 'or', lenses: [], cameras: [], formats: [], subfolders: true }, thumb: 170,

@@ -113,3 +113,10 @@ darktable prints "cannot get iop-order for X instance N" also for edits with sev
 (exposure, tone equalizer, color calibration): a Desktop photo was refused as lacking channelmixerrgb, exposure and
 toneequal. Only "the module `X' requested by image … is not installed on this computer" counts now. The rendering bar
 on the phone puts its text on its own lines, with the bar and buttons under it.
+
+## Finding them (27 Nov 2026)
+
+Library filter **darktable › preview not updated** (`filters.preview = "stale"`, `query.STALE_PREVIEW`; `api.STALE_SQL`
+is the same rule): edited photos whose preview does not show the edit. The Devices page line has **Show them** (a
+library tab "Preview not updated" with that filter) beside **Update them…**. Select all there and use the inspector's
+"Update previews from the edit" to choose the PCs.

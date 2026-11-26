@@ -9,6 +9,12 @@ FIRST_TAG = ("(SELECT MIN(t.path) FROM photo_tags pt JOIN tags t ON t.id=pt.tag_
 _FMT_ALIASES = {"JPEG": ["jpg", "jpeg"], "JPG": ["jpg", "jpeg"], "TIFF": ["tif", "tiff"], "TIF": ["tif", "tiff"]}
 
 
+# Edited photos whose preview does not show the edit: not a darktable rendering (the camera's JPEG), or a rendering
+# older than the XMP's last change by more than a minute (docs/rendered-previews.md). api.STALE_SQL is the same rule.
+STALE_PREVIEW = ("(p.edited=1 AND (COALESCE(p.preview_src,'')<>'rendered' OR p.preview_ts IS NULL "
+                 "OR (p.xmp_mtime IS NOT NULL AND p.preview_ts < p.xmp_mtime - 60)))")
+
+
 def format_of(ext: str) -> str:
     """The format name shown in the filter: upper case, JPEG as JPG and TIFF as TIF."""
     e = (ext or "").upper()
@@ -130,6 +136,8 @@ def build_where(f: Dict[str, Any]) -> Tuple[str, List[Any], str]:
         where.append("p.edited=1")
     elif e == "no":
         where.append("p.edited=0")
+    if f.get("preview") == "stale":  # edited, but the preview is not darktable's rendering of the current edit
+        where.append(STALE_PREVIEW)
     if f.get("exports") == "yes":  # R18: photos that have exports
         where.append("EXISTS (SELECT 1 FROM photo_exports x WHERE x.photo_id=p.id)")
     folder = f.get("folder")

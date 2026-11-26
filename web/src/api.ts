@@ -94,6 +94,7 @@ export interface Filters {
   lens?: string
   camera?: string
   edited?: '' | 'yes' | 'no'
+  preview?: '' | 'stale'  // edited photos whose preview does not show the edit yet
   /** R18: only photos that have exports */
   exports?: '' | 'yes'
   folder?: string | null

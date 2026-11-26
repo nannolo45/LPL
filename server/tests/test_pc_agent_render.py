@@ -465,3 +465,18 @@ def test_the_dialog_learns_each_pcs_darktable(clean):
     clean.post("/api/agents/heartbeat", json={"id": "pc-v", "name": "Desktop", "os": "windows", "caps": ["render"],
                                               "state": {"render_with": {"cli": "x", "version": "this is darktable 5.5.0+412"}}})
     assert stale(clean)["agents"] == [{"id": "pc-v", "name": "Desktop", "darktable": "this is darktable 5.5.0+412"}]
+
+
+def test_library_filter_preview_not_updated(clean):
+    with db.write_lock:
+        db.conn().execute("UPDATE photos SET edited=0")
+        db.conn().commit()
+    make_stale(1)
+    make_stale(2)
+    with db.write_lock:  # photo 2 got its rendering after its last edit
+        db.conn().execute("UPDATE photos SET preview_src='rendered', preview_ts=?, xmp_mtime=? WHERE id=2", (time.time(), time.time() - 10))
+        db.conn().commit()
+    r = clean.post("/api/photos/ids", json={"filters": {"preview": "stale"}}).json()
+    ids = r["ids"] if isinstance(r, dict) else r
+    assert ids == [1]
+    assert stale(clean)["count"] == 1   # the Devices page counts the same photos

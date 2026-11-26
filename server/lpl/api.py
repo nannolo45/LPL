@@ -868,7 +868,7 @@ def _match(sid: int, filters: Dict[str, Any], sort: List[Dict[str, str]]):
     f = dict(filters or {})
     for k in ("series", "ids", "not_in_series"):
         f.pop(k, None)
-    if not any(f.get(k) for k in ("folders", "folder", "ratings", "labels", "tags", "tag", "lenses", "cameras", "formats", "date_from", "date_to", "q", "edited", "exports", "month", "names")):
+    if not any(f.get(k) for k in ("folders", "folder", "ratings", "labels", "tags", "tag", "lenses", "cameras", "formats", "date_from", "date_to", "q", "edited", "preview", "exports", "month", "names")):
         raise HTTPException(400, "pick at least one folder or criterion")
     c = db.conn()
     where, args, join = query.build_where(f)
@@ -1149,8 +1149,7 @@ def job_create(body: Dict[str, Any] = Body(...)):
 # when you leave a photo in darkroom, the agent itself (darktable-cli) after any other sync, or a "render" job for
 # photos already on the NAS. A preview is stale when the photo has darktable edits and the preview is not a rendering
 # from after the XMP's last change.
-STALE_SQL = ("edited=1 AND (COALESCE(preview_src,'')<>'rendered' OR preview_ts IS NULL "
-             "OR (xmp_mtime IS NOT NULL AND preview_ts < xmp_mtime - 60))")
+STALE_SQL = query.STALE_PREVIEW.replace("p.", "")  # the library filter "preview not updated" uses the same rule
 
 
 def _render_agents(c):
