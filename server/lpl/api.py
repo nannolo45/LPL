@@ -1003,10 +1003,12 @@ def series_add_matching(sid: int, body: Dict[str, Any] = Body(...)):
 from . import transfers  # noqa: E402  batches of photos sent to a device: totals, Stop, Resume (see transfers.py)
 from . import identity  # noqa: E402  device names, renames from LPL, one computer under two ids (see identity.py)
 from . import shared  # noqa: E402  shared darktable styles, presets and module layouts (R11, see shared.py)
+from . import luts  # noqa: E402  the LUT folder: lut 3D files carried between devices (R19, see luts.py)
 
 app.include_router(transfers.router)
 app.include_router(identity.router)
 app.include_router(shared.router)
+app.include_router(luts.router)
 
 
 def list_agents() -> List[dict]:
@@ -1098,7 +1100,7 @@ def heartbeat(body: Dict[str, Any] = Body(...)):
             out.append({"id": j["id"], "kind": j["kind"], "payload": json.loads(j["payload"] or "{}")})
         extra = transfers.on_heartbeat(c, aid, body, out, now)  # nothing for a device that announces no caps
         if transfers.caps_of(c, aid):  # R18: what this server can do, for a device that announces caps (others: no new key)
-            extra = {**extra, "server_caps": exports.SERVER_CAPS + shared.SERVER_CAPS}
+            extra = {**extra, "server_caps": exports.SERVER_CAPS + shared.SERVER_CAPS + luts.SERVER_CAPS}
         c.commit()
     return {"jobs": out, "server_time": time.time(), **extra, **said}
 
