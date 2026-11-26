@@ -6,8 +6,8 @@
 #     yourself in Files (if Docker creates it, it belongs to root and LPL can't write to it)
 #   - Paste this file into the Compose configuration, edit the four marked lines, then deploy.
 #
-# The image comes from GitHub (ghcr.io). The repo is private, so the NAS has to log in once,
-# see "Install the server" in README.md. Then open http://<nas-address>:8080
+# The image comes from GitHub (ghcr.io) and is public: no login needed, and the Docker app's update works.
+# Then open http://<nas-address>:8080
 
 services:
   lightphotolibrary:
