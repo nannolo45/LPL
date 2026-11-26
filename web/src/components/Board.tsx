@@ -65,6 +65,11 @@ function size(p: Photo) {
   return r >= 1 ? { w: 150, h: Math.round(150 / r) } : { w: Math.round(105 * r), h: 105 }
 }
 const itemRect = (it: Item): Rect => ({ x: it.x, y: it.y, ...size(it) })
+// how far the board zooms in; past about 3x (less on high-density screens) photos on screen get the large preview
+const MAX_ZOOM = 8
+const HI_AT = 450   // device pixels across a photo above which the small preview (480 px) looks soft
+// zoom buttons and keys: 10% steps up to 200%, then 25% of the current zoom (10% steps would crawl at 800%)
+const stepZoom = (z: number, dir: 1 | -1) => dir > 0 ? (z < 2 - 1e-6 ? z + .1 : z * 1.25) : (z <= 2 + 1e-6 ? z - .1 : Math.max(2, z / 1.25))
 const meets = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 const centerIn = (r: Rect, f: Rect) => { const cx = r.x + r.w / 2, cy = r.y + r.h / 2; return cx >= f.x && cx <= f.x + f.w && cy >= f.y && cy <= f.y + f.h }
 const ptIn = (p: Pt, f: Rect) => p.x >= f.x && p.x <= f.x + f.w && p.y >= f.y && p.y <= f.y + f.h
@@ -155,6 +160,20 @@ export function BoardView({ target, active = true, onInfo, find, onFind }: {
   const needInitialScroll = useRef(true)
   const viewTimer = useRef<number>()
   const oxy = useRef({ ox: 0, oy: 0 })
+  // the part of the board on screen (board coordinates), for giving those photos the large preview when zoomed in far
+  const [seen, setSeen] = useState<Rect | null>(null)
+  const seenTimer = useRef<number>()
+  const hiDone = useRef(new Set<number>())   // photos that already got the large preview keep it (no flicker back)
+  const measureSeen = () => {
+    window.clearTimeout(seenTimer.current)
+    seenTimer.current = window.setTimeout(() => {
+      const w = wrap.current, z = zoomRef.current
+      if (!w || z * 150 * (window.devicePixelRatio || 1) < HI_AT) { setSeen(null); return }
+      const m = 0.5   // half a screen around it, so a short pan doesn't show soft photos
+      const bw = w.clientWidth / z, bh = w.clientHeight / z
+      setSeen({ x: w.scrollLeft / z + oxy.current.ox - bw * m, y: w.scrollTop / z + oxy.current.oy - bh * m, w: bw * (1 + 2 * m), h: bh * (1 + 2 * m) })
+    }, 120)
+  }
 
   const notes = useMemo(() => shapes.filter((x): x is BoardNote => x.kind === 'note'), [shapes])
   const arrows = useMemo(() => shapes.filter((x): x is BoardArrow => x.kind === 'arrow'), [shapes])
@@ -669,8 +688,8 @@ export function BoardView({ target, active = true, onInfo, find, onFind }: {
       if (a === 'toolSelect') setTool('select')
       else if (a === 'toolNote') setTool('note')
       else if (a === 'toolArrow') setTool('arrow')
-      else if (a === 'zoomIn') { e.preventDefault(); zoomTo(zoomRef.current + .1) }
-      else if (a === 'zoomOut') { e.preventDefault(); zoomTo(zoomRef.current - .1) }
+      else if (a === 'zoomIn') { e.preventDefault(); zoomTo(stepZoom(zoomRef.current, 1)) }
+      else if (a === 'zoomOut') { e.preventDefault(); zoomTo(stepZoom(zoomRef.current, -1)) }
       else if (a === 'zoomReset') { e.preventDefault(); zoomTo(1) }
       else if (a === 'deselect') { setTool('select'); setSelShapes([]); setSelFrames([]) }
       else if (a === 'undo') { e.preventDefault(); undo() }
@@ -700,9 +719,10 @@ export function BoardView({ target, active = true, onInfo, find, onFind }: {
   // React's wheel handler can't stop the browser zooming the whole page, so this listener is a real one.
   const zoomRef = useRef(zoom)
   zoomRef.current = zoom
+  useEffect(() => { measureSeen() }, [zoom])
   const keepAt = useRef<{ bx: number; by: number; vx: number; vy: number } | null>(null)
   const zoomTo = (z: number, at?: { clientX: number; clientY: number }) => {
-    const nz = Math.min(2, Math.max(.2, +z.toFixed(2)))
+    const nz = Math.min(MAX_ZOOM, Math.max(.2, +z.toFixed(2)))
     const w = wrap.current
     if (w) {
       const r = w.getBoundingClientRect()
@@ -925,6 +945,7 @@ export function BoardView({ target, active = true, onInfo, find, onFind }: {
             <div className="board-area">
               <div className="canvas-wrap" ref={wrap} style={{ cursor: drag.current?.kind === 'pan' ? 'grabbing' : canvasCursor }} onContextMenu={e => e.preventDefault()}
                 onScroll={e => {  // remember where you are on this board (centre and zoom), for coming back
+                  measureSeen()
                   if (needInitialScroll.current || sid == null) return
                   const w = e.currentTarget
                   window.clearTimeout(viewTimer.current)
@@ -965,6 +986,7 @@ export function BoardView({ target, active = true, onInfo, find, onFind }: {
                         <button key={it.id} className={'bitem' + (selSet.has(it.id) ? ' sel' : '') + (found.has(it.id) ? ' found' : '') + (it.hidden ? ' hid' : '') + (moving?.photos.has(it.id) ? ' moving' : '')} style={{ left: it.x, top: it.y, width: w, height: h, zIndex: selSet.has(it.id) ? 5 : 1, cursor: grab }}
                           onPointerDown={e => onObjDown(e, { photo: it.id })} onDoubleClick={e => { e.stopPropagation(); if (tool === 'select') photoDouble(it.id) }} aria-label={it.filename + (n ? `, position ${n}` : ', maybe')}>
                           <img src={thumbUrl(it)} alt="" draggable={false} />
+                          {(hiDone.current.has(it.id) || (seen && meets(seen, { x: it.x, y: it.y, w, h }) && hiDone.current.add(it.id))) && <img className="hi" src={thumbUrl(it, 'l')} alt="" draggable={false} decoding="async" />}
                           <VersionBadge p={it} />
                           {it.hidden ? <span className="num maybe">hidden</span> : opt.boardNumbers && linked && <span className={'num' + (n ? '' : ' maybe')}>{n ? num2(n) : '?'}</span>}
                         </button>
@@ -1077,9 +1099,9 @@ export function BoardView({ target, active = true, onInfo, find, onFind }: {
                 </div>
               )}
               <div className="bzoom">
-                <button onClick={() => zoomTo(zoom - .1)} aria-label="Zoom out" title={'Zoom out (' + keysOf('zoomOut').join(', ') + ', or Ctrl + wheel)'}>−</button>
+                <button onClick={() => zoomTo(stepZoom(zoom, -1))} aria-label="Zoom out" title={'Zoom out (' + keysOf('zoomOut').join(', ') + ', or Ctrl + wheel)'}>−</button>
                 <button className="small muted zpct" onClick={() => zoomTo(1)} title="Back to 100%">{Math.round(zoom * 100)}%</button>
-                <button onClick={() => zoomTo(zoom + .1)} aria-label="Zoom in" title={'Zoom in (' + keysOf('zoomIn').join(', ') + ', or Ctrl + wheel)'}>+</button>
+                <button onClick={() => zoomTo(stepZoom(zoom, 1))} aria-label="Zoom in" title={'Zoom in (' + keysOf('zoomIn').join(', ') + ', or Ctrl + wheel)'}>+</button>
               </div>
             </div>
             {!s.isMobile && <PhotoStrip photos={shown} pos={pos} sel={selSet} lanes={isFolder ? lanes : null} linked={linked} name={name}
