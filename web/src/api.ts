@@ -317,6 +317,9 @@ export const api = {
   prefSet: (key: string, value: unknown) => call<{ ok: boolean }>('PUT', `/api/prefs/${key}`, { value }),
   agents: () => call<{ agents: Agent[]; server_time: number }>('GET', '/api/agents'),
   job: (kind: string, payload: Record<string, unknown>, agent_id?: string) => call<{ id: number; agent_id: string | null; message?: string }>('POST', '/api/jobs', { kind, payload, agent_id }),
+  // previews that show darktable's edit, rendered by a PC with darktable-cli
+  previewsStale: () => call<{ count: number; agents: { id: string; name: string }[] }>('GET', '/api/previews/stale'),
+  previewsRender: (body: { ids?: number[]; stale?: boolean; agent_id?: string }) => call<{ id: number | null; count: number; agent_id: string | null; agent_name?: string }>('POST', '/api/previews/render', body),
   jobs: () => call<{ jobs: { id: number; agent_id: string | null; kind: string; payload: any; created: number; status: string }[] }>('GET', '/api/jobs'),
 }
 

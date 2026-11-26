@@ -36,7 +36,7 @@ import urllib.request
 import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
 
 VERSION = "0.2.0"
 # What this agent can do beyond the first protocol, announced in every heartbeat (docs/devices-stop-estimate.md):
@@ -306,6 +306,107 @@ def darktable_cmd(cfg: dict) -> list:
     if dtp == "flatpak":
         return ["flatpak", "run", "org.darktable.Darktable"]
     return [dtp]
+
+
+def darktable_cli_cmd(cfg: dict):
+    """darktable-cli beside the configured darktable (same folder, or the flatpak's), or on PATH; None if there is none."""
+    dtp = cfg.get("darktable") or find_darktable()
+    if dtp == "flatpak":
+        return ["flatpak", "run", "--command=darktable-cli", "org.darktable.Darktable"]
+    if dtp:
+        sib = Path(dtp).with_name("darktable-cli.exe" if IS_WIN else "darktable-cli")
+        if sib.is_file():
+            return [str(sib)]
+    w = shutil.which("darktable-cli")
+    return [w] if w else None
+
+
+RENDER_SIZE = 1920
+
+
+def render_preview(cfg: dict, raw: Path, xmp: Path, out: Path, timeout=300) -> None:
+    """darktable's rendering of raw with the edit in xmp, as a JPEG of at most 1920 px: what LPL shows as the preview.
+    darktable-cli runs with a copy of darktable's settings (darktablerc: LUT folder, OpenCL; data.db: styles and
+    presets) in a folder of its own, so it never waits for, or locks, the darktable that may be open."""
+    cmd = darktable_cli_cmd(cfg)
+    if not cmd:
+        raise RuntimeError("darktable-cli not found")
+    tmp = data_dir() / "render-conf" / uuid.uuid4().hex[:8]   # under the agent's folder: a flatpak darktable sees it
+    tmp.mkdir(parents=True, exist_ok=True)
+    try:
+        src = darktable_config_dir(cfg)
+        for n in ("darktablerc", "data.db"):
+            if (src / n).is_file():
+                shutil.copy2(src / n, tmp / n)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.exists():
+            out.unlink()
+        args = cmd + [str(raw), str(xmp), str(out), "--width", str(RENDER_SIZE), "--height", str(RENDER_SIZE),
+                      "--core", "--configdir", str(tmp), "--library", ":memory:"]
+        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
+                           **({"creationflags": NO_WINDOW} if IS_WIN else {}))
+        if not out.is_file() or out.stat().st_size == 0:
+            tail = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()[-3:]
+            raise RuntimeError("darktable-cli made no image (exit %s): %s" % (r.returncode, " / ".join(tail)))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+class Renderer:
+    """Renders previews one at a time in its own thread (darktable-cli takes seconds per photo) and posts them to
+    LPL: after a sync that came with no rendered preview from the bridge (auto sync, "Save edited to NAS", darktable
+    closed while in darkroom)."""
+
+    def __init__(self, agent):
+        self.agent = agent
+        self.q = Queue()
+        self.waiting = set()
+        self.thread = None
+
+    def available(self) -> bool:
+        return bool(darktable_cli_cmd(self.agent.cfg))
+
+    def request(self, pid: str):
+        if pid in self.waiting or not self.available():
+            return
+        self.waiting.add(pid)
+        self.q.put(pid)
+        if self.thread is None or not self.thread.is_alive():
+            self.thread = threading.Thread(target=self._run, name="render", daemon=True)
+            self.thread.start()
+
+    def _run(self):
+        while True:
+            try:
+                pid = self.q.get(timeout=30)
+            except Empty:
+                return
+            self.waiting.discard(pid)
+            it = self.agent.items.get(pid)
+            if not it:
+                continue
+            raw, xmp = Path(it["local_path"]), Path(it["local_path"] + ".xmp")
+            if not raw.is_file() or not xmp.is_file():
+                continue
+            mt = xmp.stat().st_mtime
+            if it.get("preview_mtime") == mt:
+                continue  # the bridge's preview of this very edit got there first
+            out = data_dir() / "render" / ("%s.jpg" % pid)
+            try:
+                self.agent.step(it, "rendering preview")
+                render_preview(self.agent.cfg, raw, xmp, out)
+                self.agent.srv.upload("/api/photos/%s/preview" % pid, out.read_bytes(), "image/jpeg")
+                it["preview_mtime"] = mt
+                self.agent.save()
+                log.info("preview rendered for %s", it.get("filename") or pid)
+            except Exception as e:
+                log.warning("preview of %s not rendered: %s", it.get("filename") or pid, e)
+            finally:
+                self.agent.step(it)
+                try:
+                    out.unlink()
+                except OSError:
+                    pass
 
 
 def darktable_running() -> bool:
@@ -1265,7 +1366,8 @@ class Agent:
         self.wake = threading.Event()  # set: the main loop sends its next heartbeat now instead of after its pause
         self.server_caps = []          # what the server said it can do (heartbeat answer); [] = a server from before
         self.shared = SharedSync(self)  # R11: styles, presets, module layouts
-        self.luts = LutSync(self)      # R19: darktable's LUT folder
+        self.luts = LutSync(self)
+        self.renderer = Renderer(self)  # previews that show the edit (darktable-cli)      # R19: darktable's LUT folder
         for d in (WORK, BRIDGE / "outbox"):
             d.mkdir(parents=True, exist_ok=True)
         if STATE_FILE.is_file():
@@ -1320,7 +1422,8 @@ class Agent:
     def heartbeat_body(self):
         self.reread_name()
         return {"id": self.cfg["id"], "name": self.cfg["name"], "machine": machine_id(), "os": platform.system().lower(),
-                "state": self.state(), "caps": [c for c in CAPS if c != "shared" or self.shared.enabled], "transfers": self.transfers()}
+                "state": self.state(), "caps": [c for c in CAPS if c != "shared" or self.shared.enabled] + (["render"] if self.renderer.available() else []),
+                "transfers": self.transfers()}
 
     def reread_name(self):
         """The setup run again while this agent runs (reinstalling does that) may have given this PC another
@@ -1448,6 +1551,8 @@ class Agent:
                 mode = (job.get("payload") or {}).get("mode") or "failed"
                 for i in ids:
                     self.forget(i, mode)
+            elif kind == "render":
+                status = self.render_job(ids, job["id"]) or "done"
         except Exception as e:
             log.exception("job failed")
             self.message = "Last job failed: %s" % e
@@ -1479,6 +1584,52 @@ class Agent:
 
     def local_path(self, pid: str, filename: str) -> Path:
         return WORK / ("%s_%s" % (pid, filename))
+
+    def render_job(self, ids, jid):
+        """Photos on the NAS whose preview is from before their edit: each one's original and XMP are downloaded to a
+        temporary folder (or the working-set copy is used), rendered with darktable-cli, posted, and deleted."""
+        done = failed = 0
+        tmp_root = data_dir() / "render" / ("job-%s" % jid)
+        for k, pid in enumerate(ids):
+            if jid in self.cancel_jobs:
+                return "stopped"
+            self.message = "Rendering previews: %d of %d" % (k + 1, len(ids))
+            tmp = tmp_root / pid
+            out = tmp_root / ("%s.jpg" % pid)
+            try:
+                it = self.items.get(pid)
+                if it and Path(it["local_path"]).is_file() and Path(it["local_path"] + ".xmp").is_file():
+                    raw, xmp = Path(it["local_path"]), Path(it["local_path"] + ".xmp")
+                else:
+                    tmp.mkdir(parents=True, exist_ok=True)
+                    name = self.photo_name(pid)
+                    raw = tmp / name
+                    xmp = tmp / (name + ".xmp")
+                    self.srv.download("/api/photos/%s/original" % pid, raw)
+                    self.srv.download("/api/photos/%s/xmp" % pid, xmp)
+                render_preview(self.cfg, raw, xmp, out)
+                self.srv.upload("/api/photos/%s/preview" % pid, out.read_bytes(), "image/jpeg")
+                done += 1
+            except Exception as e:
+                failed += 1
+                log.warning("preview of photo %s not rendered: %s", pid, e)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+                try:
+                    out.unlink()
+                except OSError:
+                    pass
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        self.message = "Previews rendered: %d%s" % (done, (", %d failed (see the agent log)" % failed) if failed else "")
+        log.info(self.message)
+        return "done" if done or not failed else "failed"
+
+    def photo_name(self, pid) -> str:
+        """The photo's file name on the NAS (darktable-cli needs the real extension)."""
+        r = self.srv.json("POST", "/api/photos/get", {"ids": [int(pid)]})
+        items = r.get("items") or []
+        name = (items[0].get("filename") if items else None) or ("photo-%s" % pid)
+        return re.sub(r'[\\/:*?"<>|]', "_", name)
 
     def edit(self, ids, job=None):
         """Copy these photos (RAW + XMP) into the working set, then open them in darktable. job: the server's
@@ -1625,10 +1776,14 @@ class Agent:
         if not it:
             return
         xmp = Path(it["local_path"] + ".xmp")
+        sent_preview = False
         if preview is not None and preview.is_file():
             self.step(it, "sending preview")
             try:
                 self.srv.upload("/api/photos/%s/preview" % pid, preview.read_bytes(), "image/jpeg")
+                sent_preview = True
+                if xmp.is_file():
+                    it["preview_mtime"] = xmp.stat().st_mtime
             except Exception as e:
                 log.warning("preview upload failed: %s", e)
             finally:
@@ -1656,6 +1811,8 @@ class Agent:
                 self.send_versions(pid, it)
             it.update(status="synced", synced_ts=time.time(), error="")
             log.info("synced %s%s", it["filename"], " (merged)" if merged else "")
+            if v0 and not sent_preview and xmp.is_file() and it.get("preview_mtime") != xmp.stat().st_mtime:
+                self.renderer.request(pid)  # no rendering came with this edit: make one
         except Exception as e:
             it.update(status="error", error="sync failed: %s" % e)
         finally:
