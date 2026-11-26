@@ -379,8 +379,10 @@ def render_preview(cfg: dict, raw: Path, xmp: Path, out: Path, timeout=300) -> N
         out.parent.mkdir(parents=True, exist_ok=True)
         if out.exists():
             out.unlink()
+        # --hq false: processed at about the output size instead of full size and scaled down (a preview, about
+        # twice as fast; measured with darktable 4.6)
         args = cmd + [str(raw), str(xmp), str(out), "--width", str(RENDER_SIZE), "--height", str(RENDER_SIZE),
-                      "--core", "--configdir", str(tmp), "--library", ":memory:"]
+                      "--hq", "false", "--core", "--configdir", str(tmp), "--library", ":memory:"]
         r = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
                            **({"creationflags": NO_WINDOW} if IS_WIN else {}))
         if not out.is_file() or out.stat().st_size == 0:
@@ -388,6 +390,41 @@ def render_preview(cfg: dict, raw: Path, xmp: Path, out: Path, timeout=300) -> N
             raise RuntimeError("darktable-cli made no image (exit %s): %s" % (r.returncode, " / ".join(tail)))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def render_batch(cfg: dict, files: list, outdir: Path, timeout_each=120) -> dict:
+    """Several photos in one darktable-cli run (it starts, reads its settings and sets up OpenCL once): each file's
+    edit is the sidecar beside it (<file>.xmp); outputs are outdir/<file name without extension>.jpg, so the names
+    must differ. Returns file -> its JPEG for those that came out; the others the caller renders one by one."""
+    cmd = darktable_cli_cmd(cfg)
+    if not cmd:
+        raise RuntimeError("darktable-cli not found")
+    tmp = data_dir() / "render-conf" / uuid.uuid4().hex[:8]
+    tmp.mkdir(parents=True, exist_ok=True)
+    outdir.mkdir(parents=True, exist_ok=True)
+    try:
+        src = darktable_config_dir(cfg)
+        for n in ("darktablerc", "data.db"):
+            if (src / n).is_file():
+                shutil.copy2(src / n, tmp / n)
+        args = list(cmd)
+        for f in files:
+            args += ["--import", str(f)]
+        args += [str(outdir / "$(FILE_NAME)"), "--out-ext", "jpg", "--width", str(RENDER_SIZE), "--height", str(RENDER_SIZE),
+                 "--hq", "false", "--core", "--configdir", str(tmp), "--library", ":memory:"]
+        try:
+            subprocess.run(args, capture_output=True, text=True, timeout=60 + timeout_each * len(files),
+                           **({"creationflags": NO_WINDOW} if IS_WIN else {}))
+        except subprocess.TimeoutExpired:
+            log.warning("darktable-cli took too long for %d photos", len(files))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    got = {}
+    for f in files:
+        o = outdir / (Path(f).stem + ".jpg")
+        if o.is_file() and o.stat().st_size > 0:
+            got[f] = o
+    return got
 
 
 class Renderer:
@@ -1631,68 +1668,136 @@ class Agent:
     def local_path(self, pid: str, filename: str) -> Path:
         return WORK / ("%s_%s" % (pid, filename))
 
+    RENDER_BATCH = 6      # photos per darktable-cli run
+    RENDER_AHEAD = 8      # photos downloaded ahead of the one being rendered
+
     def render_job(self, ids, jid):
-        """Photos on the NAS whose preview is from before their edit: each one's original and XMP are downloaded to a
-        temporary folder (or the working-set copy is used), rendered with darktable-cli, posted, and deleted."""
-        done = failed = 0
+        """Photos on the NAS whose preview is from before their edit. A download thread fetches each original and
+        XMP into a temporary folder (or the working-set copy is used) a few photos ahead, while darktable-cli renders
+        them in batches; each JPEG is posted and the temporary files deleted. A photo that fails (a download cut off
+        by sleep, a file darktable cannot read) is tried once more on its own before it counts as failed."""
         tmp_root = data_dir() / "render" / ("job-%s" % jid)
         prog = self.render_progress = {"job": jid, "total": len(ids), "done": 0, "failed": 0, "current": None,
                                        "started": time.time(), "ended": None, "stopped": False}
-        for k, pid in enumerate(ids):
-            if jid in self.cancel_jobs or jid in getattr(self, "stop_render", ()):
-                prog.update(ended=time.time(), stopped=True, current=None)
-                shutil.rmtree(tmp_root, ignore_errors=True)
-                self.wake.set()
-                return "stopped"
-            prog["current"] = None
-            self.message = "Rendering previews: %d of %d" % (k + 1, len(ids))
-            tmp = tmp_root / pid
-            out = tmp_root / ("%s.jpg" % pid)
+        stopped = lambda: jid in self.cancel_jobs or jid in getattr(self, "stop_render", ())
+        ready = Queue(maxsize=self.RENDER_AHEAD)
+        END = object()
+
+        def fetch():
+            for pid in ids:
+                if stopped():
+                    break
+                try:
+                    ready.put(self.render_source(pid, tmp_root))
+                except Exception as e:
+                    time.sleep(5)  # once more: the PC may just have woken up and the network come back
+                    try:
+                        ready.put(self.render_source(pid, tmp_root))
+                    except Exception as e2:
+                        ready.put({"pid": pid, "error": "%s (first try: %s)" % (e2, e)})
+            ready.put(END)
+        threading.Thread(target=fetch, name="render-fetch", daemon=True).start()
+
+        def finish(src, ok, why=None):
+            if ok:
+                prog["done"] += 1
+            else:
+                prog["failed"] += 1
+                log.warning("preview of photo %s not rendered: %s", src["pid"], why)
+            if src.get("tmp"):
+                shutil.rmtree(src["tmp"], ignore_errors=True)
+            self.wake.set()  # the next heartbeat carries the progress now
+
+        ended = False
+        while not ended:
+            if stopped():
+                break
+            first = ready.get()
+            if first is END:
+                break
+            batch = [first]
+            gather = time.time() + 0.5  # a moment for photos that are about to arrive, to share the run
+            while len(batch) < self.RENDER_BATCH:
+                try:
+                    nxt = ready.get(timeout=max(0.0, gather - time.time()))
+                except Empty:
+                    break
+                if nxt is END:
+                    ended = True
+                    break
+                batch.append(nxt)
+            for src in [x for x in batch if x.get("error")]:
+                finish(src, False, src["error"])
+            todo = [x for x in batch if not x.get("error")]
+            if not todo:
+                continue
+            names = [x["name"] for x in todo]
+            prog["current"] = names[0] + (" +%d" % (len(names) - 1) if len(names) > 1 else "")
+            self.message = "Rendering previews: %d of %d" % (prog["done"] + prog["failed"] + len(todo), len(ids))
+            outdir = tmp_root / ("out-%s" % uuid.uuid4().hex[:6])
+            # one run for the downloaded ones (named <photo id>.<ext>: the outputs cannot clash)
+            together = [x for x in todo if x.get("tmp")]
+            got = {}
+            if len(together) > 1:
+                try:
+                    got = render_batch(self.cfg, [x["raw"] for x in together], outdir)
+                except Exception as e:
+                    log.warning("batch of %d not rendered together: %s", len(together), e)
+            for src in todo:
+                out = got.get(src["raw"])
+                try:
+                    if out is None:  # alone: a working-set copy, a batch of one, or one the batch run left out
+                        out = outdir / ("%s-single.jpg" % src["pid"])
+                        render_preview(self.cfg, src["raw"], src["xmp"], out)
+                    self.srv.upload("/api/photos/%s/preview" % src["pid"], out.read_bytes(), "image/jpeg")
+                    finish(src, True)
+                except Exception as e:
+                    time.sleep(5)
+                    try:
+                        if out is None or not out.is_file():
+                            out = outdir / ("%s-single.jpg" % src["pid"])
+                            render_preview(self.cfg, src["raw"], src["xmp"], out)
+                        self.srv.upload("/api/photos/%s/preview" % src["pid"], out.read_bytes(), "image/jpeg")
+                        finish(src, True)
+                    except Exception as e2:
+                        finish(src, False, "%s (first try: %s)" % (e2, e))
+            shutil.rmtree(outdir, ignore_errors=True)
+        was_stopped = stopped()
+        if was_stopped:  # let the download thread see it and end; nothing more is fetched
             try:
-                self.render_one(pid, tmp, out, prog)
-                done += 1
-                prog["done"] = done
-                self.wake.set()  # the next heartbeat carries the progress now
-            except Exception as e:
-                time.sleep(5)  # once more after a pause: the PC may just have woken up and the network come back
-                try:
-                    self.render_one(pid, tmp, out, prog)
-                    done += 1
-                    prog["done"] = done
-                    self.wake.set()
-                except Exception as e2:
-                    failed += 1
-                    prog["failed"] = failed
-                    log.warning("preview of photo %s not rendered: %s (first try: %s)", pid, e2, e)
-            finally:
-                shutil.rmtree(tmp, ignore_errors=True)
-                try:
-                    out.unlink()
-                except OSError:
-                    pass
+                while True:
+                    x = ready.get(timeout=2)
+                    if x is END:
+                        break
+            except Empty:
+                pass
         shutil.rmtree(tmp_root, ignore_errors=True)
-        prog.update(ended=time.time(), current=None)
+        prog.update(ended=time.time(), current=None, stopped=was_stopped)
         self.wake.set()
+        done, failed = prog["done"], prog["failed"]
         self.message = "Previews rendered: %d%s" % (done, (", %d failed (see the agent log)" % failed) if failed else "")
         log.info(self.message)
+        if was_stopped:
+            return "stopped"
         return "done" if done or not failed else "failed"
 
-    def render_one(self, pid, tmp: Path, out: Path, prog: dict):
-        """One photo of a render job: its working-set copy or a download of the original and XMP, rendered, posted."""
+    def render_source(self, pid, tmp_root: Path) -> dict:
+        """One photo to render: its working-set copy, or its original and XMP downloaded as <id>.<ext> (+ .xmp, the
+        sidecar name darktable-cli looks for) into a folder of its own."""
         it = self.items.get(pid)
         if it and Path(it["local_path"]).is_file() and Path(it["local_path"] + ".xmp").is_file():
-            raw, xmp = Path(it["local_path"]), Path(it["local_path"] + ".xmp")
-            prog["current"] = it.get("filename")
-        else:
-            tmp.mkdir(parents=True, exist_ok=True)
-            name = self.photo_name(pid)
-            prog["current"] = name
-            raw = tmp / name
-            xmp = tmp / (name + ".xmp")
-            self.srv.download("/api/photos/%s/original" % pid, raw)
-            self.srv.download("/api/photos/%s/xmp" % pid, xmp)
-        render_preview(self.cfg, raw, xmp, out)
-        self.srv.upload("/api/photos/%s/preview" % pid, out.read_bytes(), "image/jpeg")
+            return {"pid": pid, "name": it.get("filename") or pid, "raw": Path(it["local_path"]),
+                    "xmp": Path(it["local_path"] + ".xmp"), "tmp": None}
+        name = self.photo_name(pid)
+        d = tmp_root / pid
+        shutil.rmtree(d, ignore_errors=True)
+        d.mkdir(parents=True, exist_ok=True)
+        ext = Path(name).suffix or ".raw"
+        raw = d / ("%s%s" % (pid, ext))
+        xmp = d / ("%s%s.xmp" % (pid, ext))
+        self.srv.download("/api/photos/%s/original" % pid, raw)
+        self.srv.download("/api/photos/%s/xmp" % pid, xmp)
+        return {"pid": pid, "name": name, "raw": raw, "xmp": xmp, "tmp": d}
 
     def photo_name(self, pid) -> str:
         """The photo's file name on the NAS (darktable-cli needs the real extension)."""

@@ -49,3 +49,15 @@ never waits for or locks an open darktable. A PC announces the cap `render` only
 - **Restart (PC or agent):** the agent tells LPL when it started (`state.agent_started`). A render job taken before
   that and not reported running is queued again at once (at most 3 hand-outs in all), without the photos whose
   preview arrived since the job was made. A job being stopped when the agent restarted is simply stopped.
+
+## Speed (26 Nov 2026)
+
+Measured with darktable-cli 4.6 on 24 MP images (CPU only, no OpenCL): one run per photo at the default high quality
+2.1 s per photo; with `--hq false` (processed at about the output size, which is all a 1920 px preview needs) 1.2 s;
+several photos in one run (`--import` each file, sidecars beside them, output `$(FILE_NAME)` with `--out-ext jpg`)
+0.83 s, the same pixels. On a PC whose darktable sets up OpenCL at every start the saving per run is larger.
+
+The render job now: a download thread fetches originals and XMPs up to 8 photos ahead (as `<id>.<ext>` and
+`<id>.<ext>.xmp` in a folder per photo) while darktable-cli renders the ones that are there in runs of up to 6 (waiting
+half a second for more to arrive). A photo a batch run left out, a working-set copy, or a batch of one is rendered alone.
+Each failure is tried once more after 5 s.
