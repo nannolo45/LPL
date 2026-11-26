@@ -24,6 +24,7 @@ NAS (Docker)                                 your PC
 - **Auto-tagging**: Settings › Auto-tagging. First rule: black & white (from darktable's rendered preview, the edit history, or the camera's preview for unedited photos; sepia/split-toned as "toned"). A preview run to check unsure photos before anything is written; corrections stick. See `docs/autotag-strip-panel.md`.
 - **Strip extras**: rename a lane in place (double-click, F2), a photo panel next to the strip to drag photos in from the whole library, and a tray on the phone.
 - **Devices tab**: the old "Working set" page, now one card per device with what is on it and what is queued (`docs/devices-stop-estimate.md`).
+- **LUT files**: darktable's LUT 3D files travel between the PCs' LUT folders and the phone app (Settings › LUT files lists them, which device has each, and removes a file from LPL only). See `docs/luts-r19.md`.
 - **Edit in darktable**: from any device. The PC agent copies the RAW + XMP to the PC's SSD, opens it in darktable, and sends the XMP back to the NAS when you're done. darktable never touches the NAS directly, so it's fast.
 
 ---

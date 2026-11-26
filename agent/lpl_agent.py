@@ -45,7 +45,8 @@ VERSION = "0.2.0"
 # versions = darktable duplicates (IMG_01_02.RAF.xmp) are copied beside the RAW and sent back with version=n (R17);
 # shared = darktable styles, presets and module layouts are shared through LPL (R11; left out when the agent's
 # darktable/module-names.json is missing).
-CAPS = ["batch", "cancel", "open", "versions", "shared"]
+# luts = darktable's LUT folder (lut 3D files) is carried through LPL (R19, docs/luts-r19.md).
+CAPS = ["batch", "cancel", "open", "versions", "shared", "luts"]
 CHUNK = 256 * 1024  # most bytes taken from a download at once; a Stop is noticed between two of them
 IS_WIN = os.name == "nt"
 NO_WINDOW = 0x08000000 if IS_WIN else 0  # CREATE_NO_WINDOW
@@ -967,6 +968,247 @@ class SharedSync:
         self.agent.report_done(job["id"], status)
 
 
+# ------------------------------------------------------------------ the LUT folder (R19, docs/luts-r19.md)
+# Contract: darktable-android docs/PLAN.md 4.6, copied in docs/luts-r19.md. darktable's lut 3D module reads its files
+# from the folder of the preference plugins/darkroom/lut3d/def_path and keeps the path relative to it in the edit.
+# The agent sends the files of that folder to LPL and takes in files it does not have, only into empty places: it
+# never overwrites or deletes a file in the user's LUT folder.
+LUT_EVERY = 600  # seconds between passes (and one at start)
+LUT_EXTS = (".cube", ".3dl", ".png", ".gmz")
+LUT_MAX = 64 * 1024 * 1024
+LUT_KEY = "plugins/darkroom/lut3d/def_path"
+
+
+def lut_folder(cfg: dict):
+    """(folder, None) from darktablerc, or (None, reason) when darktable has no LUT folder the agent can use."""
+    rc = darktable_config_dir(cfg) / "darktablerc"
+    try:
+        text = rc.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None, "darktable's settings (darktablerc) were not found"
+    value = ""
+    for line in text.splitlines():
+        if line.startswith(LUT_KEY + "="):
+            value = line[len(LUT_KEY) + 1:].strip()
+    if not value:
+        return None, "darktable has no LUT folder set (preferences > processing > LUT 3D root folder)"
+    p = Path(os.path.expandvars(os.path.expanduser(value)))
+    if not p.is_absolute():
+        return None, "darktable's LUT folder is not an absolute path: %s" % value
+    if not p.is_dir():
+        return None, "darktable's LUT folder does not exist: %s" % value
+    return p, None
+
+
+def lut_path_ok(rel: str) -> bool:
+    """The contract's path rules: / separators, relative, no empty, . or .. step, no control characters, a LUT extension."""
+    if not rel or len(rel.encode("utf-8")) > 500 or "\\" in rel or rel.startswith("/") or (len(rel) > 1 and rel[1] == ":"):
+        return False
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in rel):
+        return False
+    if any(s in ("", ".", "..") for s in rel.split("/")):
+        return False
+    return rel.lower().endswith(LUT_EXTS)
+
+
+def lut_files(folder: Path):
+    """relative path -> file of every LUT file under folder (links not followed); and the paths left out, with why."""
+    out, skipped = {}, {}
+    for root, dirs, files in os.walk(folder, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if not os.path.islink(os.path.join(root, d)))
+        for n in sorted(files):
+            full = Path(root) / n
+            if full.is_symlink() or not n.lower().endswith(LUT_EXTS) or n.startswith(".lpl-lut-"):
+                continue
+            rel = full.relative_to(folder).as_posix()
+            if not lut_path_ok(rel):
+                skipped[rel] = "path not allowed"
+                continue
+            try:
+                if full.stat().st_size > LUT_MAX:
+                    skipped[rel] = "larger than 64 MB"
+                    continue
+            except OSError:
+                continue
+            out[rel] = full
+    return out, skipped
+
+
+def file_sha256(p: Path) -> str:
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+class LutSync:
+    """The agent's part of R19: per path the hash it last sent or took in (base), the paths the user removed here."""
+
+    def __init__(self, agent):
+        self.agent = agent
+        self.data = {"base": {}, "removed": [], "refused": {}}
+        self.hashes = {}               # path -> (size, mtime, sha256)
+        self.last_pass = 0.0
+        self.started = False
+        self.status = None             # heartbeat state.luts
+        self.lock = threading.RLock()
+        self.state_file = STATE_FILE.with_name("luts.json")
+        if self.state_file.is_file():
+            try:
+                self.data.update(json.loads(self.state_file.read_text(encoding="utf-8")))
+            except Exception:
+                pass
+
+    def save(self):
+        with self.lock:
+            f = self.state_file
+            f.parent.mkdir(parents=True, exist_ok=True)
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.data, indent=1, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, f)
+
+    def active(self) -> bool:
+        return "luts" in (self.agent.server_caps or [])
+
+    def tick(self, force=False):
+        """From the main loop: a pass at start and every LUT_EVERY seconds."""
+        if not self.active():
+            return
+        if force or not self.started or time.time() - self.last_pass >= LUT_EVERY:
+            self.started = True
+            self.sync_pass()
+
+    def hash_of(self, rel: str, full: Path) -> str:
+        st = full.stat()
+        key = (st.st_size, st.st_mtime_ns)
+        cached = self.hashes.get(rel)
+        if cached and cached[:2] == key:
+            return cached[2]
+        h = file_sha256(full)
+        self.hashes[rel] = key + (h,)
+        return h
+
+    def put(self, rel: str, full: Path, h: str, base):
+        """PUT the file; base None = no x-base-sha256 (the PC changed it: newest wins), "" = a first upload. 200 or 409."""
+        srv = self.agent.srv
+        headers = dict(srv.headers)
+        headers["x-sha256"] = h
+        headers["content-type"] = "application/octet-stream"
+        if base is not None:
+            headers["x-base-sha256"] = base
+        q = "/api/luts/file?path=%s&agent=%s" % (urllib.parse.quote(rel, safe=""), urllib.parse.quote(self.agent.cfg["id"], safe=""))
+        req = urllib.request.Request(srv.base + q, data=full.read_bytes(), method="PUT", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                r.read()
+                return 200
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                return 409
+            raise
+
+    def take_in(self, folder: Path, rel: str, entry: dict) -> str:
+        """Download into the empty place rel: "ok", "different" (the place was taken meanwhile) or "failed"."""
+        dest = folder.joinpath(*rel.split("/"))
+        try:
+            dest.resolve().relative_to(folder.resolve())
+        except ValueError:
+            return "failed"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(".lpl-lut-%s.part" % uuid.uuid4().hex[:8])
+        try:
+            self.agent.srv.download("/api/luts/file?path=%s" % urllib.parse.quote(rel, safe=""), tmp)
+            if file_sha256(tmp) != entry["sha256"]:
+                return "failed"  # changed on the server meanwhile: taken at the next pass
+            try:
+                os.link(tmp, dest)  # never over an existing file
+            except FileExistsError:
+                return "different"
+            except OSError:  # a file system without hard links: create the file exclusively and copy into it
+                fd = os.open(str(dest), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
+                with os.fdopen(fd, "wb") as out, open(tmp, "rb") as src:
+                    shutil.copyfileobj(src, out)
+            return "ok"
+        except FileExistsError:
+            return "different"
+        except Exception as e:
+            log.warning("LUT file %s not taken: %s", rel, e)
+            return "failed"
+        finally:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+    def sync_pass(self):
+        self.last_pass = time.time()
+        srv = self.agent.srv
+        aid = urllib.parse.quote(self.agent.cfg["id"], safe="")
+        folder, reason = lut_folder(self.agent.cfg)
+        if folder is None:
+            self.status = {"folder": None, "reason": reason}
+            srv.json("PUT", "/api/luts/state?agent=%s" % aid, {"folder": None, "reason": reason, "files": {}})
+            return
+        local, skipped = lut_files(folder)
+        listed = srv.json("GET", "/api/luts?since=0")
+        server = {e["path"]: e for e in listed.get("files") or [] if not e.get("deleted")}
+        base, removed, refused = self.data["base"], set(self.data["removed"]), self.data["refused"]
+        report, sent, taken = {}, 0, 0
+        for rel in sorted(set(local) | set(server)):
+            s = server.get(rel)
+            b = base.get(rel)
+            if rel in local:
+                removed.discard(rel)
+                try:
+                    h = self.hash_of(rel, local[rel])
+                except OSError:
+                    continue
+                if s and s["sha256"] == h:
+                    base[rel] = h
+                    refused.pop(rel, None)
+                    report[rel] = {"sha256": h, "state": "ok"}
+                    continue
+                if b is None or h != b:  # a local change (or a file never sent)
+                    if b is None and refused.get(rel) == [h, s["sha256"] if s else None]:
+                        report[rel] = {"sha256": h, "state": "different"}  # 409 before, nothing changed since
+                        continue
+                    code = self.put(rel, local[rel], h, "" if b is None else None)
+                    if code == 200:
+                        base[rel] = h
+                        refused.pop(rel, None)
+                        sent += 1
+                        report[rel] = {"sha256": h, "state": "ok"}
+                    else:
+                        refused[rel] = [h, s["sha256"] if s else None]
+                        report[rel] = {"sha256": h, "state": "different"}
+                elif s and s["sha256"] != b:  # changed elsewhere: the user's file is not replaced
+                    report[rel] = {"sha256": h, "state": "different"}
+                else:
+                    report[rel] = {"sha256": h, "state": "ok"}
+            else:
+                if b is not None or rel in removed:  # it was here and the user removed it: not taken in again
+                    removed.add(rel)  # base is kept: a file the user puts back is a change made on this PC
+                    report[rel] = {"sha256": None, "state": "removed"}
+                    continue
+                r = self.take_in(folder, rel, s)
+                if r == "ok":
+                    base[rel] = s["sha256"]
+                    taken += 1
+                    report[rel] = {"sha256": s["sha256"], "state": "ok"}
+                elif r == "different":
+                    report[rel] = {"sha256": None, "state": "different"}
+        self.data["removed"] = sorted(removed)
+        self.save()
+        srv.json("PUT", "/api/luts/state?agent=%s" % aid, {"folder": str(folder), "reason": None, "files": report})
+        diff = sum(1 for v in report.values() if v["state"] == "different")
+        self.status = {"folder": str(folder), "reason": None, "files": len(local), "different": diff, "skipped": len(skipped)}
+        if sent or taken or diff:
+            log.info("LUT folder: %d sent, %d taken in, %d different from LPL (kept as they are)", sent, taken, diff)
+        for rel, why in skipped.items():
+            log.info("LUT file %s left out: %s", rel, why)
+
+
 # ------------------------------------------------------------------ working set
 class Agent:
     def __init__(self, cfg: dict):
@@ -984,6 +1226,7 @@ class Agent:
         self.wake = threading.Event()  # set: the main loop sends its next heartbeat now instead of after its pause
         self.server_caps = []          # what the server said it can do (heartbeat answer); [] = a server from before
         self.shared = SharedSync(self)  # R11: styles, presets, module layouts
+        self.luts = LutSync(self)      # R19: darktable's LUT folder
         for d in (WORK, BRIDGE / "outbox"):
             d.mkdir(parents=True, exist_ok=True)
         if STATE_FILE.is_file():
@@ -1010,7 +1253,8 @@ class Agent:
         return {"working_set": ws, "darktable_running": running, "bridge_alive": bridge_alive(),
                 "bridge_status": bridge_status(running), "version": VERSION, "message": self.message,
                 "local_url": LOCAL["url"], "local_error": LOCAL["error"],
-                **({"shared_update": self.shared.update} if self.shared.active() else {})}
+                **({"shared_update": self.shared.update} if self.shared.active() else {}),
+                **({"luts": self.luts.status} if self.luts.active() and self.luts.status else {})}
 
     def recover(self):
         """At start: whatever was being copied when the agent last stopped never arrived. Its partial file goes,
@@ -1586,6 +1830,10 @@ class Agent:
                     self._shared_started = True
             except Exception as e:
                 log.warning("shared styles and presets: %s", e)
+            try:
+                self.luts.tick()
+            except Exception as e:
+                log.warning("LUT folder: %s", e)
             if once:
                 time.sleep(0.5)
                 while not self.jobs.empty():

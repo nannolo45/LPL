@@ -275,6 +275,8 @@ def migrate(c: sqlite3.Connection) -> None:
     autotag.migrate(c)
     from . import shared  # shared darktable styles, presets and module layouts (R11)
     shared.migrate(c)
+    from . import luts  # the LUT folder (R19)
+    luts.migrate(c)
     c.commit()
 
 
