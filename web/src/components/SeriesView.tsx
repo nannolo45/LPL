@@ -13,6 +13,18 @@ import { FolderIcon, LinkIcon, SeriesTree } from './SeriesTree'
 import { AddPhotosDialog } from './AddPhotos'
 import { getFindState, setFindState, useFindState } from '../find'
 import { FindBox, SearchIcon } from './FindBox'
+import { actionFor, keysOf } from '../shortcuts'
+
+// Full screen for the board or the strip: the app's tab bar, top bar, series list and inspector are hidden
+// (class on <body>) and the browser goes full screen too when it allows it. The header row stays, so Board/Strip
+// can still be switched. Leaving: the button, the shortcut, or the browser's own Esc.
+function FullIcon({ on }: { on: boolean }) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {on ? <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" /> : <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />}
+    </svg>
+  )
+}
 
 type Mode = 'board' | 'strip'
 const BoardIcon = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="4" width="8" height="6" rx="1" /><rect x="13" y="4" width="8" height="10" rx="1" /><rect x="3" y="12" width="8" height="8" rx="1" /><rect x="13" y="16" width="8" height="4" rx="1" /></svg>
@@ -118,6 +130,43 @@ export function SeriesView() {
   useEffect(() => { const m = readMode(key); setModeRaw(m); setBoardSeen(m === 'board'); setAdding(false); setDlg(null); setInfo({ hidden: 0, maybe: 0 }); setFind(f => ({ q: '', n: f.n, dir: 1 })); setFindCount(null); setFindOpen(false) }, [key])
   useBackLayer(phone && findOpen, () => { setFindOpen(false); setFind(f => ({ ...f, q: '' })) })
   const setMode = (m: Mode) => { setModeRaw(m); if (m === 'board') setBoardSeen(true); try { localStorage.setItem('lpl.seriesmode.' + key, m) } catch { /* ignore */ } }
+
+  // full screen (desktop): see FullIcon above
+  const [full, setFull] = useState(false)
+  const wentFull = useRef(false)          // the browser really went full screen for us
+  const photoAt = useRef(0)               // when a photo's own full screen was last open (its Esc must not end ours)
+  useEffect(() => { if (s.fullscreen) photoAt.current = Date.now() }, [s.fullscreen])
+  const toggleFull = (on = !full) => {
+    setFull(on)
+    if (on) {
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen?.().then(() => { wentFull.current = true }).catch(() => {})
+    } else {
+      if (wentFull.current && document.fullscreenElement) document.exitFullscreen().catch(() => {})
+      wentFull.current = false
+    }
+  }
+  useEffect(() => {
+    if (!full) return
+    document.body.classList.add('sv-full')
+    const onFs = () => {
+      if (document.fullscreenElement || !wentFull.current) return
+      wentFull.current = false
+      if (Date.now() - photoAt.current > 1500 && !s.fullscreen) setFull(false)   // the browser's Esc ends it, unless it was closing a photo
+    }
+    document.addEventListener('fullscreenchange', onFs)
+    return () => { document.body.classList.remove('sv-full'); document.removeEventListener('fullscreenchange', onFs) }
+  }, [full, s.fullscreen])
+  useEffect(() => () => { if (wentFull.current && document.fullscreenElement) document.exitFullscreen().catch(() => {}) }, [])
+  useEffect(() => {
+    if (phone) return
+    const h = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null
+      if (s.fullscreen || (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))) return
+      if (actionFor(e, ['board']) === 'seriesFull') { e.preventDefault(); toggleFull() }
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  })
 
   const folder = target?.kind === 'folder' ? s.seriesFolders.find(f => f.id === target.id) || null : null
   const series = target?.kind === 'series' ? s.series.find(x => x.id === target.id) || null : null
@@ -274,7 +323,13 @@ export function SeriesView() {
             <span className="muted" style={{ whiteSpace: 'nowrap' }}>{counts}</span>
             {seg}{link}{hiddenChip}
             <div className="grow" />
-            {add}{more}
+            {add}
+            <button type="button" className="sv-more sv-full-btn" aria-pressed={full} onClick={() => toggleFull()}
+              aria-label={full ? 'Leave full screen' : `Full screen ${mode === 'board' ? 'board' : 'strip'}`}
+              title={(full ? 'Leave full screen' : `Show the ${mode} full screen`) + ` (${keysOf('seriesFull').join(' or ') || 'no key set'})`}>
+              <FullIcon on={full} />
+            </button>
+            {more}
           </div>
         )}
         <div className="sv-body">

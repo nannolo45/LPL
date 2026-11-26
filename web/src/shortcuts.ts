@@ -47,6 +47,7 @@ export const ACTIONS: Action[] = [
   { id: 'zoomIn', label: 'Zoom in', scope: 'board', keys: ['Ctrl+='] },
   { id: 'zoomOut', label: 'Zoom out', scope: 'board', keys: ['Ctrl+-'] },
   { id: 'zoomReset', label: 'Zoom to 100%', scope: 'board', keys: ['Ctrl+0'] },
+  { id: 'seriesFull', label: 'Board or strip full screen (and back)', scope: 'board', keys: ['Ctrl+Shift+F'] },
   { id: 'next', label: 'Next photo', scope: 'viewer', keys: ['ArrowRight', 'Space'] },
   { id: 'prev', label: 'Previous photo', scope: 'viewer', keys: ['ArrowLeft'] },
   { id: 'close', label: 'Close', scope: 'viewer', keys: ['Escape'] },
